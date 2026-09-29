@@ -94,9 +94,7 @@ impl DownloadManager {
                 )
                 .await
             }
-            None => Err(color_eyre::eyre::eyre!(
-                "download export directory is unavailable"
-            )),
+            None => Err(crate::download::TransferError::Unavailable),
         };
         self.finish_attempt(&attempt, outcome);
     }

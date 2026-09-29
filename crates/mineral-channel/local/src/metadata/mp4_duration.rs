@@ -7,19 +7,23 @@ use std::{
     time::Duration,
 };
 
-use color_eyre::eyre::{WrapErr, eyre};
 use symphonia::{
     core::{
-        errors::Error, formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions,
-        probe::Hint,
+        errors::Error as SymphoniaError, formats::FormatOptions, io::MediaSourceStream,
+        meta::MetadataOptions, probe::Hint,
     },
     default::get_probe,
 };
 
+use crate::error::{Error, Result};
+
 /// Rewind the file already read by Lofty; fragmented MP4 needs packet timestamps.
-pub(super) fn read(mut file: File, path: &Path) -> color_eyre::Result<Option<Duration>> {
-    file.rewind()
-        .wrap_err_with(|| format!("rewind MP4 {}", path.display()))?;
+pub(super) fn read(mut file: File, path: &Path) -> Result<Option<Duration>> {
+    file.rewind().map_err(|source| Error::File {
+        operation: "rewind MP4 audio",
+        path: path.to_owned(),
+        source,
+    })?;
     let source = MediaSourceStream::new(Box::new(file), Default::default());
     let mut format = get_probe()
         .format(
@@ -28,7 +32,11 @@ pub(super) fn read(mut file: File, path: &Path) -> color_eyre::Result<Option<Dur
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )
-        .wrap_err_with(|| format!("probe MP4 duration {}", path.display()))?
+        .map_err(|source| Error::Mp4 {
+            operation: "probe MP4 duration",
+            path: path.to_owned(),
+            source,
+        })?
         .format;
     let track = format
         .tracks()
@@ -53,16 +61,29 @@ pub(super) fn read(mut file: File, path: &Path) -> color_eyre::Result<Option<Dur
     loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,
-            Err(Error::IoError(error)) if error.kind() == ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error).wrap_err("read MP4 audio packets"),
+            Err(SymphoniaError::IoError(error)) if error.kind() == ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(source) => {
+                return Err(Error::Mp4 {
+                    operation: "read MP4 audio packet",
+                    path: path.to_owned(),
+                    source,
+                });
+            }
         };
         if packet.track_id() != track_id {
             continue;
         }
-        let end = packet
-            .ts()
-            .checked_add(packet.dur())
-            .ok_or_else(|| eyre!("MP4 audio timestamp overflow"))?;
+        let end =
+            packet
+                .ts()
+                .checked_add(packet.dur())
+                .ok_or_else(|| Error::Mp4TimestampOverflow {
+                    path: path.to_owned(),
+                    timestamp: packet.ts(),
+                    duration: packet.dur(),
+                })?;
         audio_packets += 1;
         last_end = Some(last_end.map_or(end, |previous: u64| previous.max(end)));
     }

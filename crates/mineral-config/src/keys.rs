@@ -6,7 +6,50 @@
 //! `"<Space>"` / `"<S-Left>"`)经 [`KeyChord::parse`] 落到同一表示,两侧在此汇合。
 //! 无键盘形态的 client 与本模块无关。
 
-use color_eyre::eyre::bail;
+/// 键和弦解析失败,保留输入与错误类别。
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum KeyParseError {
+    /// 输入不是单字符或尖括号键名。
+    #[error("无法解析键 `{input}`:单字符直接写,特殊键 / 修饰用 nvim 尖括号")]
+    InvalidNotation {
+        /// 原始输入。
+        input: String,
+    },
+
+    /// 缺少键名。
+    #[error("缺键名:`{input}`")]
+    MissingKey {
+        /// 原始输入。
+        input: String,
+    },
+
+    /// 不支持的 Alt / Meta 修饰。
+    #[error("Alt/Meta 修饰未支持:`{input}`")]
+    UnsupportedModifier {
+        /// 原始输入。
+        input: String,
+    },
+
+    /// 无法识别的修饰符。
+    #[error("未知修饰 `{modifier}-`:`{input}`")]
+    UnknownModifier {
+        /// 修饰符。
+        modifier: String,
+
+        /// 原始输入。
+        input: String,
+    },
+
+    /// 无法识别的键名。
+    #[error("未知键名 `<{name}>`:`{input}`")]
+    UnknownKey {
+        /// 键名。
+        name: String,
+
+        /// 原始输入。
+        input: String,
+    },
+}
 
 /// 语义键:字符键 + keymap 关心的少量非字符键。
 ///
@@ -131,7 +174,7 @@ impl KeyChord {
     ///
     /// # Return:
     ///   归一化和弦;空串 / 未知键名 / 未支持修饰(Alt 等)返回 `Err`
-    pub fn parse(s: &str) -> color_eyre::Result<Self> {
+    pub fn parse(s: &str) -> Result<Self, KeyParseError> {
         // 裸单字符:原样收(大小写 / 符号位形即语义)。
         let mut chars = s.chars();
         if let (Some(c), None) = (chars.next(), chars.next())
@@ -140,16 +183,18 @@ impl KeyChord {
             return Ok(Self::plain(Key::Char(c)));
         }
         let Some(inner) = s.strip_prefix('<').and_then(|r| r.strip_suffix('>')) else {
-            bail!(
-                "无法解析键 `{s}`:单字符直接写(如 `j`),特殊键 / 修饰用 nvim 尖括号(如 `<Space>` / `<C-g>` / `<S-Left>`)"
-            );
+            return Err(KeyParseError::InvalidNotation {
+                input: s.to_owned(),
+            });
         };
         // 末段是键名,前面的 `X-` 段是修饰;键名本身可以是 `-`(nvim `<C-->`,
         // 双连字符);单 `-` 结尾(如 `<S->`)是缺键名。
         let (mods, name) = if let Some(stripped) = inner.strip_suffix("--") {
             (stripped, "-")
         } else if inner.ends_with('-') {
-            bail!("缺键名:`{s}`");
+            return Err(KeyParseError::MissingKey {
+                input: s.to_owned(),
+            });
         } else {
             match inner.rfind('-') {
                 Some(idx) => inner.split_at(idx + 1),
@@ -162,8 +207,17 @@ impl KeyChord {
             match part.to_ascii_lowercase().as_str() {
                 "c" => ctrl = true,
                 "s" => shift = true,
-                "a" | "m" => bail!("Alt/Meta 修饰未支持:`{s}`"),
-                _ => bail!("未知修饰 `{part}-`(支持 `C-` / `S-`):`{s}`"),
+                "a" | "m" => {
+                    return Err(KeyParseError::UnsupportedModifier {
+                        input: s.to_owned(),
+                    });
+                }
+                _ => {
+                    return Err(KeyParseError::UnknownModifier {
+                        modifier: part.to_owned(),
+                        input: s.to_owned(),
+                    });
+                }
             }
         }
         let key = parse_key_name(name, s)?;
@@ -216,7 +270,7 @@ impl std::fmt::Display for KeyChord {
 ///
 /// # Return:
 ///   语义键;空段 / 未知键名返回 `Err`
-fn parse_key_name(part: &str, whole: &str) -> color_eyre::Result<Key> {
+fn parse_key_name(part: &str, whole: &str) -> Result<Key, KeyParseError> {
     let mut chars = part.chars();
     if let (Some(c), None) = (chars.next(), chars.next()) {
         return Ok(Key::Char(c));
@@ -231,8 +285,17 @@ fn parse_key_name(part: &str, whole: &str) -> color_eyre::Result<Key> {
         "cr" | "enter" | "return" => Key::Enter,
         "esc" | "escape" => Key::Esc,
         "bs" | "backspace" => Key::Backspace,
-        "" => bail!("缺键名:`{whole}`"),
-        _ => bail!("未知键名 `<{part}>`:`{whole}`"),
+        "" => {
+            return Err(KeyParseError::MissingKey {
+                input: whole.to_owned(),
+            });
+        }
+        _ => {
+            return Err(KeyParseError::UnknownKey {
+                name: part.to_owned(),
+                input: whole.to_owned(),
+            });
+        }
     };
     Ok(key)
 }

@@ -1,24 +1,25 @@
 //! HTTP byte acquisition adapted to a synchronous buffered reader.
 
-use std::fmt::{Debug, Display};
 use std::io::{Read, Seek};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use color_eyre::eyre::{WrapErr, bail, eyre};
 use futures_util::{Stream, TryStreamExt};
 use reqwest::header::{self, HeaderValue};
 use stream_download::source::{DecodeError, SourceStream};
 use stream_download::storage::StorageProvider;
 use stream_download::storage::temp::TempStorageProvider;
-use stream_download::{Settings, StreamDownload, StreamHandle, StreamPhase, StreamState};
+use stream_download::{
+    Settings, StreamDownload, StreamHandle, StreamInitializationError, StreamPhase, StreamState,
+};
 use tokio_util::sync::CancellationToken;
 
 use super::storage::CaptureStorageProvider;
 use crate::{
-    CaptureReceipt, CaptureTarget, CapturedMedia, MediaReader, RemoteLocator, TransferState,
+    CaptureReceipt, CaptureTarget, CapturedMedia, Error, MediaReader, RemoteLocator, Result,
+    TransferState,
 };
 
 /// A buffered remote reader plus its transfer facts.
@@ -48,24 +49,7 @@ struct BufferedRemote {
     cancellation: CancellationToken,
 }
 
-/// Error wrapper satisfying stream-download's external decode-error trait.
-struct RemoteError(color_eyre::Report);
-
-impl Debug for RemoteError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.0, formatter)
-    }
-}
-
-impl Display for RemoteError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.0, formatter)
-    }
-}
-
-impl std::error::Error for RemoteError {}
-
-impl DecodeError for RemoteError {}
+impl DecodeError for Error {}
 
 /// A reopenable HTTP source consumed by stream-download.
 struct RemoteStream {
@@ -76,7 +60,7 @@ struct RemoteStream {
     client: reqwest::Client,
 
     /// Current response byte stream.
-    stream: Pin<Box<dyn Stream<Item = Result<Bytes, RemoteError>> + Send + Sync>>,
+    stream: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send + Sync>>,
 
     /// Full resource byte length when known.
     content_length: Option<u64>,
@@ -98,8 +82,8 @@ impl RemoteStream {
         locator: &RemoteLocator,
         start: u64,
         end: Option<u64>,
-    ) -> color_eyre::Result<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, RemoteError>> + Send + Sync>>,
+    ) -> Result<(
+        Pin<Box<dyn Stream<Item = Result<Bytes>> + Send + Sync>>,
         Option<u64>,
     )> {
         let mut request = client.get(locator.url().clone());
@@ -113,12 +97,18 @@ impl RemoteStream {
                 ),
             );
         }
-        let response = request
-            .send()
-            .await
-            .wrap_err_with(|| format!("open media {}", locator.url()))?
+        let response = request.send().await.map_err(|source| Error::HttpRequest {
+            url: locator.url().clone(),
+            source,
+        })?;
+        let status = response.status();
+        let response = response
             .error_for_status()
-            .wrap_err_with(|| format!("media response {}", locator.url()))?;
+            .map_err(|source| Error::HttpStatus {
+                url: locator.url().clone(),
+                status,
+                source,
+            })?;
         let content_length = if ranged {
             response
                 .headers()
@@ -127,9 +117,13 @@ impl RemoteStream {
         } else {
             response.content_length()
         };
+        let url = locator.url().clone();
         let stream = response
             .bytes_stream()
-            .map_err(|error| RemoteError(eyre!("http media body: {error}")));
+            .map_err(move |source| Error::HttpBody {
+                url: url.clone(),
+                source,
+            });
         Ok((Box::pin(stream), content_length))
     }
 }
@@ -137,13 +131,11 @@ impl RemoteStream {
 impl SourceStream for RemoteStream {
     type Params = RemoteLocator;
 
-    type StreamCreationError = RemoteError;
+    type StreamCreationError = Error;
 
-    async fn create(locator: Self::Params) -> Result<Self, Self::StreamCreationError> {
-        let client = client_with_headers(locator.headers()).map_err(RemoteError)?;
-        let (stream, content_length) = Self::open_range(&client, &locator, 0, None)
-            .await
-            .map_err(RemoteError)?;
+    async fn create(locator: Self::Params) -> std::result::Result<Self, Self::StreamCreationError> {
+        let client = client_with_headers(locator.headers())?;
+        let (stream, content_length) = Self::open_range(&client, &locator, 0, None).await?;
         Ok(Self {
             locator,
             client,
@@ -181,7 +173,7 @@ impl SourceStream for RemoteStream {
 }
 
 impl Stream for RemoteStream {
-    type Item = Result<Bytes, RemoteError>;
+    type Item = Result<Bytes>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.stream.as_mut().poll_next(context)
@@ -203,10 +195,8 @@ pub(super) async fn open_remote(
     prefetch_bytes: u64,
     capture_target: Option<CaptureTarget>,
     cancellation: CancellationToken,
-) -> color_eyre::Result<OpenedRemote> {
-    let stream = RemoteStream::create(locator)
-        .await
-        .map_err(|error| eyre!("open remote media: {error}"))?;
+) -> Result<OpenedRemote> {
+    let stream = RemoteStream::create(locator).await?;
     let byte_len = stream.content_length();
     let transfer = TransferState::new(byte_len);
     let (buffered, capture) = match capture_target {
@@ -288,7 +278,7 @@ async fn buffer_with_storage<P>(
     storage: P,
     prefetch_bytes: u64,
     transfer: &TransferState,
-) -> color_eyre::Result<BufferedRemote>
+) -> Result<BufferedRemote>
 where
     P: StorageProvider + 'static,
     P::Reader: Read + Seek + Send + Sync + 'static,
@@ -304,7 +294,12 @@ where
         });
     let reader = StreamDownload::from_stream(stream, storage, settings)
         .await
-        .map_err(|error| eyre!("buffer remote media: {error}"))?;
+        .map_err(|error| match error {
+            StreamInitializationError::StorageCreationFailure(source) => {
+                Error::BufferStorage { source }
+            }
+            StreamInitializationError::StreamCreationFailure(source) => source,
+        })?;
     Ok(BufferedRemote {
         completion: reader.handle(),
         cancellation: reader.get_cancellation_token(),
@@ -328,18 +323,25 @@ async fn verify_capture(
     path: PathBuf,
     expected_len: Option<u64>,
     transfer: &TransferState,
-) -> color_eyre::Result<CapturedMedia> {
+) -> Result<CapturedMedia> {
     if !transfer.snapshot().complete {
-        bail!("capture producer ended before download completed");
+        return Err(Error::CaptureIncomplete);
     }
     let bytes = tokio::fs::metadata(&path)
         .await
-        .wrap_err_with(|| format!("read capture metadata {}", path.display()))?
+        .map_err(|source| Error::CaptureMetadata {
+            path: path.clone(),
+            source,
+        })?
         .len();
     if let Some(expected) = expected_len
         && bytes < expected
     {
-        bail!("capture truncated: {bytes} / {expected} bytes");
+        return Err(Error::CaptureTruncated {
+            path,
+            bytes,
+            expected,
+        });
     }
     Ok(CapturedMedia::new(path, bytes))
 }
@@ -351,7 +353,7 @@ async fn verify_capture(
 ///
 /// # Return:
 ///   A reusable configured client.
-fn client_with_headers(headers: &[(String, String)]) -> color_eyre::Result<reqwest::Client> {
+fn client_with_headers(headers: &[(String, String)]) -> Result<reqwest::Client> {
     use reqwest::header::{HeaderMap, HeaderName};
 
     let mut map = HeaderMap::new();
@@ -371,7 +373,7 @@ fn client_with_headers(headers: &[(String, String)]) -> color_eyre::Result<reqwe
     reqwest::Client::builder()
         .default_headers(map)
         .build()
-        .map_err(|error| eyre!("build media client: {error}"))
+        .map_err(|source| Error::HttpClient { source })
 }
 
 /// Parses the total length from a Content-Range response header.

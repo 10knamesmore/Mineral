@@ -14,13 +14,20 @@ pub fn maybe_zlib_decode(bytes: Vec<u8>) -> Vec<u8> {
     }
 }
 
-/// 解析 `code` 字段;若 JSON 没有 `code` 字段则按 200 处理。
-pub fn parse_code(json: &Value) -> i64 {
-    json.get("code").and_then(Value::as_i64).unwrap_or(200)
+/// 解析远端业务 code；缺失时按无效响应处理。
+pub fn parse_code(json: &Value) -> crate::Result<i64> {
+    json.get("code")
+        .and_then(Value::as_i64)
+        .ok_or(crate::Error::InvalidData {
+            field: "response.code",
+        })
 }
 
 /// 把 body 字节解码成 JSON Value(尝试 zlib 解压在前)。
-pub fn decode_response(bytes: Vec<u8>) -> color_eyre::Result<Value> {
+pub fn decode_response(bytes: Vec<u8>) -> crate::Result<Value> {
     let bytes = maybe_zlib_decode(bytes);
-    Ok(serde_json::from_slice::<Value>(&bytes)?)
+    serde_json::from_slice::<Value>(&bytes).map_err(|source| crate::Error::Parse {
+        context: "response body".to_owned(),
+        source: Box::new(source),
+    })
 }

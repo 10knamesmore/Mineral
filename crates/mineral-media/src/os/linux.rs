@@ -12,15 +12,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use color_eyre::eyre::eyre;
 use mineral_model::{LyricLine, to_lrc_string};
 use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Player, Time};
 use serde::Serialize;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
 
 use crate::command::{LoopMode, MediaCommand};
 use crate::config::MediaConfig;
 use crate::state::{NowPlaying, PlaybackState};
+use crate::{Error, Result};
 
 /// 主线程 → MPRIS 专属线程的状态更新消息。
 enum Update {
@@ -64,64 +64,60 @@ impl MediaService {
     pub fn spawn(
         config: &MediaConfig,
         on_command: Arc<dyn Fn(MediaCommand) + Send + Sync>,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Update>();
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<color_eyre::Result<()>>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
         let dbus_name = config.dbus_name.clone();
         let identity = config.display_name.clone();
         std::thread::Builder::new()
             .name("mineral-mpris".to_owned())
             .spawn(move || run_thread(&dbus_name, &identity, &on_command, rx, &ready_tx))
-            .map_err(|e| eyre!("spawn mpris thread: {e}"))?;
+            .map_err(|source| Error::SpawnThread { source })?;
         match ready_rx.recv() {
             Ok(result) => result.map(|()| Self { tx }),
-            Err(e) => Err(eyre!("mpris thread exited before ready: {e}")),
+            Err(source) => Err(Error::StartupInterrupted { source }),
         }
     }
 
     /// 上报当前曲目元数据(含歌词)。
-    pub fn set_now_playing(&self, now_playing: &NowPlaying) -> color_eyre::Result<()> {
+    pub fn set_now_playing(&self, now_playing: &NowPlaying) -> Result<()> {
         self.tx
             .send(Update::Metadata(now_playing.clone()))
-            .map_err(|e| eyre!("mpris thread gone: {e}"))
+            .map_err(|SendError(_update)| Error::ServiceStopped)
     }
 
     /// 上报播放状态与进度。
-    pub fn set_playback(
-        &self,
-        state: PlaybackState,
-        position: Option<Duration>,
-    ) -> color_eyre::Result<()> {
+    pub fn set_playback(&self, state: PlaybackState, position: Option<Duration>) -> Result<()> {
         self.tx
             .send(Update::Playback {
                 status: state,
                 position,
             })
-            .map_err(|e| eyre!("mpris thread gone: {e}"))
+            .map_err(|SendError(_update)| Error::ServiceStopped)
     }
 
     /// 通知发生了非线性位置跳变(seek),emit MPRIS `Seeked` 信号。
     ///
     /// 正常线性播放**不要**调用(外推型客户端自行外推);只在 seek / `SetPosition`
     /// 等跳变时调,让客户端把外推基准重置到 `position`。
-    pub fn notify_seek(&self, position: Duration) -> color_eyre::Result<()> {
+    pub fn notify_seek(&self, position: Duration) -> Result<()> {
         self.tx
             .send(Update::Seeked(position))
-            .map_err(|e| eyre!("mpris thread gone: {e}"))
+            .map_err(|SendError(_update)| Error::ServiceStopped)
     }
 
     /// 上报随机播放开关(回写 MPRIS `Shuffle` 属性)。
-    pub fn set_shuffle(&self, shuffle: bool) -> color_eyre::Result<()> {
+    pub fn set_shuffle(&self, shuffle: bool) -> Result<()> {
         self.tx
             .send(Update::Shuffle(shuffle))
-            .map_err(|e| eyre!("mpris thread gone: {e}"))
+            .map_err(|SendError(_update)| Error::ServiceStopped)
     }
 
     /// 上报循环模式(回写 MPRIS `LoopStatus` 属性)。
-    pub fn set_loop(&self, mode: LoopMode) -> color_eyre::Result<()> {
+    pub fn set_loop(&self, mode: LoopMode) -> Result<()> {
         self.tx
             .send(Update::Loop(mode))
-            .map_err(|e| eyre!("mpris thread gone: {e}"))
+            .map_err(|SendError(_update)| Error::ServiceStopped)
     }
 }
 
@@ -131,7 +127,7 @@ fn run_thread(
     identity: &str,
     on_command: &Arc<dyn Fn(MediaCommand) + Send + Sync>,
     mut rx: UnboundedReceiver<Update>,
-    ready_tx: &std::sync::mpsc::Sender<color_eyre::Result<()>>,
+    ready_tx: &std::sync::mpsc::Sender<Result<()>>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -139,7 +135,7 @@ fn run_thread(
     {
         Ok(rt) => rt,
         Err(e) => {
-            let _ = ready_tx.send(Err(eyre!("build mpris runtime: {e}")));
+            let _ = ready_tx.send(Err(Error::Runtime { source: e }));
             return;
         }
     };
@@ -165,7 +161,7 @@ async fn build_player(
     dbus_name: &str,
     identity: &str,
     on_command: &Arc<dyn Fn(MediaCommand) + Send + Sync>,
-) -> color_eyre::Result<Player> {
+) -> Result<Player> {
     let player = Player::builder(dbus_name)
         .identity(identity)
         .can_play(true)
@@ -176,7 +172,7 @@ async fn build_player(
         .can_control(true)
         .build()
         .await
-        .map_err(|e| eyre!("build mpris player: {e}"))?;
+        .map_err(|source| Error::RegisterPlayer { source })?;
     wire_handlers(&player, on_command);
     Ok(player)
 }

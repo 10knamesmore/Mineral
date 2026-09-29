@@ -44,7 +44,7 @@ fn update_path(digest: &mut Sha256, path: &Path) {
 compile_error!("local path identity requires a Unix or Windows target");
 
 /// The tagged album name and ordered album artists define a local album.
-pub(super) fn album(name: &str, artists: &[String]) -> color_eyre::Result<AlbumId> {
+pub(super) fn album(name: &str, artists: &[String]) -> Result<AlbumId, std::num::TryFromIntError> {
     let mut digest = Sha256::new();
     update_field(&mut digest, name)?;
     for artist in artists {
@@ -57,7 +57,7 @@ pub(super) fn album(name: &str, artists: &[String]) -> color_eyre::Result<AlbumI
 }
 
 /// Feed one length-delimited name into the album identity.
-fn update_field(digest: &mut Sha256, value: &str) -> color_eyre::Result<()> {
+fn update_field(digest: &mut Sha256, value: &str) -> Result<(), std::num::TryFromIntError> {
     digest.update(u64::try_from(value.len())?.to_be_bytes());
     digest.update(value.as_bytes());
     Ok(())

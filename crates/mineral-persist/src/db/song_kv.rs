@@ -4,8 +4,8 @@
 //! 开放 key 与一等字段的路由(`rating` 等保留名改走专用方法)由上层(Lua API)
 //! 负责;本层对保留键写入直接拒绝,防止旁路。
 
+use crate::Error;
 use crate::entity::{song_kv, song_stats};
-use color_eyre::eyre::{WrapErr, bail};
 use mineral_log::trace;
 use mineral_model::SongId;
 use mineral_protocol::StoreValue;
@@ -33,7 +33,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   命中返回标量值,未命中返回 `StoreValue::Nil`。
-    pub async fn kv_get(&self, id: &SongId, key: &str) -> color_eyre::Result<StoreValue> {
+    pub async fn kv_get(&self, id: &SongId, key: &str) -> crate::Result<StoreValue> {
         let Some(db) = self.pool() else {
             return Ok(StoreValue::Nil);
         };
@@ -44,12 +44,23 @@ impl NamespaceStore {
         ))
         .one(db)
         .await
-        .wrap_err_with(|| format!("读 song_kv 失败 song={} key={key}", id.value()))?
+        .map_err(|source| Error::Key {
+            operation: "read song_kv",
+            song: id.value().to_owned(),
+            key: key.to_owned(),
+            source,
+        })?
         else {
             return Ok(StoreValue::Nil);
         };
-        decode_value(&row.vtype, row.int_val, row.real_val, row.text_val)
-            .wrap_err_with(|| format!("song_kv 值重建失败 song={} key={key}", id.value()))
+        decode_value(
+            id.value(),
+            key,
+            &row.vtype,
+            row.int_val,
+            row.real_val,
+            row.text_val,
+        )
     }
 
     /// 写一条开放 KV(upsert;`Nil` 删除该 key)。降级 no-op。
@@ -61,14 +72,11 @@ impl NamespaceStore {
     ///   - `id`: 歌曲 id
     ///   - `key`: 开放键
     ///   - `value`: 标量值(`Nil` = 删除)
-    pub async fn kv_set(
-        &self,
-        id: &SongId,
-        key: &str,
-        value: &StoreValue,
-    ) -> color_eyre::Result<()> {
+    pub async fn kv_set(&self, id: &SongId, key: &str, value: &StoreValue) -> crate::Result<()> {
         if RESERVED_KEYS.contains(&key) {
-            bail!("key {key:?} 是保留的一等字段,不能写入开放 KV(走专用方法)");
+            return Err(Error::ReservedKey {
+                key: key.to_owned(),
+            });
         }
         let Some(db) = self.pool() else {
             return Ok(());
@@ -82,7 +90,12 @@ impl NamespaceStore {
             ))
             .exec(db)
             .await
-            .wrap_err_with(|| format!("删 song_kv 失败 song={} key={key}", id.value()))?;
+            .map_err(|source| Error::Key {
+                operation: "delete song_kv",
+                song: id.value().to_owned(),
+                key: key.to_owned(),
+                source,
+            })?;
             return Ok(());
         }
         let (vtype, int_val, real_val, text_val) = encode_value(value);
@@ -111,7 +124,12 @@ impl NamespaceStore {
         )
         .exec_without_returning(db)
         .await
-        .wrap_err_with(|| format!("写 song_kv 失败 song={} key={key}", id.value()))?;
+        .map_err(|source| Error::Key {
+            operation: "write song_kv",
+            song: id.value().to_owned(),
+            key: key.to_owned(),
+            source,
+        })?;
         Ok(())
     }
 
@@ -127,14 +145,11 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   自增后的 `StoreValue::Int`。
-    pub async fn kv_inc(
-        &self,
-        id: &SongId,
-        key: &str,
-        delta: i64,
-    ) -> color_eyre::Result<StoreValue> {
+    pub async fn kv_inc(&self, id: &SongId, key: &str, delta: i64) -> crate::Result<StoreValue> {
         if RESERVED_KEYS.contains(&key) {
-            bail!("key {key:?} 是保留的一等字段,不能写入开放 KV(走专用方法)");
+            return Err(Error::ReservedKey {
+                key: key.to_owned(),
+            });
         }
         let Some(db) = self.pool() else {
             return Ok(StoreValue::Nil);
@@ -166,13 +181,21 @@ impl NamespaceStore {
         .exec_with_returning(db)
         .await;
         let row = match result {
-            Err(DbErr::RecordNotInserted) => bail!("key {key:?} 现有值不是整数,不能自增"),
-            other => other
-                .wrap_err_with(|| format!("自增 song_kv 失败 song={} key={key}", id.value()))?,
+            Err(DbErr::RecordNotFound(_)) => {
+                return Err(Error::NotInteger {
+                    key: key.to_owned(),
+                });
+            }
+            other => other.map_err(|source| Error::Key {
+                operation: "increment song_kv",
+                song: id.value().to_owned(),
+                key: key.to_owned(),
+                source,
+            })?,
         };
-        let value = row
-            .int_val
-            .ok_or_else(|| color_eyre::eyre::eyre!("song_kv 整数值缺失 key={key}"))?;
+        let value = row.int_val.ok_or_else(|| Error::MissingInteger {
+            key: key.to_owned(),
+        })?;
         Ok(StoreValue::Int(value))
     }
 
@@ -181,11 +204,14 @@ impl NamespaceStore {
     /// # Params:
     ///   - `id`: 歌曲 id
     ///   - `rating`: 0..=5;`None` 清空;>5 返回 `Err`
-    pub async fn set_rating(&self, id: &SongId, rating: Option<u8>) -> color_eyre::Result<()> {
+    pub async fn set_rating(&self, id: &SongId, rating: Option<u8>) -> crate::Result<()> {
         if let Some(rating) = rating
             && rating > RATING_MAX
         {
-            bail!("rating {rating} 越界(合法 0..={RATING_MAX})");
+            return Err(Error::InvalidRating {
+                rating,
+                max: RATING_MAX,
+            });
         }
         let Some(db) = self.pool() else {
             return Ok(());
@@ -204,7 +230,11 @@ impl NamespaceStore {
         )
         .exec_without_returning(db)
         .await
-        .wrap_err_with(|| format!("写 rating 失败 song={}", id.value()))?;
+        .map_err(|source| crate::Error::Record {
+            operation: "写 rating",
+            record: id.value().to_owned(),
+            source,
+        })?;
         Ok(())
     }
 
@@ -215,7 +245,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   已评分返回 `Some(0..=5)`。
-    pub async fn query_rating(&self, id: &SongId) -> color_eyre::Result<Option<u8>> {
+    pub async fn query_rating(&self, id: &SongId) -> crate::Result<Option<u8>> {
         let Some(db) = self.pool() else {
             return Ok(None);
         };
@@ -223,7 +253,11 @@ impl NamespaceStore {
             song_stats::Entity::find_by_id((self.namespace().to_owned(), id.value().to_owned()))
                 .one(db)
                 .await
-                .wrap_err_with(|| format!("查 rating 失败 song={}", id.value()))?;
+                .map_err(|source| crate::Error::Record {
+                    operation: "查 rating",
+                    record: id.value().to_owned(),
+                    source,
+                })?;
         row.and_then(|row| row.rating)
             .map(u8::try_from)
             .transpose()
@@ -245,17 +279,23 @@ fn encode_value(value: &StoreValue) -> (&'static str, Option<i64>, Option<f64>, 
 
 /// 行编码 → `StoreValue`(按 vtype 标签重建;列与标签不符返回 `Err`)。
 fn decode_value(
+    song: &str,
+    key: &str,
     vtype: &str,
     int_val: Option<i64>,
     real_val: Option<f64>,
     text_val: Option<String>,
-) -> color_eyre::Result<StoreValue> {
+) -> crate::Result<StoreValue> {
     match (vtype, int_val, real_val, text_val) {
         ("int", Some(n), _, _) => Ok(StoreValue::Int(n)),
         ("real", _, Some(f), _) => Ok(StoreValue::Real(f)),
         ("text", _, _, Some(s)) => Ok(StoreValue::Text(s)),
         ("bool", Some(b), _, _) => Ok(StoreValue::Bool(b != 0)),
-        (vtype, ..) => bail!("song_kv 行损坏:vtype={vtype:?} 与值列不符"),
+        (vtype, ..) => Err(Error::InvalidValue {
+            song: song.to_owned(),
+            key: key.to_owned(),
+            value_type: vtype.to_owned(),
+        }),
     }
 }
 
@@ -327,7 +367,13 @@ mod tests {
         // 非整数值拒绝自增
         s.kv_set(&id, "plugin.s", &StoreValue::Text("x".to_owned()))
             .await?;
-        assert!(s.kv_inc(&id, "plugin.s", /*delta*/ 1).await.is_err());
+        assert!(
+            matches!(s.kv_inc(&id, "plugin.s", /*delta*/ 1).await, Err(crate::Error::NotInteger { key }) if key == "plugin.s")
+        );
+        assert_eq!(
+            s.kv_get(&id, "plugin.s").await?,
+            StoreValue::Text("x".to_owned())
+        );
         Ok(())
     }
 
@@ -340,7 +386,13 @@ mod tests {
         assert_eq!(s.query_rating(&id).await?, Some(4));
         s.set_rating(&id, /*rating*/ None).await?;
         assert_eq!(s.query_rating(&id).await?, None, "None 清空");
-        assert!(s.set_rating(&id, Some(6)).await.is_err(), "越界拒绝");
+        assert!(
+            matches!(
+                s.set_rating(&id, Some(6)).await,
+                Err(crate::Error::InvalidRating { rating: 6, .. })
+            ),
+            "越界拒绝"
+        );
         Ok(())
     }
 
@@ -350,11 +402,11 @@ mod tests {
         let id = SongId::new(SourceKind::NETEASE, "3");
         for key in super::RESERVED_KEYS {
             assert!(
-                s.kv_set(&id, key, &StoreValue::Int(1)).await.is_err(),
+                matches!(s.kv_set(&id, key, &StoreValue::Int(1)).await, Err(crate::Error::ReservedKey { key: rejected }) if rejected == key),
                 "保留键 {key} 必须拒写"
             );
             assert!(
-                s.kv_inc(&id, key, /*delta*/ 1).await.is_err(),
+                matches!(s.kv_inc(&id, key, /*delta*/ 1).await, Err(crate::Error::ReservedKey { key: rejected }) if rejected == key),
                 "保留键 {key} 必须拒自增"
             );
         }

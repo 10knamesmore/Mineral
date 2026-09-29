@@ -114,28 +114,49 @@ fn join_qualified(songs: &[SongId]) -> String {
 
 /// 写操作失败的跨进程错误形态(`channel::Error` 不可序列化,在 worker 边界映射)。
 /// TUI 按变体翻译成用户语言的 toast。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum WriteError {
     /// 需要登录(网易云 301)。
+    #[error("authentication required")]
     AuthRequired,
 
     /// 风控或容量限制(网易云 512),稍后再试。
+    #[error("rate limited")]
     RateLimited,
 
     /// 该 channel 不支持歌单写操作。
+    #[error("playlist writes are not supported")]
     NotSupported,
 
+    /// 写操作引用的歌曲或歌单不存在。
+    #[error("playlist write target not found")]
+    NotFound,
+
     /// channel 业务错误透传(如加歌重复的 502 →「已在歌单中」)。
+    #[error("channel API rejected playlist write with code {code}")]
     Api {
         /// channel 自定义错误 code。
         code: i64,
 
-        /// 错误描述。
-        message: String,
+        /// 来源响应提供的错误描述；字段缺失时为 `None`。
+        message: Option<String>,
     },
 
-    /// 其余失败(网络/解析等),携带展开后的错误链文本。
-    Other(String),
+    /// 无法连接来源服务或读取响应。
+    #[error("playlist write network failure")]
+    Network,
+
+    /// 来源响应无法解析。
+    #[error("invalid playlist write response")]
+    Parse,
+
+    /// 来源响应缺少必需数据。
+    #[error("playlist write response is missing required data")]
+    InvalidData,
+
+    /// 本地持久化操作失败。
+    #[error("playlist write storage failure")]
+    Storage,
 }
 
 impl WriteError {
@@ -145,11 +166,15 @@ impl WriteError {
             mineral_channel_core::Error::AuthRequired => Self::AuthRequired,
             mineral_channel_core::Error::RateLimited => Self::RateLimited,
             mineral_channel_core::Error::NotSupported => Self::NotSupported,
+            mineral_channel_core::Error::NotFound => Self::NotFound,
             mineral_channel_core::Error::Api { code, message } => Self::Api {
                 code: *code,
                 message: message.clone(),
             },
-            other => Self::Other(mineral_log::chain(other)),
+            mineral_channel_core::Error::Network { .. } => Self::Network,
+            mineral_channel_core::Error::Parse { .. } => Self::Parse,
+            mineral_channel_core::Error::InvalidData { .. } => Self::InvalidData,
+            mineral_channel_core::Error::Storage { .. } => Self::Storage,
         }
     }
 }
@@ -200,9 +225,13 @@ mod tests {
         );
     }
 
-    /// channel Error → WriteError 的结构化映射(301/512/NotSupported/Api/其他)。
+    /// channel 错误跨进程后保留业务类别，不携带内部错误链。
     #[test]
     fn write_error_maps_channel_error() {
+        assert_eq!(
+            WriteError::from_channel(&Error::NotFound),
+            WriteError::NotFound
+        );
         assert_eq!(
             WriteError::from_channel(&Error::AuthRequired),
             WriteError::AuthRequired
@@ -218,16 +247,36 @@ mod tests {
         assert_eq!(
             WriteError::from_channel(&Error::Api {
                 code: 502,
-                message: String::from("歌曲已存在")
+                message: Some(String::from("歌曲已存在"))
             }),
             WriteError::Api {
                 code: 502,
-                message: String::from("歌曲已存在")
+                message: Some(String::from("歌曲已存在"))
             }
         );
-        assert!(matches!(
-            WriteError::from_channel(&Error::Network(String::from("timeout"))),
-            WriteError::Other(_)
-        ));
+        assert_eq!(
+            WriteError::from_channel(&Error::Network {
+                source: Box::new(std::io::Error::from(std::io::ErrorKind::TimedOut)),
+            }),
+            WriteError::Network
+        );
+        assert_eq!(
+            WriteError::from_channel(&Error::Parse {
+                source: Box::new(std::io::Error::from(std::io::ErrorKind::InvalidData)),
+            }),
+            WriteError::Parse
+        );
+        assert_eq!(
+            WriteError::from_channel(&Error::InvalidData {
+                field: "playlist.id"
+            }),
+            WriteError::InvalidData
+        );
+        assert_eq!(
+            WriteError::from_channel(&Error::Storage {
+                source: Box::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            }),
+            WriteError::Storage
+        );
     }
 }

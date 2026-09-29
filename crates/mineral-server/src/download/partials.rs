@@ -2,8 +2,22 @@
 
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::WrapErr;
 use mineral_protocol::DownloadId;
+
+/// A crash-leftover partial could not be inspected or removed.
+#[derive(Debug, thiserror::Error)]
+enum CleanupError {
+    /// Filesystem operation failed at the indicated path.
+    #[error("partial cleanup failed at {path:?}")]
+    File {
+        /// Path being inspected or removed.
+        path: PathBuf,
+
+        /// Underlying filesystem error.
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Builds the partial path owned by this download's sole execution.
 pub(super) fn owned_partial_path(export: &Path, id: &DownloadId) -> PathBuf {
@@ -39,22 +53,35 @@ pub(crate) fn cleanup_orphan_partials(root: &Path) {
 }
 
 /// Recursively removes only files matching Mineral's owned partial suffix contract.
-fn cleanup_owned_tree(root: &Path) -> color_eyre::Result<usize> {
+fn cleanup_owned_tree(root: &Path) -> Result<usize, CleanupError> {
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error).wrap_err_with(|| format!("read {}", root.display())),
+        Err(error) => {
+            return Err(CleanupError::File {
+                path: root.to_path_buf(),
+                source: error,
+            });
+        }
     };
     let mut removed = 0usize;
     for entry in entries {
-        let entry = entry.wrap_err_with(|| format!("read entry under {}", root.display()))?;
-        let file_type = entry.file_type()?;
+        let entry = entry.map_err(|source| CleanupError::File {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        let file_type = entry.file_type().map_err(|source| CleanupError::File {
+            path: entry.path(),
+            source,
+        })?;
         let path = entry.path();
         if file_type.is_dir() {
             removed = removed.saturating_add(cleanup_owned_tree(&path)?);
         } else if file_type.is_file() && is_owned_partial(&path) {
-            std::fs::remove_file(&path)
-                .wrap_err_with(|| format!("remove orphan partial {}", path.display()))?;
+            std::fs::remove_file(&path).map_err(|source| CleanupError::File {
+                path: path.clone(),
+                source,
+            })?;
             removed = removed.saturating_add(1);
         }
     }

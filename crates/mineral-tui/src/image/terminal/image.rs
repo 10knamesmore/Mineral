@@ -12,6 +12,26 @@ use crate::image::key::PixelSize;
 use crate::image::kitty::KittyImage;
 use crate::image::resize::thumbnail;
 
+/// 终端协议图片编码失败。
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    /// Kitty 共享内存无法建立或填充。
+    #[error("prepare Kitty image")]
+    Kitty(#[from] super::super::kitty::shared_memory::Error),
+
+    /// Sixel 图像无法编码。
+    #[error("prepare Sixel image")]
+    Sixel(#[from] super::sixel::Error),
+
+    /// iTerm2 PNG 无法编码。
+    #[error("prepare iTerm2 image")]
+    Iterm2(#[from] image::ImageError),
+
+    /// 光栅图缺少目标像素尺寸。
+    #[error("rasterized terminal image requires pixel size")]
+    MissingPixelSize,
+}
+
 /// 一张可 place 到终端的已编码图片。
 pub(crate) enum TerminalImage {
     /// Kitty graphics protocol 成品。
@@ -72,7 +92,7 @@ impl TerminalImage {
         pixels: Option<PixelSize>,
         cells: (u16, u16),
         graphics: &TerminalGraphics,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self, Error> {
         match graphics.protocol() {
             GraphicsProtocol::Kitty => {
                 let thumbnail = pixels.map(|size| thumbnail(source, size.width(), size.height()));
@@ -158,6 +178,6 @@ impl TerminalImage {
 }
 
 /// 返回非 Kitty 协议必须携带的目标像素尺寸。
-fn raster_pixels(pixels: Option<PixelSize>) -> color_eyre::Result<PixelSize> {
-    pixels.ok_or_else(|| color_eyre::eyre::eyre!("rasterized terminal image requires pixel size"))
+fn raster_pixels(pixels: Option<PixelSize>) -> Result<PixelSize, Error> {
+    pixels.ok_or(Error::MissingPixelSize)
 }

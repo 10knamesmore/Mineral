@@ -8,7 +8,7 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
-use crate::Subscription;
+use crate::{FailureNotice, Subscription};
 
 /// server → client 主动推送。状态值变更一律走 [`Event::PropertyChanged`],
 /// 不为标量造 bespoke 事件;只有非属性化的生命周期事件(曲终 / 下载完成)留独立变体。
@@ -16,6 +16,9 @@ use crate::Subscription;
 /// 下发按握手订阅集过滤(见 [`Event::subscription`]),client 不订阅的类别不会上 wire。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Event {
+    /// 后台失败类别；client 按类别生成提示，诊断原因留在 daemon 日志。
+    Failure(FailureNotice),
+
     /// 瞬时提示(单行 flash,TTL 自动退场)。`id` 相同则替换不堆叠
     /// (nvim `msg_show` 语义);`None` 为一次性堆叠。
     Toast {
@@ -133,9 +136,10 @@ impl Event {
     #[must_use]
     pub fn subscription(&self) -> Subscription {
         match self {
-            Self::Toast { .. } | Self::Card { .. } | Self::DismissToast { .. } => {
-                Subscription::Toast
-            }
+            Self::Failure(_)
+            | Self::Toast { .. }
+            | Self::Card { .. }
+            | Self::DismissToast { .. } => Subscription::Toast,
             Self::PropertyChanged { .. } => Subscription::Property,
             Self::TrackFinished { .. }
             | Self::DownloadCompleted { .. }

@@ -4,12 +4,10 @@
 //! legacy(`/api/song/enhance/player/url`,数字 br)。两者各是纯端点、返回 [`SongUrl`] 列表;
 //! "v1 失败 / 仅试听 → 降级 legacy"的编排由 channel 层负责。
 
-use color_eyre::eyre::eyre;
 use mineral_model::{BitRate, SongId};
 use serde_json::json;
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::{Error, Result};
 
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
@@ -33,9 +31,9 @@ pub async fn songs_detail(transport: &Transport, ids: &[SongId]) -> Result<Vec<A
             ua: UaKind::Any,
         })
         .await?;
-    let songs = v
-        .get("songs")
-        .ok_or_else(|| eyre!("songs_detail response missing `songs`"))?;
+    let songs = v.get("songs").ok_or_else(|| Error::InvalidData {
+        field: "songs_detail.songs",
+    })?;
     let mut songs: Vec<AlbumSong> = crate::wire::de::from_value(songs.clone())?;
     // privileges 缺失(旧形态/异常响应)不致命,只是判不了灰。
     let privileges: Vec<Privilege> = match v.get("privileges") {
@@ -178,9 +176,9 @@ pub async fn remote_play_count(transport: &Transport, id: &SongId) -> Result<u32
 
 /// 取 v1 / legacy 两套响应里共有的 `data: [...]` 反序列化成 [`SongUrl`] 列表(两端点同构)。
 fn parse_song_url_dtos(v: &serde_json::Value) -> Result<Vec<SongUrl>> {
-    let data = v
-        .get("data")
-        .ok_or_else(|| eyre!("song url response missing `data`"))?;
+    let data = v.get("data").ok_or_else(|| Error::InvalidData {
+        field: "song_url.data",
+    })?;
     crate::wire::de::from_value(data.clone())
 }
 

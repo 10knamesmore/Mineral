@@ -19,6 +19,18 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::player::PlayerCore;
 
+/// Failure to persist an authoritative local favorite transition.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FavoriteError {
+    /// The local favorite store failed.
+    #[error("favorite storage failed")]
+    Store(#[from] mineral_persist::Error),
+
+    /// The read-then-write toggle produced no transition.
+    #[error("favorite toggle did not change state")]
+    NoTransition,
+}
+
 /// 聚合收藏补 meta 后台任务的状态 + 节流旋钮。
 ///
 /// 状态是单飞用的两个 atomic:`running` 保证同时只一个 worker;`pending` 让"worker 运行中又被
@@ -86,7 +98,7 @@ impl PlayerCore {
         id: &SongId,
         loved: bool,
         actor: mineral_stats::Actor,
-    ) -> color_eyre::Result<()> {
+    ) -> Result<(), mineral_persist::Error> {
         let ns = id.namespace();
         let changed = {
             let _guard = self.inner.favorites_lock.lock().await;
@@ -146,7 +158,7 @@ impl PlayerCore {
         &self,
         song: &Song,
         actor: mineral_stats::Actor,
-    ) -> color_eyre::Result<bool> {
+    ) -> Result<bool, FavoriteError> {
         let ns = song.id.namespace();
         let new = {
             let _guard = self.inner.favorites_lock.lock().await;
@@ -162,7 +174,7 @@ impl PlayerCore {
             let new = !scope.is_loved(&song.id).await?;
             let changed = scope.set_loved(&song.id, new).await?;
             if !changed {
-                color_eyre::eyre::bail!("favorite toggle 未产生预期 transition");
+                return Err(FavoriteError::NoTransition);
             }
             self.push_current_favorited_ids(ns).await;
             new

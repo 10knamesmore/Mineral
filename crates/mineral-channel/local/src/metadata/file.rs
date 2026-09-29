@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use color_eyre::eyre::{WrapErr, eyre};
 use lofty::{
     file::{AudioFile, FileType, TaggedFileExt},
     prelude::Accessor,
@@ -17,6 +16,7 @@ use mineral_model::{AudioFormat, Lyrics};
 use sha2::{Digest, Sha256};
 
 use super::{lyrics, mp4_duration};
+use crate::error::{Error, Result as LocalResult};
 
 /// Media facts retained with each scanned file.
 #[derive(Debug)]
@@ -70,16 +70,25 @@ pub(crate) fn supported(path: &Path) -> bool {
 }
 
 /// Probe a recognized file. Malformed audio is a scan error, not a silently removed song.
-pub(crate) fn probe(path: &Path, cover_dir: &Path) -> color_eyre::Result<Metadata> {
-    let mut file =
-        std::fs::File::open(path).wrap_err_with(|| format!("open {}", path.display()))?;
+pub(crate) fn probe(path: &Path, cover_dir: &Path) -> LocalResult<Metadata> {
+    let mut file = std::fs::File::open(path).map_err(|source| Error::File {
+        operation: "open local audio",
+        path: path.to_owned(),
+        source,
+    })?;
     let size = file
         .metadata()
-        .wrap_err_with(|| format!("read size of {}", path.display()))?
+        .map_err(|source| Error::File {
+            operation: "read local audio size",
+            path: path.to_owned(),
+            source,
+        })?
         .len();
     // Container signatures take precedence over extensions, such as MP4 saved as .aac.
-    let tagged =
-        lofty::read_from(&mut file).wrap_err_with(|| format!("probe {}", path.display()))?;
+    let tagged = lofty::read_from(&mut file).map_err(|source| Error::Probe {
+        path: path.to_owned(),
+        source,
+    })?;
     let properties = tagged.properties();
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
     let bitrate_bps = properties
@@ -118,13 +127,29 @@ pub(crate) fn probe(path: &Path, cover_dir: &Path) -> color_eyre::Result<Metadat
     };
     let embedded_cover = tag
         .and_then(|tag| tag.pictures().first())
-        .map(|picture| -> color_eyre::Result<_> {
-            std::fs::create_dir_all(cover_dir)?;
+        .map(|picture| -> LocalResult<_> {
+            std::fs::create_dir_all(cover_dir).map_err(|source| Error::File {
+                operation: "create embedded cover directory",
+                path: cover_dir.to_owned(),
+                source,
+            })?;
             let file = cover_dir.join(hex::encode(Sha256::digest(picture.data())));
-            if !file.try_exists()? {
+            if !file.try_exists().map_err(|source| Error::File {
+                operation: "check embedded cover",
+                path: file.clone(),
+                source,
+            })? {
                 let temporary = cover_dir.join(uuid::Uuid::new_v4().to_string());
-                std::fs::write(&temporary, picture.data())?;
-                std::fs::rename(temporary, &file)?;
+                std::fs::write(&temporary, picture.data()).map_err(|source| Error::File {
+                    operation: "write embedded cover",
+                    path: temporary.clone(),
+                    source,
+                })?;
+                std::fs::rename(&temporary, &file).map_err(|source| Error::File {
+                    operation: "publish embedded cover",
+                    path: file.clone(),
+                    source,
+                })?;
             }
             Ok(file)
         })
@@ -136,7 +161,9 @@ pub(crate) fn probe(path: &Path, cover_dir: &Path) -> color_eyre::Result<Metadat
             path.file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
         })
-        .ok_or_else(|| eyre!("audio filename has no stem: {}", path.display()))?;
+        .ok_or_else(|| Error::MissingFilename {
+            path: path.to_owned(),
+        })?;
     Ok(Metadata {
         size,
         name,

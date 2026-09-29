@@ -5,7 +5,7 @@ mod image;
 mod pixels;
 mod placement;
 mod probe;
-mod shared_memory;
+pub(crate) mod shared_memory;
 
 pub(crate) use image::KittyImage;
 pub(crate) use probe::probe_shared_memory;

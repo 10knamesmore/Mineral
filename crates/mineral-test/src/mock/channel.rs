@@ -96,7 +96,7 @@ impl PlaybackProvider for UrlChannel {
         &self,
         request: PlaybackRequest,
         _cancellation: CancellationToken,
-    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+    ) -> mineral_playback::Result<Box<dyn PreparedPlayback>> {
         let info = PlaybackMediaInfo {
             song_id: request.song_id().clone(),
             bitrate_bps: None,

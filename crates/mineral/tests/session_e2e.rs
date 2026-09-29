@@ -550,7 +550,8 @@ fn config_changes(client: &mineral_client::Client) -> usize {
     for event in client.mirror().drain_events() {
         match event {
             mineral_protocol::Event::ConfigChanged { .. } => count += 1,
-            mineral_protocol::Event::Toast { .. }
+            mineral_protocol::Event::Failure(_)
+            | mineral_protocol::Event::Toast { .. }
             | mineral_protocol::Event::Card { .. }
             | mineral_protocol::Event::PropertyChanged { .. }
             | mineral_protocol::Event::TrackFinished { .. }

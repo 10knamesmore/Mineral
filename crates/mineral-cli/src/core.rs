@@ -3,8 +3,9 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::{WrapErr, bail};
 use tokio::runtime::Runtime;
+
+use crate::error::{Error, Result};
 
 use crate::subcommands::action;
 use crate::subcommands::cache::{self, CacheCommand};
@@ -86,8 +87,8 @@ pub enum Command {
 ///
 /// # Return:
 ///   进程退出码;子命令本身失败(如配置解析)冒泡为 `Err`。
-pub fn run(command: Command) -> color_eyre::Result<ExitCode> {
-    let runtime = Runtime::new().wrap_err("create tokio runtime failed")?;
+pub fn run(command: Command) -> Result<ExitCode> {
+    let runtime = Runtime::new().map_err(Error::Runtime)?;
     runtime.block_on(async move { run_async(command).await })
 }
 
@@ -95,7 +96,7 @@ pub fn run(command: Command) -> color_eyre::Result<ExitCode> {
 ///
 /// 只有 `ctl` 有自己的退出码契约(成功 0 / 被拒 1 / 没执行 3),其余子命令沿用
 /// 「成功即 0」。
-async fn run_async(command: Command) -> color_eyre::Result<ExitCode> {
+async fn run_async(command: Command) -> Result<ExitCode> {
     match command {
         Command::Ctl(args) => ctl::run(args).await,
         other => {
@@ -106,7 +107,7 @@ async fn run_async(command: Command) -> color_eyre::Result<ExitCode> {
 }
 
 /// 分发没有自定义退出码契约的子命令。
-async fn run_plain(command: Command) -> color_eyre::Result<()> {
+async fn run_plain(command: Command) -> Result<()> {
     match command {
         Command::Action { name, args } => action::run(&name, &args).await,
         Command::Cache { cmd } => cache::run(cmd).await,
@@ -115,8 +116,6 @@ async fn run_plain(command: Command) -> color_eyre::Result<()> {
         Command::Stats { cmd } => stats::run(cmd).await,
         Command::Status => status::run().await,
         Command::Stop => stop::run().await,
-        Command::Ctl(_) | Command::Serve => {
-            bail!("internal error: command must be handled before run_plain")
-        }
+        Command::Ctl(_) | Command::Serve => Err(Error::InvalidDispatch),
     }
 }

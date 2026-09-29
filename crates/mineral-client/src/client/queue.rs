@@ -71,7 +71,7 @@ impl Client {
         match self.queue_edit_pending(op) {
             Ok(pending) => pending.outcome().await,
             Err(error) => Outcome::Unknown {
-                detail: format!("未提交:{error}"),
+                reason: error.into(),
             },
         }
     }

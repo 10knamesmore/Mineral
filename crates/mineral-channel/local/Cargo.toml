@@ -16,7 +16,7 @@ mineral-model = { workspace = true }
 mineral-persist = { workspace = true }
 mineral-playback = { workspace = true }
 async-trait = { workspace = true }
-color-eyre = { workspace = true }
+thiserror = { workspace = true }
 hex = { workspace = true }
 lofty = { workspace = true }
 symphonia = { workspace = true }
@@ -28,6 +28,7 @@ uuid = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
+color-eyre = { workspace = true }
 tempfile = "3"
 mineral-test = { workspace = true }
 

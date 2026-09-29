@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use color_eyre::eyre::WrapErr;
 use mineral_protocol::{
     CloseReason, MessageBatch, RejectReason, Request, ServerHello, SessionMessage, SessionRequest,
     SessionResult, SocketWire, Wire, WireSink, WireSource,
@@ -18,6 +17,14 @@ use super::registry::{ConnGuard, ConnRegistry};
 use super::subscriptions::Subscriptions;
 use crate::client::ClientHandle;
 use crate::publisher::DomainPublishers;
+
+/// Connection failure after the listener accepts a client.
+#[derive(Debug, thiserror::Error)]
+enum ConnectionError {
+    /// The session could not send its handshake response.
+    #[error("IPC handshake send failed")]
+    Handshake(#[from] mineral_protocol::WireError),
+}
 
 /// 每连接待发消息队列上限(有界出口)。
 const OUTBOUND_CAPACITY: usize = 512;
@@ -47,12 +54,9 @@ pub(crate) struct SessionServices {
 pub(crate) async fn run(
     listener: UnixListener,
     services: Arc<SessionServices>,
-) -> color_eyre::Result<()> {
+) -> Result<(), crate::Error> {
     loop {
-        let (stream, _addr) = listener
-            .accept()
-            .await
-            .wrap_err("UnixListener::accept failed")?;
+        let (stream, _addr) = listener.accept().await?;
         let conn_id = services.registry.register();
         (services.on_connect)();
         mineral_log::info!(target: "ipc", conn_id, "client connected");
@@ -78,7 +82,7 @@ async fn handle_connection(
     stream: UnixStream,
     conn_id: u64,
     services: &SessionServices,
-) -> color_eyre::Result<()> {
+) -> Result<(), ConnectionError> {
     let mut wire = Box::new(SocketWire::from_stream(stream));
     let Some(info) = handshake(&mut *wire, &services.client).await? else {
         return Ok(());
@@ -87,13 +91,13 @@ async fn handle_connection(
     let (sink, source) = wire.split();
     let (out_tx, out_rx) = mpsc::channel(OUTBOUND_CAPACITY);
     let writer = tokio::spawn(writer_loop(sink, out_rx));
-    let result = read_loop(source, &services.client, services, &out_tx).await;
+    read_loop(source, &services.client, services, &out_tx).await;
     // client 断开:清本连接的终端上报与 PCM 游标。
     services.client.connection_closed();
     drop(out_tx);
     // writer 在全部发送端放掉后自行排空退出;不无限等待(慢 client 的写可能阻塞)。
     writer.abort();
-    result
+    Ok(())
 }
 
 /// 握手守门:期待首帧 [`SessionMessage::Hello`],版本不匹配回拒绝。
@@ -103,7 +107,7 @@ async fn handle_connection(
 async fn handshake(
     wire: &mut dyn Wire,
     client: &ClientHandle,
-) -> color_eyre::Result<Option<mineral_protocol::ClientInfo>> {
+) -> Result<Option<mineral_protocol::ClientInfo>, ConnectionError> {
     let batch = match wire.recv().await {
         Ok(Some(batch)) => batch,
         Ok(None) => return Ok(None),
@@ -175,7 +179,7 @@ async fn read_loop(
     client: &ClientHandle,
     services: &SessionServices,
     out: &mpsc::Sender<SessionMessage>,
-) -> color_eyre::Result<()> {
+) {
     let mut subscriptions = Subscriptions::default();
     loop {
         let batch = match source.recv().await {
@@ -202,7 +206,7 @@ async fn read_loop(
                 SessionMessage::Resync(id) => subscriptions.resync(id),
                 SessionMessage::Close(_reason) => {
                     subscriptions.shutdown(services.publishers.pcm());
-                    return Ok(());
+                    return;
                 }
                 other => {
                     mineral_log::warn!(target: "ipc", message = ?other, "忽略意外会话消息");
@@ -211,7 +215,6 @@ async fn read_loop(
         }
     }
     subscriptions.shutdown(services.publishers.pcm());
-    Ok(())
 }
 
 /// 处理一条请求:有序同步内联;队列编辑内联 await;慢操作并发。
@@ -236,7 +239,7 @@ async fn handle_request(
     let result = match request.request {
         Request::SetAudioOutput(target) => match client.set_audio_output(target).await {
             Ok(()) => mineral_protocol::OperationResult::Applied,
-            Err(error) => dispatch::failure(&error),
+            Err(error) => dispatch::failure(&error, dispatch::audio_failure_kind(&error)),
         },
         Request::QueueEdit { op } => dispatch::execute_queue_edit(client, op).await,
         other => {

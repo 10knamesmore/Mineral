@@ -6,7 +6,9 @@ use std::time::Duration;
 use color_eyre::eyre::{OptionExt, eyre};
 use mineral_model::BitRate;
 use mineral_playback::PlaybackRegistry;
-use mineral_protocol::{DownloadId, DownloadOrigin, DownloadStatus, SongDownloadView};
+use mineral_protocol::{
+    DownloadFailure, DownloadId, DownloadOrigin, DownloadStatus, SongDownloadView,
+};
 use mineral_test::mock::{UrlChannel, serve_once};
 use mineral_test::song;
 use parking_lot::Mutex;
@@ -18,7 +20,7 @@ use super::lifecycle::ManagerInner;
 use super::state::ManagerState;
 use super::{DownloadManager, DownloadRuntime};
 use crate::download::{
-    DownloadAttempt, DownloadEnv, DownloadOutcome, TransferUpdate, download_song,
+    DownloadAttempt, DownloadEnv, DownloadOutcome, TransferError, TransferUpdate, download_song,
 };
 
 /// Builds a manager whose admission is stepped by the test instead of a background scheduler.
@@ -87,7 +89,7 @@ async fn stopped_download_settles_before_resubmission() -> color_eyre::Result<()
     assert_eq!(manager.snapshot().len(), 1, "旧下载收尾前仍去重");
     assert!(manager.take_next().is_none());
 
-    manager.finish_attempt(&old, Err(eyre!("writer stopped")));
+    manager.finish_attempt(&old, Err(TransferError::Stopped));
     assert_eq!(row(&manager, &old.id)?.status, DownloadStatus::Stopped);
     assert_eq!(manager.summary().active, 0);
     manager.admit_song(&song, DownloadOrigin::Direct, Lane::Direct);
@@ -96,11 +98,19 @@ async fn stopped_download_settles_before_resubmission() -> color_eyre::Result<()
         .ok_or_eyre("resubmission not admitted")?;
     assert_ne!(old.id, new.id, "重新提交必须创建独立身份");
     manager.report(&old.id, TransferUpdate::Finalizing);
-    manager.finish_attempt(&old, Err(eyre!("late completion")));
+    manager.finish_attempt(&old, Err(TransferError::Unavailable));
     assert_eq!(row(&manager, &new.id)?.status, DownloadStatus::Resolving);
     assert_eq!(manager.summary().active, 1);
     manager.stop(&new.id)?;
-    manager.finish_attempt(&new, Err(eyre!("writer stopped")));
+    manager.finish_attempt(&new, Err(TransferError::Stopped));
+    manager.admit_song(&song, DownloadOrigin::Direct, Lane::Direct);
+    let failed = manager
+        .take_next()
+        .ok_or_eyre("failed attempt not admitted")?;
+    manager.finish_attempt(&failed, Err(TransferError::Unavailable));
+    let failed_row = row(&manager, &failed.id)?;
+    assert_eq!(failed_row.status, DownloadStatus::Failed);
+    assert_eq!(failed_row.failure, Some(DownloadFailure::Unavailable));
     assert!(
         manager
             .stop(&DownloadId::new("unknown".to_owned()))
@@ -159,9 +169,9 @@ async fn snapshot_orders_active_queued_and_recent_history() -> color_eyre::Resul
     let evicted = history.last().ok_or_eyre("history is empty")?;
     assert!(manager.stop(evicted).is_err(), "已淘汰身份应视为未知");
     manager.stop(&first.id)?;
-    manager.finish_attempt(&first, Err(eyre!("writer stopped")));
+    manager.finish_attempt(&first, Err(TransferError::Stopped));
     manager.stop(&second.id)?;
-    manager.finish_attempt(&second, Err(eyre!("writer stopped")));
+    manager.finish_attempt(&second, Err(TransferError::Stopped));
     Ok(())
 }
 

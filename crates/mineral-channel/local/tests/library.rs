@@ -161,6 +161,17 @@ async fn one_time_load_identity_lyrics_and_playback() -> color_eyre::Result<()> 
     );
     assert!(scope.is_loved(&first.id).await?);
 
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        library
+            .resolve(
+                PlaybackRequest::new(moved.id.clone(), BitRate::Hires),
+                cancelled
+            )
+            .await,
+        Err(mineral_playback::Error::Cancelled)
+    ));
     tokio::fs::write(root.join("moved.lrc"), "[00:00.10]local lyric").await?;
     assert_eq!(library.lyrics(&moved.id).await?.lines.len(), 1);
     let prepared = library
@@ -239,7 +250,16 @@ async fn unavailable_root_can_be_loaded_later() -> color_eyre::Result<()> {
     let store = ServerStore::open(&temp.path().join("mineral.db")).await?;
     let root = temp.path().join("unmounted");
     let library = LocalLibrary::new(store, temp.path().join("covers"), vec![root.clone()]);
-    assert!(library.my_playlists().await.is_err());
+    let Err(mineral_channel_core::Error::Storage { source }) = library.my_playlists().await else {
+        return Err(eyre!("expected local storage failure"));
+    };
+    assert_eq!(
+        source
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::NotFound)
+    );
     std::fs::create_dir(&root)?;
     audio(&root.join("appeared.wav"))?;
     assert_eq!(library.my_playlists().await?.len(), 1);

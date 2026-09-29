@@ -141,14 +141,14 @@ impl crate::app::App {
             Err(warning) => {
                 mineral_log::warn!(
                     target: "tui",
-                    warning = %warning,
+                    error = mineral_log::chain(&warning),
                     "daemon 推送的配置落型失败,保留现行配置"
                 );
                 self.notifications.push_card(
                     TextTint::Error,
                     plain_line("config push rejected"),
                     plain_body(vec![
-                        warning.to_string(),
+                        config_warning_text(&warning),
                         "keeping current config".to_owned(),
                     ]),
                     Some(PUSH_CARD_ID.to_owned()),
@@ -188,7 +188,10 @@ impl crate::app::App {
             );
         }
         if !warnings.is_empty() {
-            let lines = warnings.iter().map(ToString::to_string);
+            let lines = warnings
+                .iter()
+                .map(config_warning_text)
+                .chain(std::iter::once("using defaults".to_owned()));
             self.notifications.push_card(
                 TextTint::Warn,
                 plain_line("config.lua warnings"),
@@ -215,6 +218,28 @@ impl crate::app::App {
         keymap.append_script_binds(binds);
         self.notice_hint = Self::compose_notice_hint(&keymap);
         self.keymap = keymap;
+    }
+}
+
+/// Describes the warning; callers state which configuration remains active.
+fn config_warning_text(warning: &mineral_config::ConfigWarning) -> String {
+    match warning {
+        mineral_config::ConfigWarning::Read { .. } => "config.lua could not be read".to_owned(),
+        mineral_config::ConfigWarning::Eval { .. } => {
+            "config.lua could not be evaluated".to_owned()
+        }
+        mineral_config::ConfigWarning::Serialize { .. } => {
+            "config.lua settings could not be converted".to_owned()
+        }
+        mineral_config::ConfigWarning::Deserialize { path: None, .. } => {
+            "config.lua settings are invalid".to_owned()
+        }
+        mineral_config::ConfigWarning::Deserialize {
+            path: Some(path), ..
+        } => {
+            format!("config.lua: invalid {path}")
+        }
+        _ => "config.lua settings are invalid".to_owned(),
     }
 }
 

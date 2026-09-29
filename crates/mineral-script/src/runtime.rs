@@ -1,7 +1,8 @@
 //! 脚本线程的生命周期句柄:spawn 移交 VM、Drop 优雅停机。
 
-use color_eyre::eyre::WrapErr;
 use mlua::Lua;
+
+use crate::{Error, Result};
 
 use crate::dispatch;
 use crate::host::ScriptHost;
@@ -37,12 +38,12 @@ impl ScriptRuntime {
         host: ScriptHost,
         watchdog: WatchdogConfig,
         sender: &ScriptSender,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::Builder::new()
             .name("mineral-script".to_owned())
             .spawn(move || dispatch::run_loop(&lua, &host, &watchdog, &rx))
-            .wrap_err("spawn mineral-script thread")?;
+            .map_err(Error::Thread)?;
         sender.attach(tx.clone());
         Ok(Self {
             tx,
@@ -66,7 +67,7 @@ impl Drop for ScriptRuntime {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{Event, TextSpan, ToastKind};
+    use mineral_protocol::{Event, FailureNotice, TextSpan, ToastKind};
     use mineral_test::{endserenading, song, with_duration};
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -324,7 +325,7 @@ mod tests {
                 mineral_protocol::CopyTemplateCtx::Song(Box::new(song.clone())),
             )
             .blocking_recv()?;
-        assert_eq!(got, Ok(format!("{}|netease", song.name)));
+        assert_eq!(got?, format!("{}|netease", song.name));
 
         let playlist = mineral_model::Playlist::builder()
             .id(mineral_model::PlaylistId::new(
@@ -341,7 +342,7 @@ mod tests {
                 mineral_protocol::CopyTemplateCtx::Playlist(Box::new(playlist)),
             )
             .blocking_recv()?;
-        assert_eq!(got, Ok(format!("歌单甲|1|{}", song.name)));
+        assert_eq!(got?, format!("歌单甲|1|{}", song.name));
 
         let got = sender
             .render_copy_template(
@@ -350,14 +351,21 @@ mod tests {
             )
             .blocking_recv()?;
         assert!(
-            got.as_ref().is_err_and(|e| e.contains("模板 #9")),
+            matches!(
+                got,
+                Err(crate::Error::MissingFunction {
+                    kind: "模板",
+                    index: 9,
+                    ..
+                })
+            ),
             "下标无函数应回人读错误,实得 {got:?}"
         );
         Ok(())
     }
 
     #[test]
-    fn failing_callback_reports_error_toast_and_spares_others() -> color_eyre::Result<()> {
+    fn failing_callback_reports_failure_and_spares_others() -> color_eyre::Result<()> {
         let (runtime, sender, mut push_rx) = spawn_with_script(
             r#"
             mineral.on("track_finished", function() error("boom") end)
@@ -370,17 +378,15 @@ mod tests {
         });
         let events = drain_after_stop(runtime, &mut push_rx);
         let (Some(first), Some(second)) = (events.first(), events.get(1)) else {
-            color_eyre::eyre::bail!("期望 2 条事件(错误 toast + 后续回调),实得 {events:?}");
+            color_eyre::eyre::bail!("期望 2 条事件(失败类别 + 后续回调),实得 {events:?}");
         };
-        let Event::Toast {
-            kind, id, ttl_secs, ..
-        } = first
-        else {
-            color_eyre::eyre::bail!("失败回调必须先推出错误 toast,实得 {first:?}");
-        };
-        assert_eq!(*kind, ToastKind::Error, "失败回调先报错误 toast");
-        assert_eq!(id.as_deref(), Some("script.error"), "错误 toast 带顶替键");
-        assert_eq!(*ttl_secs, None, "错误 toast 沿用 client 默认时长");
+        assert_eq!(
+            *first,
+            Event::Failure(FailureNotice::ScriptCallbackFailed {
+                callback: "track_finished".to_owned(),
+            }),
+            "失败回调先发送结构化类别"
+        );
         assert_eq!(
             *second,
             Event::Toast {
@@ -437,7 +443,7 @@ mod tests {
                 /*args*/ Vec::new(),
             )
             .blocking_recv()?;
-        assert_eq!(done, ActionOutcome::Done);
+        assert!(matches!(done, ActionOutcome::Done));
         let missing = sender
             .invoke_action(
                 "my.gone".to_owned(),
@@ -445,7 +451,7 @@ mod tests {
                 /*args*/ Vec::new(),
             )
             .blocking_recv()?;
-        assert_eq!(missing, ActionOutcome::NotFound);
+        assert!(matches!(missing, ActionOutcome::NotFound));
         let failed = sender
             .invoke_action(
                 "my.boom".to_owned(),
@@ -453,14 +459,13 @@ mod tests {
                 /*args*/ Vec::new(),
             )
             .blocking_recv()?;
-        assert!(
-            matches!(failed, ActionOutcome::Failed(ref e) if e.contains("nope")),
-            "实得 {failed:?}"
-        );
-        assert!(
-            matches!(failed, ActionOutcome::Failed(ref e) if !e.contains('\n')),
-            "回执错误必须单行(traceback 进日志,不进 toast):实得 {failed:?}"
-        );
+        assert!(matches!(
+            failed,
+            ActionOutcome::Failed(crate::Error::Lua {
+                operation: "执行脚本动作",
+                ..
+            })
+        ));
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
@@ -509,7 +514,7 @@ mod tests {
         let done = sender
             .invoke_action("show.ctx".to_owned(), Some(ctx), /*args*/ Vec::new())
             .blocking_recv()?;
-        assert_eq!(done, ActionOutcome::Done);
+        assert!(matches!(done, ActionOutcome::Done));
         // CLI 触发:无上下文,ctx 是空表,字段全 nil
         let done = sender
             .invoke_action(
@@ -518,7 +523,7 @@ mod tests {
                 /*args*/ Vec::new(),
             )
             .blocking_recv()?;
-        assert_eq!(done, ActionOutcome::Done);
+        assert!(matches!(done, ActionOutcome::Done));
         let events = drain_after_stop(runtime, &mut push_rx);
         let contents = events
             .iter()
@@ -637,6 +642,7 @@ mod tests {
         Ok(())
     }
 
+    /// 查询失败在 Rust 线程间保留具体错误,仅 Lua 回调收 (nil, err) 字符串。
     #[test]
     fn resolve_error_passes_nil_and_message() -> color_eyre::Result<()> {
         use crate::message::{ResolveValue, ScriptCmd};
@@ -654,13 +660,22 @@ mod tests {
         else {
             color_eyre::eyre::bail!("期望带回调的 StoreInc,实得 {cmd:?}");
         };
-        sender.resolve(query, ResolveValue::Error("不能自增".to_owned()));
+        let error = std::io::Error::new(std::io::ErrorKind::InvalidData, "不能自增");
+        let expected = format!("nil/{}", mineral_log::chain(&error));
+        let reply = ResolveValue::Error(Box::new(error));
+        assert!(matches!(
+            &reply,
+            ResolveValue::Error(source)
+                if matches!(source.as_ref().downcast_ref::<std::io::Error>(),
+                    Some(cause) if cause.kind() == std::io::ErrorKind::InvalidData)
+        ));
+        sender.resolve(query, reply);
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
             events,
             vec![Event::Toast {
                 kind: ToastKind::Info,
-                content: vec![TextSpan::plain("nil/不能自增")],
+                content: vec![TextSpan::plain(expected)],
                 id: None,
                 ttl_secs: None,
             }],
@@ -1056,7 +1071,7 @@ mod tests {
         Ok(())
     }
 
-    /// fail-open:返回非数组 / 条目缺 id / 函数报错,一律 Identity + error toast,
+    /// fail-open:返回非数组 / 条目缺 id / 函数报错,一律 Identity + 失败类别,
     /// 歌单不因脚本 bug 消失。
     #[tokio::test]
     async fn curate_bad_return_falls_back_to_identity() -> color_eyre::Result<()> {
@@ -1090,9 +1105,14 @@ mod tests {
         }
         let events = drain_after_stop(runtime, &mut push_rx);
         assert_eq!(
-            events.len(),
-            3,
-            "三种失败各报一条 error toast,实得 {events:?}"
+            events,
+            vec![
+                Event::Failure(FailureNotice::ScriptCallbackFailed {
+                    callback: "curate_playlists".to_owned(),
+                });
+                3
+            ],
+            "三种失败都报告类别，歌单继续透传"
         );
         Ok(())
     }
@@ -1328,9 +1348,17 @@ mod tests {
             },
             "前两个失败 hook 按放行跳过,第三个 false 生效"
         );
-        // 两次失败各推一条 error toast(同 id 顶替)。
+        // 两次失败各推一条类别事件，TUI 按同 id 顶替。
         let events = drain_after_stop(runtime, &mut push_rx);
-        assert_eq!(events.len(), 2, "两个失败 hook 各报一条 error toast");
+        assert_eq!(
+            events,
+            vec![
+                Event::Failure(FailureNotice::ScriptCallbackFailed {
+                    callback: "before_stream".to_owned(),
+                });
+                2
+            ]
+        );
         Ok(())
     }
 
@@ -1794,7 +1822,7 @@ mod tests {
                 /*args*/ Vec::new(),
             )
             .blocking_recv()?;
-        assert_eq!(done, crate::message::ActionOutcome::Done);
+        assert!(matches!(done, crate::message::ActionOutcome::Done));
         Ok(())
     }
 

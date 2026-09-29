@@ -27,6 +27,29 @@ use runtime::backend::{Backend, BackendBootstrap, ClientBackend, CompletionQueue
 use runtime::ui::prefs::{UiPrefs, open_client_store};
 use tui::Tui;
 
+/// 启动和运行终端客户端时的失败。
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// 客户端路径解析失败。
+    #[error("resolve TUI paths")]
+    Paths(#[from] mineral_paths::Error),
+
+    /// 无法连接或启动 daemon。
+    #[error("start or attach daemon")]
+    Daemon(#[from] runtime::daemon::Error),
+
+    /// 终端输入、绘制或恢复失败。
+    #[error("terminal I/O")]
+    Terminal(#[from] std::io::Error),
+
+    /// 退出信号监听未能安装。
+    #[error("install shutdown signals")]
+    Signal(#[from] runtime::signal::Error),
+}
+
+/// TUI 启动和运行结果。
+pub type Result<T> = std::result::Result<T, Error>;
+
 /// 启动 TUI:优先 attach 已有 daemon、没有则 spawn 一个独立 `mineral serve`
 /// 子进程再 attach。
 ///
@@ -36,10 +59,10 @@ use tui::Tui;
 pub async fn run(
     config: mineral_config::Config,
     warnings: Vec<mineral_config::ConfigWarning>,
-) -> color_eyre::Result<()> {
+) -> Result<()> {
     // 用户配置降级告警:先落日志,启动后再经通知层 toast 呈现(run_app 内)。
     for w in &warnings {
-        mineral_log::warn!(target: "config", warning = %w, "用户配置降级");
+        mineral_log::warn!(target: "config", warning = mineral_log::chain(w), "用户配置降级");
     }
     let cfg = Arc::new(config);
     // tui.db 一次打开,封面缓存索引与 UI 偏好共用一个连接池;打不开整体降级
@@ -107,17 +130,10 @@ async fn build_backend(client: Arc<Client>) -> ClientBackend {
         let _ = client.subscribe(topic);
     }
     // 自举:能力表 + 脚本绑定(失败时退化为空表,UI 照常可用)。
+    let initial = client.bootstrap().await;
     let bootstrap = BackendBootstrap {
-        channel_caps: client
-            .channel_caps()
-            .await
-            .into_success()
-            .unwrap_or_default(),
-        script_binds: client
-            .script_binds()
-            .await
-            .into_success()
-            .unwrap_or_default(),
+        channel_caps: initial.channel_caps,
+        script_binds: initial.script_binds,
     };
     let completions = CompletionQueue::new();
     ClientBackend::new(client, bootstrap, completions)
@@ -138,7 +154,7 @@ fn run_app(
     ui_prefs: UiPrefs,
     cfg: Arc<mineral_config::Config>,
     warnings: &[mineral_config::ConfigWarning],
-) -> color_eyre::Result<()> {
+) -> Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
     // 标题栈 push 与配置开关对称;禁用时不 push,退出也无需 pop。运行时热重载从禁用→

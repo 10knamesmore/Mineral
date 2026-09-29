@@ -14,6 +14,7 @@ mod config;
 mod config_host;
 mod download;
 mod envelope;
+mod error;
 mod events;
 mod favorites;
 mod gapless;
@@ -41,6 +42,7 @@ mod tagging;
 
 pub use client::ClientHandle;
 pub use config::{ServerConfig, resolve_audio_mode};
+pub use error::Error;
 pub use mineral_audio::AudioMode;
 pub use mineral_protocol::ChannelFetchKindTag;
 pub use script_bridge::{ScriptParts, ScriptPumps, ScriptReloadParts};

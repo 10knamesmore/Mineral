@@ -31,11 +31,9 @@ const PUMP_SLICE_SECS: f64 = 0.05;
 ///
 /// # Return:
 ///   就绪的 [`MacApp`];非主线程调用返回 `Err`。
-pub fn macos_init_app() -> color_eyre::Result<MacApp> {
+pub fn macos_init_app() -> crate::Result<MacApp> {
     let Some(mtm) = MainThreadMarker::new() else {
-        return Err(color_eyre::eyre::eyre!(
-            "macOS 系统媒体集成必须在进程主线程初始化 NSApplication"
-        ));
+        return Err(crate::Error::NotMainThread);
     };
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);

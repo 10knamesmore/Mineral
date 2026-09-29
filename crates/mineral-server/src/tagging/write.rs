@@ -9,7 +9,6 @@
 use std::io::Seek as _;
 use std::path::Path;
 
-use color_eyre::eyre::WrapErr;
 use lofty::config::WriteOptions;
 use lofty::error::ErrorKind;
 use lofty::file::{FileType, TaggedFileExt};
@@ -18,6 +17,32 @@ use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey, ItemValue, Tag, TagExt, TagItem};
+
+/// Failure while writing metadata to an isolated temporary copy.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    /// A filesystem operation on the temporary copy or destination failed.
+    #[error("tag file operation failed at {path:?}")]
+    File {
+        /// File being accessed.
+        path: std::path::PathBuf,
+
+        /// Original filesystem error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Container probing or tag encoding failed.
+    #[error("audio tag processing failed at {path:?}")]
+    Tag {
+        /// File being probed or tagged.
+        path: std::path::PathBuf,
+
+        /// Original format error.
+        #[source]
+        source: lofty::error::LoftyError,
+    },
+}
 
 /// 一首歌的内嵌 metadata 集合。字段为 `None` / 空 vec = 不写对应 tag(采集方
 /// 单项失败即降级为缺字段,见 `super::assemble`)。
@@ -69,13 +94,21 @@ pub(crate) enum WriteOutcome {
 ///
 /// # Return:
 ///   写入成功 / 容器不支持;copy、探测 IO、写盘、rename 失败返回 `Err`。
-pub(crate) fn write_tags(path: &Path, tags: &SongTags) -> color_eyre::Result<WriteOutcome> {
+pub(crate) fn write_tags(path: &Path, tags: &SongTags) -> Result<WriteOutcome, Error> {
     let tmp = path.with_extension("part-tag");
-    std::fs::copy(path, &tmp).wrap_err_with(|| format!("复制到临时副本失败 {}", tmp.display()))?;
+    std::fs::copy(path, &tmp).map_err(|source| Error::File {
+        path: tmp.clone(),
+        source,
+    })?;
     match tag_in_place(&tmp, tags) {
         Ok(WriteOutcome::Tagged) => {
-            std::fs::rename(&tmp, path)
-                .wrap_err_with(|| format!("rename 回目标失败 {}", path.display()))?;
+            if let Err(source) = std::fs::rename(&tmp, path) {
+                cleanup(&tmp);
+                return Err(Error::File {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
             Ok(WriteOutcome::Tagged)
         }
         Ok(outcome) => {
@@ -98,21 +131,32 @@ pub(crate) fn write_tags(path: &Path, tags: &SongTags) -> color_eyre::Result<Wri
 ///
 /// # Return:
 ///   写入成功 / 容器不支持;打开、探测、写盘失败返回 `Err`。
-fn tag_in_place(path: &Path, tags: &SongTags) -> color_eyre::Result<WriteOutcome> {
+fn tag_in_place(path: &Path, tags: &SongTags) -> Result<WriteOutcome, Error> {
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .wrap_err_with(|| format!("打开副本失败 {}", path.display()))?;
+        .map_err(|source| Error::File {
+            path: path.to_path_buf(),
+            source,
+        })?;
     let probed = Probe::new(&mut file)
         .guess_file_type()
-        .wrap_err_with(|| format!("读取副本失败 {}", path.display()))?;
+        .map_err(|source| Error::File {
+            path: path.to_path_buf(),
+            source,
+        })?;
     let tagged = match probed.read() {
         Ok(t) => t,
         Err(e) if matches!(e.kind(), ErrorKind::UnknownFormat) => {
             return Ok(WriteOutcome::SkippedUnsupported);
         }
-        Err(e) => return Err(e).wrap_err_with(|| format!("探测音频容器失败 {}", path.display())),
+        Err(e) => {
+            return Err(Error::Tag {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
     };
     let file_type = tagged.file_type();
     let mut tag = tagged
@@ -123,32 +167,45 @@ fn tag_in_place(path: &Path, tags: &SongTags) -> color_eyre::Result<WriteOutcome
     // save_to 内部从**当前偏移**重新探测容器(guess_inner 以 stream_position 为起点),
     // 上面的 read() 已把偏移推到文件中部——不 rewind,FLAC magic / MP4 atom 全读岔。
     // 别把这句挪进 save_to 之后,也别指望 lofty 替你复位。
-    file.rewind()
-        .wrap_err_with(|| format!("复位副本偏移失败 {}", path.display()))?;
+    file.rewind().map_err(|source| Error::File {
+        path: path.to_path_buf(),
+        source,
+    })?;
     match file_type {
         // owned 转换路径:多值文本按 v2.4 规范 `\0` 拼进单 frame(generic 直存会出多个
         // 同名 frame,不规范)。裸 ADTS(Aac)靠前置 ID3v2 获得 metadata 能力。
         FileType::Mpeg | FileType::Aac | FileType::Aiff | FileType::Wav => {
             Id3v2Tag::from(tag)
                 .save_to(&mut file, WriteOptions::default())
-                .wrap_err_with(|| format!("写 ID3v2 tag 失败 {}", path.display()))?;
+                .map_err(|source| Error::Tag {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
         }
         // Vorbis 系天然多值(每个 item 一行 comment),generic 直存即可。
         FileType::Flac | FileType::Vorbis | FileType::Opus | FileType::Speex => {
             tag.save_to(&mut file, WriteOptions::default())
-                .wrap_err_with(|| format!("写 Vorbis tag 失败 {}", path.display()))?;
+                .map_err(|source| Error::Tag {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
         }
         FileType::Mp4 => {
             let mut ilst = Ilst::from(tag);
             collapse_multi_value(&mut ilst, *b"\xA9ART", &tags.artists);
             collapse_multi_value(&mut ilst, *b"aART", &tags.album_artists);
             ilst.save_to(&mut file, WriteOptions::default())
-                .wrap_err_with(|| format!("写 MP4 ilst 失败 {}", path.display()))?;
+                .map_err(|source| Error::Tag {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
         }
         _ => return Ok(WriteOutcome::SkippedUnsupported),
     }
-    file.sync_data()
-        .wrap_err_with(|| format!("fsync 副本失败 {}", path.display()))?;
+    file.sync_data().map_err(|source| Error::File {
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(WriteOutcome::Tagged)
 }
 

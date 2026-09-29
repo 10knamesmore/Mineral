@@ -13,7 +13,8 @@ use mineral_model::{
     UserId,
 };
 use mineral_playback::{
-    DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
+    DirectPreparedPlayback, Error as PlaybackError, PlaybackProvider, PlaybackRequest,
+    PreparedPlayback,
 };
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
@@ -22,7 +23,7 @@ use crate::api;
 use crate::config::BilibiliConfig;
 use crate::convert;
 use crate::credential::StoredBilibiliAuth;
-use crate::error::ApiCodeError;
+use crate::error::{ApiCodeError, Error as BilibiliError};
 use crate::transport::Transport;
 use crate::wire::view::VideoInfo;
 
@@ -44,7 +45,7 @@ impl BilibiliChannel {
     ///
     /// # Return:
     ///   channel 实例;transport 构建失败时 `Err`。
-    pub fn new(config: &BilibiliConfig) -> color_eyre::Result<Self> {
+    pub fn new(config: &BilibiliConfig) -> crate::Result<Self> {
         Ok(Self {
             transport: Transport::new(config)?,
             user_id: None,
@@ -62,7 +63,7 @@ impl BilibiliChannel {
     pub fn with_credential(
         config: &BilibiliConfig,
         auth: &StoredBilibiliAuth,
-    ) -> color_eyre::Result<Self> {
+    ) -> crate::Result<Self> {
         Ok(Self {
             transport: Transport::from_credential(config, auth)?,
             user_id: Some(UserId::new(SourceKind::BILIBILI, auth.dede_user_id.clone())),
@@ -75,21 +76,33 @@ impl BilibiliChannel {
     }
 }
 
-/// api 层 `color_eyre::Report` 收敛到 channel-core 错误。
-///
-/// 携带 [`ApiCodeError`] 的按 code 映射:`-101`(未登录)→ `AuthRequired`、`-352`(风控/签名
-/// 失效)→ `RateLimited`、其余透传 `Api`;纯网络/解析类 Report 落 `Other`。
-fn map_err(e: color_eyre::Report) -> Error {
-    match e.downcast_ref::<ApiCodeError>() {
-        Some(api) => match api.code {
-            -101 => Error::AuthRequired,
-            -352 => Error::RateLimited,
-            _ => Error::Api {
-                code: api.code,
-                message: api.message.clone(),
-            },
+/// 将 B站领域错误映射为跨 channel 分类，保留原始 cause。
+fn map_err(error: BilibiliError) -> Error {
+    match error {
+        BilibiliError::Api(ApiCodeError { code: -101, .. }) => Error::AuthRequired,
+        BilibiliError::Api(ApiCodeError { code: -352, .. }) => Error::RateLimited,
+        BilibiliError::Api(ApiCodeError { code, message }) => Error::Api { code, message },
+        BilibiliError::Network { .. }
+        | BilibiliError::Cookie { .. }
+        | BilibiliError::SigningClock(_)
+        | BilibiliError::SigningKeys { .. } => Error::Network {
+            source: Box::new(error),
         },
-        None => Error::Other(e),
+        BilibiliError::Parse { .. } | BilibiliError::Serialize(_) => Error::Parse {
+            source: Box::new(error),
+        },
+        BilibiliError::InvalidData { field } => Error::InvalidData { field },
+        BilibiliError::Path(_)
+        | BilibiliError::File { .. }
+        | BilibiliError::InvalidCredentialPath { .. } => Error::Storage {
+            source: Box::new(error),
+        },
+        BilibiliError::Qr(_)
+        | BilibiliError::LoginCancelled
+        | BilibiliError::LoginExpired
+        | BilibiliError::LoginStatus { .. } => Error::Parse {
+            source: Box::new(error),
+        },
     }
 }
 
@@ -110,14 +123,10 @@ fn parse_song_ref(id: &SongId) -> Option<(String, i32)> {
 
 /// 多 P 展开时单条 view 失败是否应中止整个 `playlist_detail`(而非降级为 unavailable 单行)。
 ///
-/// 全局/瞬时错误(登录失效 / 风控 / 网络 / 未知兜底)会命中夹子里**每一条**多 P 条目,若逐条
-/// 降级会把整夹伪造成一堆 unavailable 死行、掩盖「重登 / 退避重试」的真因——故中止并冒泡,让上层
-/// 可重试。仅该视频**自身**的内容错误(`Api` 码如 -404 删除、`Parse` 响应异常)才降级单行。
+/// 非 API 故障曾通过 `Other` 中止整夹；现在网络、解析、存储及无效响应仍必须中止。
+/// 只有远端 API 返回的视频自身内容错误可降级单行。
 fn expansion_should_abort(err: &Error) -> bool {
-    matches!(
-        err,
-        Error::AuthRequired | Error::RateLimited | Error::Network(_) | Error::Other(_)
-    )
+    !matches!(err, Error::Api { .. })
 }
 
 /// 在视频详情里定位某分 P 的 cid:优先 `pages` 里 `page` 匹配项;单 P(无 pages)且
@@ -228,11 +237,8 @@ impl MusicChannel for BilibiliChannel {
         id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
-        // 收藏夹内容:翻页拉全条目,单 P 直接成曲;多 P 条目逐 BV 拉 view 展开成逐 P 曲目
-        // (串行:只有多 P 条目才多这一跳,音乐向收藏夹里量级很小)。view 失败分两类:该视频
-        // 自身内容错误(删除 / 解析异常)降级为标 unavailable 的单行,整夹不因单条失效视频而空;
-        // 全局/瞬时错误(登录失效 / 风控 / 网络)会命中每条,中止整夹并冒泡供上层重试(见
-        // [`expansion_should_abort`]),不伪造一堆死行掩盖真因。最后配元信息成 Playlist。
+        // 自身内容业务码可降级为 unavailable 单行；解析、无效响应及全局故障
+        // 必须中止整夹，避免将系统性故障伪装成一批失效视频。
         let fid = id.as_str();
         let list = api::fav::all_resources(&self.transport, fid)
             .await
@@ -261,7 +267,7 @@ impl MusicChannel for BilibiliChannel {
                                 target: "bilibili",
                                 bvid,
                                 error = mineral_log::chain(&err),
-                                "多 P 收藏条目内容失效(删除 / 解析异常),降级为单行"
+                                "多 P 收藏条目返回内容业务错误,降级为单行"
                             );
                             songs.push(fallback);
                         }
@@ -308,21 +314,42 @@ impl PlaybackProvider for BilibiliChannel {
         &self,
         request: PlaybackRequest,
         cancellation: CancellationToken,
-    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+    ) -> mineral_playback::Result<Box<dyn PreparedPlayback>> {
         if cancellation.is_cancelled() {
-            return Err(color_eyre::eyre::eyre!("playback resolve cancelled"));
+            return Err(PlaybackError::Cancelled);
         }
-        let (bvid, page) = parse_song_ref(request.song_id())
-            .ok_or_else(|| color_eyre::eyre::eyre!("invalid Bilibili song id"))?;
-        let info = api::view::video_info(&self.transport, &bvid).await?;
-        let cid = cid_for_page(&info, page)
-            .ok_or_else(|| color_eyre::eyre::eyre!("Bilibili page missing"))?;
+        let (bvid, page) =
+            parse_song_ref(request.song_id()).ok_or_else(|| PlaybackError::Provider {
+                source: Box::new(BilibiliError::InvalidData {
+                    field: "Bilibili song id",
+                }),
+            })?;
+        let info = api::view::video_info(&self.transport, &bvid)
+            .await
+            .map_err(|source| PlaybackError::Provider {
+                source: Box::new(source),
+            })?;
+        let cid = cid_for_page(&info, page).ok_or_else(|| PlaybackError::Provider {
+            source: Box::new(BilibiliError::InvalidData {
+                field: "Bilibili page cid",
+            }),
+        })?;
         if cancellation.is_cancelled() {
-            return Err(color_eyre::eyre::eyre!("playback resolve cancelled"));
+            return Err(PlaybackError::Cancelled);
         }
-        let result = api::playurl::playurl(&self.transport, &bvid, cid).await?;
-        let media = convert::playurl_to_media(request.song_id().clone(), result)
-            .ok_or_else(|| color_eyre::eyre::eyre!("Bilibili audio track missing"))?;
+        let result = api::playurl::playurl(&self.transport, &bvid, cid)
+            .await
+            .map_err(|source| PlaybackError::Provider {
+                source: Box::new(source),
+            })?;
+        let media =
+            convert::playurl_to_media(request.song_id().clone(), result).ok_or_else(|| {
+                PlaybackError::Provider {
+                    source: Box::new(BilibiliError::InvalidData {
+                        field: "Bilibili audio track",
+                    }),
+                }
+            })?;
         Ok(DirectPreparedPlayback::boxed(media))
     }
 }
@@ -332,13 +359,39 @@ mod tests {
     use mineral_channel_core::Error;
 
     use super::{cid_for_page, expansion_should_abort};
+    use crate::error::{ApiCodeError, Error as BilibiliError};
     use crate::wire::de::from_value;
     use crate::wire::view::VideoInfo;
 
-    /// 多 P 展开时 view 失败的处置分流:全局/瞬时错误(登录失效 / 风控 / 网络 / 兜底)中止整夹
-    /// 可重试;该视频自身的内容错误(API 码如删除 / 解析异常)才降级单行,不冒充删除。
+    /// 登录与风控 code 保持 channel 的既有重试分类。
     #[test]
-    fn expansion_aborts_on_global_errors_only() {
+    fn maps_api_codes_without_losing_other_causes() {
+        let api = |code| {
+            super::map_err(BilibiliError::Api(ApiCodeError {
+                code,
+                message: Some("remote error".to_owned()),
+            }))
+        };
+        assert!(matches!(api(-101), Error::AuthRequired));
+        assert!(matches!(api(-352), Error::RateLimited));
+        assert!(matches!(api(-404), Error::Api { code: -404, .. }));
+        let network = super::map_err(BilibiliError::Network {
+            operation: "send request",
+            source: Box::new(std::io::Error::other("offline")),
+        });
+        assert!(matches!(&network, Error::Network { .. }));
+        assert!(std::error::Error::source(&network).is_some());
+        let signing_keys = super::map_err(BilibiliError::SigningKeys {
+            source: Box::new(BilibiliError::InvalidData {
+                field: "nav.wbi_img.img_url",
+            }),
+        });
+        assert!(matches!(signing_keys, Error::Network { .. }));
+    }
+
+    /// 多 P 展开时，只有视频业务码能降级；网络、解析、存储故障中止整夹。
+    #[test]
+    fn expansion_aborts_on_non_api_failures() {
         assert!(
             expansion_should_abort(&Error::AuthRequired),
             "登录失效会命中每条,应中止"
@@ -348,23 +401,33 @@ mod tests {
             "风控会命中每条,应中止"
         );
         assert!(
-            expansion_should_abort(&Error::Network("timeout".to_owned())),
+            expansion_should_abort(&Error::Network {
+                source: Box::new(std::io::Error::other("timeout"))
+            }),
             "网络故障应中止"
         );
         assert!(
-            expansion_should_abort(&Error::Other(color_eyre::eyre::eyre!("x"))),
-            "未知兜底错误保守中止"
+            expansion_should_abort(&Error::Storage {
+                source: Box::new(std::io::Error::other("disk"))
+            }),
+            "存储错误应中止整夹"
         );
         assert!(
             !expansion_should_abort(&Error::Api {
                 code: -404,
-                message: String::new()
+                message: None
             }),
             "该视频删除(API 码)只降级单行"
         );
         assert!(
-            !expansion_should_abort(&Error::Parse("bad json".to_owned())),
-            "该视频响应解析异常只降级单行"
+            expansion_should_abort(&Error::Parse {
+                source: Box::new(std::io::Error::other("bad json"))
+            }),
+            "解析错误应中止整夹"
+        );
+        assert!(
+            expansion_should_abort(&Error::InvalidData { field: "view.code" }),
+            "无效响应应中止整夹"
         );
     }
 

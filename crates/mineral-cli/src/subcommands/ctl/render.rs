@@ -5,8 +5,9 @@
 
 use std::process::ExitCode;
 
-use color_eyre::eyre::WrapErr as _;
 use serde::Serialize;
+
+use crate::error::{Error, Result};
 
 use super::outcome::{FailureReason, State};
 
@@ -91,10 +92,13 @@ impl Report {
     ///
     /// # Return:
     ///   进程退出码;JSON 渲染失败时冒泡(本地程序错误,不是命令结论)。
-    pub(super) fn emit(self, json: bool) -> color_eyre::Result<ExitCode> {
+    pub(super) fn emit(self, json: bool) -> Result<ExitCode> {
         let code = self.exit_code();
         if json {
-            let line = self.json_line().wrap_err("渲染 JSON 结论失败")?;
+            let line = self.json_line().map_err(|source| Error::Json {
+                output: "ctl outcome",
+                source,
+            })?;
             println!("{line}");
             return Ok(code);
         }
@@ -136,7 +140,7 @@ impl Report {
     }
 
     /// 一行 JSON 信封。
-    fn json_line(&self) -> Result<String, serde_json::Error> {
+    fn json_line(&self) -> std::result::Result<String, serde_json::Error> {
         let (kind, reason, detail) = match &self.state {
             State::Failed { reason, detail } => (Some(reason.as_str()), None, detail.as_deref()),
             State::Skipped(reason) => (None, Some(reason.as_str()), None),
@@ -178,7 +182,7 @@ struct Envelope<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
 
-    /// daemon 给出的人读原因(仅失败 / 未知时出现)。
+    /// CLI 生成的补充信息(仅失败 / 未知时出现)。
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<&'a str>,
 
@@ -194,7 +198,9 @@ struct Envelope<'a> {
 #[cfg(test)]
 mod tests {
     use super::{Payload, Report};
-    use crate::subcommands::ctl::outcome::{FailureReason, SkipReason, State};
+    use crate::subcommands::ctl::outcome::{FailureReason, SkipReason, State, state_from_outcome};
+    use mineral_client::operation::{Outcome, SubmitError, UnknownReason};
+    use mineral_protocol::FailureKind;
 
     /// JSON 信封的字段名 / 顺序 / 取值集合是脚本契约,变更必须显式审阅。
     #[test]
@@ -228,6 +234,43 @@ mod tests {
             "ctl --json 信封:核心字段 + 命令专属字段 + 四种结论态",
             lines
         );
+        Ok(())
+    }
+
+    /// daemon 失败保留 JSON 分类，但不把诊断原文放入机器信封。
+    #[test]
+    fn daemon_failure_json_omits_internal_detail() -> color_eyre::Result<()> {
+        let state = state_from_outcome(Outcome::Failed {
+            kind: FailureKind::Internal,
+            detail: "internal diagnostic".to_owned(),
+        });
+        let line = Report::new("pause", String::new(), state).json_line()?;
+        let json = serde_json::from_str::<serde_json::Value>(&line)?;
+        assert_eq!(
+            json.get("outcome").and_then(serde_json::Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            json.get("kind").and_then(serde_json::Value::as_str),
+            Some("internal")
+        );
+        assert!(json.get("detail").is_none());
+        Ok(())
+    }
+
+    /// 未提交仍按 unknown 输出，原因说明由 CLI 生成且占用既有 detail 字段。
+    #[test]
+    fn not_submitted_json_keeps_unknown_envelope() -> color_eyre::Result<()> {
+        let state = state_from_outcome(Outcome::Unknown {
+            reason: UnknownReason::NotSubmitted(SubmitError::Disconnected),
+        });
+        let line = Report::new("pause", String::new(), state).json_line()?;
+        let json = serde_json::from_str::<serde_json::Value>(&line)?;
+        assert_eq!(
+            json.get("outcome").and_then(serde_json::Value::as_str),
+            Some("unknown")
+        );
+        assert!(json.get("detail").is_some_and(serde_json::Value::is_string));
         Ok(())
     }
 }

@@ -13,10 +13,10 @@ mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-persist      = { workspace = true }
 
-color-eyre  = { workspace = true }
 async-trait = { workspace = true }
 
 [dev-dependencies]
+color-eyre = { workspace = true }
 tempfile     = "3"
 tokio        = { workspace = true }
 mineral-test = { workspace = true }

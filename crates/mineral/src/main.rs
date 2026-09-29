@@ -13,6 +13,9 @@ use mineral_config::DaemonLoad;
 use mineral_playback::{PlaybackProvider, PlaybackRegistry};
 use tokio::runtime::Runtime;
 
+use crate::error::{Error, Result};
+
+mod error;
 mod os;
 
 /// 全局分配器换成 dhat,供 `dhat::Profiler` 记录每次分配的调用栈 + 字节(仅 `dhat-heap`
@@ -43,14 +46,14 @@ fn run() -> color_eyre::Result<ExitCode> {
 
     let args = Args::parse();
     match args.command {
-        Some(Command::Serve) => os::run_daemon().map(|()| ExitCode::SUCCESS),
-        Some(command) => mineral_cli::run(command),
+        Some(Command::Serve) => Ok(os::run_daemon().map(|()| ExitCode::SUCCESS)?),
+        Some(command) => Ok(mineral_cli::run(command)?),
         None => {
             // dhat guard 必须持到 TUI 退出:Drop 时才落 dhat-heap.json。
             #[cfg(feature = "dhat-heap")]
             let _dhat = dhat::Profiler::new_heap();
             let runtime = named_runtime("mineral-rt")?;
-            runtime.block_on(run_tui()).map(|()| ExitCode::SUCCESS)
+            Ok(runtime.block_on(run_tui()).map(|()| ExitCode::SUCCESS)?)
         }
     }
 }
@@ -65,12 +68,12 @@ fn run() -> color_eyre::Result<ExitCode> {
 ///
 /// # Return:
 ///   构造好的 runtime;底层 builder 失败时冒泡。
-fn named_runtime(name: &'static str) -> color_eyre::Result<Runtime> {
+fn named_runtime(name: &'static str) -> Result<Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name(name)
         .build()
-        .wrap_err("create tokio runtime failed")
+        .map_err(Error::Runtime)
 }
 
 /// 在 tokio runtime 上跑完整个 daemon 生命周期(build channels → serve → 优雅收尾)。
@@ -81,7 +84,7 @@ fn named_runtime(name: &'static str) -> color_eyre::Result<Runtime> {
 /// daemon 通常被 TUI 以 stderr 重定向的子进程方式拉起,返回的 `Err` 只会进 color-eyre
 /// 的 stderr;这里在边界处额外把它写进 **tracing 日志文件**,这样即便 stderr 不可见,
 /// 启动失败(如凭证解析失败)也能在日志里查到。
-pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
+pub(crate) fn serve_blocking() -> Result<()> {
     let runtime = named_runtime("mineral-daemon-rt")?;
     let result = runtime.block_on(async {
         // daemon 走活 host API:config.lua 顶层的 mineral.* 真实注册,
@@ -89,12 +92,11 @@ pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (push_tx, push_rx) = tokio::sync::mpsc::unbounded_channel();
         let host = mineral_script::ScriptHost::new(cmd_tx.clone(), push_tx.clone());
-        let dir = mineral_paths::config_dir().wrap_err("解析配置目录失败")?;
+        let dir = mineral_paths::config_dir()?;
         let config_path = dir.join("config.lua");
         let loaded = mineral_config::load_with_vm(&config_path, |lua| {
-            mineral_script::install_api(lua, &host).map_err(color_eyre::Report::new)
-        })
-        .wrap_err("加载用户配置失败")?;
+            mineral_script::install_api(lua, &host)
+        })?;
         log_config_warnings(&loaded.warnings);
 
         let DaemonLoad {
@@ -117,7 +119,8 @@ pub(crate) fn serve_blocking() -> color_eyre::Result<()> {
             config_tree,
             config_path,
         )
-        .await
+        .await?;
+        Ok(())
     });
     if let Err(e) = &result {
         mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");
@@ -165,24 +168,27 @@ async fn open_persist() -> mineral_persist::ServerStore {
 
 /// 起 TUI:优先 attach 已有 daemon、没有则 spawn 一个独立 daemon 再 attach;
 /// channels / playback / persist 都由 daemon 进程持有,TUI 进程不构造音乐源。
-async fn run_tui() -> color_eyre::Result<()> {
+async fn run_tui() -> Result<()> {
     let (config, warnings) = load_config()?;
     log_config_warnings(&warnings);
-    mineral_tui::run(config, warnings).await
+    Ok(mineral_tui::run(config, warnings).await?)
 }
 
 /// 加载用户配置:config 目录解析失败或内置 default.lua 损坏(程序员错误)时冒泡;
 /// 用户 `config.lua` 的错误已在 loader 内降级为 warnings,不会让加载失败。
-fn load_config() -> color_eyre::Result<(mineral_config::Config, Vec<mineral_config::ConfigWarning>)>
-{
-    let dir = mineral_paths::config_dir().wrap_err("解析配置目录失败")?;
-    mineral_config::load(&dir.join("config.lua")).wrap_err("加载用户配置失败")
+fn load_config() -> Result<(mineral_config::Config, Vec<mineral_config::ConfigWarning>)> {
+    let dir = mineral_paths::config_dir()?;
+    Ok(mineral_config::load(&dir.join("config.lua"))?)
 }
 
 /// 把配置降级告警逐条落日志(daemon 无 UI,日志是唯一出口;TUI 另有 toast)。
 fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
-    for w in warnings {
-        mineral_log::warn!(target: "config", warning = %w, "用户配置降级");
+    for warning in warnings {
+        mineral_log::warn!(
+            target: "config",
+            error = mineral_log::chain(warning),
+            "用户配置降级"
+        );
     }
 }
 
@@ -197,7 +203,7 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
 fn build_sources(
     persist: mineral_persist::ServerStore,
     sources: &mineral_config::SourcesConfig,
-) -> color_eyre::Result<BuiltSources> {
+) -> Result<BuiltSources> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
     let mut providers = Vec::<Arc<dyn PlaybackProvider>>::new();
     // 聚合源(全源收藏投影):纯 persist 投影、无凭证依赖,恒注册。放列表首位,
@@ -248,14 +254,12 @@ fn build_sources(
 ///
 /// # Params:
 ///   - `bilibili`: B站源段配置(timeout / proxy / 并发)。
-fn build_bilibili(bilibili: &mineral_config::BilibiliSection) -> color_eyre::Result<SourcePair> {
+fn build_bilibili(bilibili: &mineral_config::BilibiliSection) -> Result<SourcePair> {
     let bc = mineral_cli::bilibili_config_from(bilibili);
     // 有存储凭证 → 带登录态(解锁我的收藏夹 / 高码率);否则 guest。
-    let channel = match mineral_channel_bilibili::load_stored().wrap_err("读取 B站凭证失败")?
-    {
-        Some(auth) => BilibiliChannel::with_credential(&bc, &auth)
-            .wrap_err("构造带登录态 BilibiliChannel 失败")?,
-        None => BilibiliChannel::new(&bc).wrap_err("构造 BilibiliChannel 失败")?,
+    let channel = match mineral_channel_bilibili::load_stored()? {
+        Some(auth) => BilibiliChannel::with_credential(&bc, &auth)?,
+        None => BilibiliChannel::new(&bc)?,
     };
     let concrete = Arc::new(channel);
     let channel: Arc<dyn MusicChannel> = concrete.clone();
@@ -272,13 +276,12 @@ fn build_bilibili(bilibili: &mineral_config::BilibiliSection) -> color_eyre::Res
 fn build_netease(
     persist: mineral_persist::ServerStore,
     netease: &mineral_config::NeteaseSection,
-) -> color_eyre::Result<Option<SourcePair>> {
-    let Some(auth) = load_stored().wrap_err("读取网易云凭证失败")? else {
+) -> Result<Option<SourcePair>> {
+    let Some(auth) = load_stored()? else {
         return Ok(None);
     };
     let nc = mineral_cli::netease_config_from(netease);
-    let channel = NeteaseChannel::with_credential(&nc, &auth.music_u, auth.user_id, persist)
-        .wrap_err("构造 NeteaseChannel 失败")?;
+    let channel = NeteaseChannel::with_credential(&nc, &auth.music_u, auth.user_id, persist)?;
     let concrete = Arc::new(channel);
     let channel: Arc<dyn MusicChannel> = concrete.clone();
     let provider: Arc<dyn PlaybackProvider> = concrete;

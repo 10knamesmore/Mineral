@@ -6,6 +6,7 @@
 
 mod context;
 mod entity;
+mod error;
 mod event;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -18,6 +19,9 @@ mod store;
 mod vocab;
 
 pub use context::QueueContext;
+pub use error::Error;
+/// Statistics storage operation result.
+pub type Result<T> = std::result::Result<T, Error>;
 pub use event::{
     ActionTrigger, AudioBackend, BehaviorEvent, CacheHarvestOutcome, CopyContext, DownloadHook,
     DownloadOutcome, FailOpen, FetchKind, FetchOutcome, FetchTrigger, GaplessResult, HookDecision,

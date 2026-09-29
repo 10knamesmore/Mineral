@@ -7,4 +7,4 @@ mod stdio;
 
 pub(crate) use backend::{TerminalBackend, TerminalGraphics};
 pub(crate) use protocol::{GraphicsProtocol, TerminalRelay};
-pub(crate) use stdio::exchange;
+pub(crate) use stdio::{Error as ExchangeError, exchange};

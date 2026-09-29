@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{WrapErr, bail};
+use crate::{Error, Result};
 
 /// `sun_path` 字段上限(含结尾 NUL):macOS 104 / Linux 108 字节。超限直接报错而非截断
 /// (截断会绑到错误路径)。
@@ -29,7 +29,7 @@ const SOCKET_FILE: &str = "mineral.sock";
 ///
 /// # Return:
 ///   解析得到的目录路径。
-pub(crate) fn runtime_dir() -> color_eyre::Result<PathBuf> {
+pub(crate) fn runtime_dir() -> Result<PathBuf> {
     if let Some(v) = std::env::var_os("MINERAL_SOCKET_DIR").filter(|v| !v.is_empty())
         && Path::new(&v).is_absolute()
     {
@@ -68,18 +68,22 @@ fn xdg_runtime_dir() -> Option<PathBuf> {
 ///
 /// # Return:
 ///   `<runtime_dir>/mineral.sock` 的绝对路径;目录创建/属主校验失败或路径超长返回 `Err`。
-pub(crate) fn socket_path() -> color_eyre::Result<PathBuf> {
-    let dir = runtime_dir().wrap_err("解析 runtime 目录失败")?;
-    std::fs::create_dir_all(&dir)
-        .wrap_err_with(|| format!("创建 runtime 目录失败 {}", dir.display()))?;
+pub(crate) fn socket_path() -> Result<PathBuf> {
+    let dir = runtime_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|source| Error::RuntimeDirectory {
+        operation: "创建",
+        path: dir.clone(),
+        source,
+    })?;
     harden_dir(&dir)?;
     let sock = dir.join(SOCKET_FILE);
     let len = sock.as_os_str().as_bytes().len();
     if len >= SUN_PATH_MAX {
-        bail!(
-            "socket 路径过长({len} >= {SUN_PATH_MAX}),请用 $MINERAL_SOCKET_DIR 指一个更短的目录: {}",
-            sock.display()
-        );
+        return Err(Error::SocketPathTooLong {
+            length: len,
+            maximum: SUN_PATH_MAX,
+            path: sock,
+        });
     }
     Ok(sock)
 }
@@ -91,19 +95,26 @@ pub(crate) fn socket_path() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   成功返回 `Ok(())`;属主非本人或权限设置失败返回 `Err`。
-fn harden_dir(dir: &Path) -> color_eyre::Result<()> {
-    let md = std::fs::metadata(dir)
-        .wrap_err_with(|| format!("stat runtime 目录失败 {}", dir.display()))?;
+fn harden_dir(dir: &Path) -> Result<()> {
+    let md = std::fs::metadata(dir).map_err(|source| Error::RuntimeDirectory {
+        operation: "检查",
+        path: dir.to_path_buf(),
+        source,
+    })?;
     let me = nix::unistd::geteuid().as_raw();
     if md.uid() != me {
-        bail!(
-            "runtime 目录属主非本人(uid={} != {}),拒绝使用 {}",
-            md.uid(),
-            me,
-            dir.display()
-        );
+        return Err(Error::RuntimeOwner {
+            path: dir.to_path_buf(),
+            owner: md.uid(),
+            current: me,
+        });
     }
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-        .wrap_err_with(|| format!("收紧 runtime 目录权限失败 {}", dir.display()))?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|source| {
+        Error::RuntimeDirectory {
+            operation: "收紧权限",
+            path: dir.to_path_buf(),
+            source,
+        }
+    })?;
     Ok(())
 }

@@ -27,7 +27,7 @@ pub(crate) struct EngineIo {
     pub(crate) snapshot_changes: Arc<Notify>,
 
     /// Engine startup result channel.
-    pub(crate) ready_tx: mpsc::SyncSender<color_eyre::Result<()>>,
+    pub(crate) ready_tx: mpsc::SyncSender<crate::Result<()>>,
 
     /// PCM spectrum tap producer.
     pub(crate) tap_producer: SharedProd,
@@ -63,7 +63,7 @@ fn engine_main(
     io: &EngineIo,
     mode: AudioMode,
     params: &EngineParams,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let output = match mode {
         AudioMode::ForceNull => None,
         AudioMode::Auto => Some(Output::open(pct_to_gain(*params.initial_volume()))),
@@ -91,16 +91,14 @@ fn engine_main(
 }
 
 /// Drains commands without touching an audio device.
-fn run_null_mode(commands: &mpsc::Receiver<AudioCommand>) -> color_eyre::Result<()> {
+fn run_null_mode(commands: &mpsc::Receiver<AudioCommand>) -> crate::Result<()> {
     while let Ok(command) = commands.recv() {
         match command {
             AudioCommand::ListOutputs(reply) => {
                 let _ = reply.send(Ok(Vec::new()));
             }
             AudioCommand::SelectOutput { reply, .. } => {
-                let _ = reply.send(Err(color_eyre::eyre::eyre!(
-                    "audio device output is disabled"
-                )));
+                let _ = reply.send(Err(crate::Error::OutputDisabled));
             }
             _ => {}
         }

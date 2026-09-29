@@ -59,9 +59,11 @@ pub fn nest_path(path: &str, value: serde_json::Value) -> serde_json::Value {
 /// # Return:
 ///   `Config`;失败给带路径的 [`ConfigWarning::Deserialize`](供 overlay 剔除定位)
 pub fn from_tree(tree: &serde_json::Value) -> Result<Config, ConfigWarning> {
-    serde_path_to_error::deserialize::<_, Config>(tree).map_err(|e| ConfigWarning::Deserialize {
-        path: e.path().to_string(),
-        detail: e.inner().to_string(),
+    serde_path_to_error::deserialize::<_, Config>(tree).map_err(|error| {
+        ConfigWarning::Deserialize {
+            path: error.path().iter().next().map(|_| error.path().to_string()),
+            source: error.into_inner(),
+        }
     })
 }
 
@@ -183,7 +185,7 @@ mod tests {
         }
         match from_tree(&bad) {
             Err(ConfigWarning::Deserialize { path, .. }) => {
-                assert_eq!(path, "audio.volume", "路径应精确到字段");
+                assert_eq!(path.as_deref(), Some("audio.volume"), "路径应精确到字段");
             }
             other => color_eyre::eyre::bail!("应报 Deserialize 告警,得到 {other:?}"),
         }

@@ -61,7 +61,9 @@ pub struct PendingRestore {
 ///
 /// # Return:
 ///   结构化行(顺序不定;主键 = 歌单 id);下标溢出 i64(理论不可达)返回 `Err`。
-pub fn to_rows(map: &TrackPosMap) -> color_eyre::Result<Vec<mineral_persist::TrackPosRow>> {
+pub fn to_rows(
+    map: &TrackPosMap,
+) -> Result<Vec<mineral_persist::TrackPosRow>, std::num::TryFromIntError> {
     map.iter()
         .map(|(playlist, pos)| {
             Ok(mineral_persist::TrackPosRow {
@@ -81,7 +83,9 @@ pub fn to_rows(map: &TrackPosMap) -> color_eyre::Result<Vec<mineral_persist::Tra
 ///
 /// # Return:
 ///   内存表;下标超出 usize(库损坏)返回 `Err`(调用方降级空表)。
-pub fn from_rows(rows: Vec<mineral_persist::TrackPosRow>) -> color_eyre::Result<TrackPosMap> {
+pub fn from_rows(
+    rows: Vec<mineral_persist::TrackPosRow>,
+) -> Result<TrackPosMap, std::num::TryFromIntError> {
     rows.into_iter()
         .map(|row| {
             Ok((

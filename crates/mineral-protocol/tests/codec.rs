@@ -6,10 +6,11 @@ use mineral_model::{
     Album, AlbumId, Artist, ArtistId, BitRate, Playlist, PlaylistId, SongId, SourceKind,
 };
 use mineral_protocol::{
-    AdvanceKind, CopyTemplateCtx, CurrentSync, DownloadId, DownloadOrigin, DownloadStatus,
-    DownloadSummary, DownloadTarget, DownloadWave, KeyContext, PlayMode, PlayerSync,
-    PlayerVersions, PlaylistRef, QueueSync, Request, Response, ScriptBind, SegmentVersion,
-    SongDownloadView, SongStatsWire, StoreValue, ViewKind, framed, recv, send,
+    AdvanceKind, CopyTemplateCtx, CopyTextFailure, CurrentSync, DownloadId, DownloadOrigin,
+    DownloadStatus, DownloadSummary, DownloadTarget, DownloadWave, FailureKind, KeyContext,
+    OperationFailure, PlayMode, PlayerSync, PlayerVersions, PlaylistRef, QueueSync, Request,
+    Response, ScriptBind, SegmentVersion, SongDownloadView, SongStatsWire, StoreValue, ViewKind,
+    framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use mineral_test::song;
@@ -133,14 +134,17 @@ async fn round_trip_response_error() -> color_eyre::Result<()> {
     let mut receiver = framed(b);
 
     let msg = "request failed: channel unavailable";
-    let resp = Response::Error(msg.to_owned());
+    let resp = Response::Error(OperationFailure {
+        kind: FailureKind::Unavailable,
+        detail: msg.to_owned(),
+    });
     json_round_trips(&resp)?;
     send(&mut sender, &resp).await?;
     let got: Response = recv(&mut receiver)
         .await?
         .ok_or_else(|| eyre!("frame missing"))?;
-    if let Response::Error(m) = got {
-        assert_eq!(m, msg);
+    if let Response::Error(failure) = got {
+        assert_eq!(failure.kind, FailureKind::Unavailable);
     } else {
         return Err(eyre!("unexpected variant: {got:?}"));
     }
@@ -505,7 +509,11 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
     };
     req_round_trips(Request::StopDownload(download_id)).await?;
     resp_round_trips(Response::Ok).await?;
-    resp_round_trips(Response::Error("unknown download identity".to_owned())).await?;
+    resp_round_trips(Response::Error(OperationFailure {
+        kind: FailureKind::NotFound,
+        detail: "unknown download identity".to_owned(),
+    }))
+    .await?;
     value_round_trips(mineral_protocol::UpdatePayload::DownloadsSummary(
         DownloadSummary {
             active: 1,
@@ -572,7 +580,10 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
     })
     .await?;
     resp_round_trips(Response::CopyText(Ok("标题 - 歌手".to_owned()))).await?;
-    resp_round_trips(Response::CopyText(Err("模板下标越界".to_owned()))).await?;
+    resp_round_trips(Response::CopyText(Err(CopyTextFailure::CallbackFailed {
+        detail: "模板下标越界".to_owned(),
+    })))
+    .await?;
 
     req_round_trips(Request::TerminalState {
         rows: 50,

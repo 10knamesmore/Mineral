@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::Result;
 use crate::command::{LoopMode, MediaCommand};
 use crate::config::MediaConfig;
 use crate::state::{NowPlaying, PlaybackState};
@@ -22,42 +23,38 @@ impl MediaService {
     pub fn spawn(
         config: &MediaConfig,
         on_command: Arc<dyn Fn(MediaCommand) + Send + Sync>,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self> {
         let _ = config;
         let _ = on_command;
         Ok(Self { _private: () })
     }
 
     /// 占位:no-op。
-    pub fn set_now_playing(&self, now_playing: &NowPlaying) -> color_eyre::Result<()> {
+    pub fn set_now_playing(&self, now_playing: &NowPlaying) -> Result<()> {
         let _ = now_playing;
         Ok(())
     }
 
     /// 占位:no-op。
-    pub fn set_playback(
-        &self,
-        state: PlaybackState,
-        position: Option<Duration>,
-    ) -> color_eyre::Result<()> {
+    pub fn set_playback(&self, state: PlaybackState, position: Option<Duration>) -> Result<()> {
         let _ = (state, position);
         Ok(())
     }
 
     /// 占位:no-op。
-    pub fn notify_seek(&self, position: Duration) -> color_eyre::Result<()> {
+    pub fn notify_seek(&self, position: Duration) -> Result<()> {
         let _ = position;
         Ok(())
     }
 
     /// 占位:no-op。
-    pub fn set_shuffle(&self, shuffle: bool) -> color_eyre::Result<()> {
+    pub fn set_shuffle(&self, shuffle: bool) -> Result<()> {
         let _ = shuffle;
         Ok(())
     }
 
     /// 占位:no-op。
-    pub fn set_loop(&self, mode: LoopMode) -> color_eyre::Result<()> {
+    pub fn set_loop(&self, mode: LoopMode) -> Result<()> {
         let _ = mode;
         Ok(())
     }

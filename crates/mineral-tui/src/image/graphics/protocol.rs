@@ -61,7 +61,6 @@ impl TerminalRelay {
                 );
             }
             Err(error) => {
-                let error = color_eyre::Report::new(error);
                 mineral_log::warn!(
                     target: "tui",
                     error = mineral_log::chain(&error),

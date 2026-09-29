@@ -15,6 +15,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::state::ManagerState;
 
+/// A requested download identity is no longer known to the manager.
+#[derive(Debug, thiserror::Error)]
+#[error("download identity not found")]
+pub(crate) struct StopError;
+
 /// Immutable services used by download attempts and playlist expansion.
 #[derive(Clone)]
 pub(crate) struct DownloadRuntime {
@@ -142,15 +147,12 @@ impl DownloadManager {
     }
 
     /// Stops a known download; terminal rows are unchanged and unknown IDs return an error.
-    pub(crate) fn stop(&self, id: &DownloadId) -> color_eyre::Result<()> {
+    pub(crate) fn stop(&self, id: &DownloadId) -> Result<(), StopError> {
         let mut cancellation = None::<CancellationToken>;
         let mut queued_stop = false;
         let song_id = {
             let mut state = self.inner.state.lock();
-            let row = state
-                .rows
-                .get(id)
-                .ok_or_else(|| color_eyre::eyre::eyre!("unknown download identity"))?;
+            let row = state.rows.get(id).ok_or(StopError)?;
             let status = row.view.status;
             let song_id = row.view.song.id.clone();
             match status {

@@ -33,7 +33,7 @@ const DM_IMG_INTER: &str = r#"{"ds":[],"wh":[0,0,0],"of":[0,0,0]}"#;
 ///
 /// # Return:
 ///   名片响应 DTO。
-pub async fn card(transport: &Transport, mid: &str) -> color_eyre::Result<CardResult> {
+pub async fn card(transport: &Transport, mid: &str) -> crate::Result<CardResult> {
     let data = transport
         .get_data(&format!("{CARD_URL}?mid={mid}&photo=false"))
         .await?;
@@ -80,7 +80,7 @@ pub async fn arc_videos(
     order: ArcOrder,
     page: u32,
     page_size: u32,
-) -> color_eyre::Result<ArcSearchResult> {
+) -> crate::Result<ArcSearchResult> {
     let data = transport
         .get_signed(
             ARC_SEARCH_URL,

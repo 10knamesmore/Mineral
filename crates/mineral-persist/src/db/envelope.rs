@@ -4,7 +4,6 @@
 //! 读取按算法版本过滤,版本不符视同缺失,由产出方重算覆盖,不让旧算法数据毒化渲染。
 
 use crate::entity::song_envelope;
-use color_eyre::eyre::WrapErr;
 use mineral_log::trace;
 use mineral_model::{Envelope, SongId};
 use sea_orm::sea_query::OnConflict;
@@ -21,7 +20,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
-    pub async fn put_envelope(&self, id: &SongId, envelope: &Envelope) -> color_eyre::Result<()> {
+    pub async fn put_envelope(&self, id: &SongId, envelope: &Envelope) -> crate::Result<()> {
         let Some(db) = self.pool() else {
             return Ok(());
         };
@@ -47,7 +46,11 @@ impl NamespaceStore {
         )
         .exec_without_returning(db)
         .await
-        .wrap_err_with(|| format!("写包络失败 song={}", id.value()))?;
+        .map_err(|source| crate::Error::Record {
+            operation: "写包络",
+            record: id.value().to_owned(),
+            source,
+        })?;
         Ok(())
     }
 
@@ -60,11 +63,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   命中且版本相符返回 `Ok(Some(envelope))`,否则 `Ok(None)`。
-    pub async fn get_envelope(
-        &self,
-        id: &SongId,
-        version: u16,
-    ) -> color_eyre::Result<Option<Envelope>> {
+    pub async fn get_envelope(&self, id: &SongId, version: u16) -> crate::Result<Option<Envelope>> {
         let Some(db) = self.pool() else {
             return Ok(None);
         };
@@ -73,7 +72,11 @@ impl NamespaceStore {
                 .filter(song_envelope::Column::Version.eq(i64::from(version)))
                 .one(db)
                 .await
-                .wrap_err_with(|| format!("读包络失败 song={}", id.value()))?;
+                .map_err(|source| crate::Error::Record {
+                    operation: "读包络",
+                    record: id.value().to_owned(),
+                    source,
+                })?;
         Ok(row.map(|row| Envelope {
             points: row.points,
             version,

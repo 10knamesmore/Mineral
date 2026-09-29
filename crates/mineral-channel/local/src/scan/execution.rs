@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use walkdir::WalkDir;
 
 use super::context::{self, ScanContext};
-use crate::metadata;
+use crate::{error::Result, metadata};
 
 /// Collect all recognized files without following symlinks.
-pub(crate) fn run(roots: &[PathBuf], cover_dir: PathBuf) -> color_eyre::Result<ScanContext> {
+pub(crate) fn run(roots: &[PathBuf], cover_dir: PathBuf) -> Result<ScanContext> {
     let roots = context::roots(roots)?;
     let mut context = ScanContext {
         probes: Default::default(),

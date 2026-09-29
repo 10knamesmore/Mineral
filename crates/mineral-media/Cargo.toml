@@ -9,7 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-color-eyre    = { workspace = true }
+thiserror     = { workspace = true }
 mineral-log   = { workspace = true }
 mineral-model = { workspace = true }
 typed-builder = { workspace = true }
@@ -36,6 +36,9 @@ objc2-core-foundation  = { version = "0.3", features = ["CFCGTypes"] }
 objc2-foundation       = { version = "0.3", features = ["NSString", "NSDictionary", "NSArray", "NSValue", "NSRunLoop", "NSDate", "NSData", "NSThread"] }
 objc2-app-kit          = { version = "0.3", features = ["NSApplication", "NSResponder", "NSImage", "NSRunningApplication", "objc2-core-foundation"] }
 objc2-media-player     = { version = "0.3", features = ["MPNowPlayingInfoCenter", "MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPRemoteControlTypes", "MPMediaItem", "block2", "objc2-app-kit", "objc2-core-foundation"] }
+
+[dev-dependencies]
+color-eyre = { workspace = true }
 
 [lints]
 workspace = true

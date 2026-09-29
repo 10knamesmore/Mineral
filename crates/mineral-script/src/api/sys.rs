@@ -57,7 +57,7 @@ fn paths_table(lua: &Lua) -> mlua::Result<Table> {
 fn set_path(
     paths: &Table,
     key: &str,
-    value: color_eyre::Result<std::path::PathBuf>,
+    value: mineral_paths::Result<std::path::PathBuf>,
 ) -> mlua::Result<()> {
     match value {
         Ok(p) => paths.set(key, p.display().to_string()),

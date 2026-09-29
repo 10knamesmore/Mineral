@@ -7,6 +7,7 @@
 //! `Failed` 携带业务失败类别，`Unknown` 表示无法确认结论；断连后不自动重发。
 
 use mineral_protocol::{FailureKind, OperationResult};
+use thiserror::Error;
 use tokio::sync::oneshot;
 
 /// 操作结论。
@@ -23,14 +24,14 @@ pub enum Outcome<T> {
         /// 失败类别。
         kind: FailureKind,
 
-        /// 诊断细节。
+        /// 日志诊断详情；展示层据 `kind` 生成提示。
         detail: String,
     },
 
     /// 无法确认执行结论：可能本地未提交，也可能等待期间断连；不自动重发。
     Unknown {
-        /// 人读细节。
-        detail: String,
+        /// 无法确认结果的结构化原因。
+        reason: UnknownReason,
     },
 }
 
@@ -60,7 +61,7 @@ impl<T> Outcome<T> {
             Self::Applied(value) => Outcome::Applied(f(value)),
             Self::Accepted(value) => Outcome::Accepted(f(value)),
             Self::Failed { kind, detail } => Outcome::Failed { kind, detail },
-            Self::Unknown { detail } => Outcome::Unknown { detail },
+            Self::Unknown { reason } => Outcome::Unknown { reason },
         }
     }
 }
@@ -116,36 +117,39 @@ impl<T> Pending<T> {
         match rx.await {
             Ok(result) => decode(result),
             Err(_closed) => Outcome::Unknown {
-                detail: "会话在结果到达前结束".to_owned(),
+                reason: UnknownReason::ResultLost,
             },
         }
     }
 }
 
 /// 本地未提交的原因。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum SubmitError {
     /// 待发队列已满。
+    #[error("本地待发队列已满")]
     QueueFull,
 
     /// 在途请求达到上限。
+    #[error("在途请求已达上限")]
     InFlightLimit,
 
     /// 会话已断开 / 已关闭。
+    #[error("会话已断开")]
     Disconnected,
 }
 
-impl std::fmt::Display for SubmitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::QueueFull => f.write_str("本地待发队列已满"),
-            Self::InFlightLimit => f.write_str("在途请求已达上限"),
-            Self::Disconnected => f.write_str("会话已断开"),
-        }
-    }
-}
+/// 无法确认请求结论的原因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum UnknownReason {
+    /// 请求未进入本地发送队列。
+    #[error("请求未提交")]
+    NotSubmitted(#[from] SubmitError),
 
-impl std::error::Error for SubmitError {}
+    /// 请求已提交，但会话在应答到达前关闭。
+    #[error("会话结束，执行结论未知")]
+    ResultLost,
+}
 
 /// 译码「已应用 / 已受理」类结论。
 pub(crate) fn decode_applied(result: OperationResult, request_name: &'static str) -> Outcome<()> {

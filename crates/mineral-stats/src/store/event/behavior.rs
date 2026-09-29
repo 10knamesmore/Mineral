@@ -1,6 +1,5 @@
 //! 行为域事件到持久化实体的具名字段映射。
 
-use color_eyre::eyre::WrapErr as _;
 use mineral_model::SongId;
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
@@ -34,7 +33,7 @@ pub(super) async fn write(
     session_id: Option<i64>,
     actor: Actor,
     event: &BehaviorEvent,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let w = BehaviorWrite {
         pool,
         ts,
@@ -232,7 +231,7 @@ async fn write_search(
     page: i64,
     result_count: Option<i64>,
     outcome: SearchOutcome,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::searches::Entity::insert(crate::entity::searches::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -248,7 +247,10 @@ async fn write_search(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event searches 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event searches",
+        source,
+    })?;
     Ok(())
 }
 
@@ -258,7 +260,7 @@ async fn write_seek(
     song: &SongId,
     from_ms: i64,
     to_ms: i64,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     crate::entity::seeks::Entity::insert(crate::entity::seeks::ActiveModel {
@@ -273,7 +275,10 @@ async fn write_seek(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event seeks 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event seeks",
+        source,
+    })?;
     Ok(())
 }
 
@@ -283,7 +288,7 @@ async fn write_pause(
     song: &SongId,
     at_ms: i64,
     action: PauseAction,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     crate::entity::pauses::Entity::insert(crate::entity::pauses::ActiveModel {
@@ -298,7 +303,10 @@ async fn write_pause(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event pauses 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event pauses",
+        source,
+    })?;
     Ok(())
 }
 
@@ -307,7 +315,7 @@ async fn write_volume_change(
     w: &BehaviorWrite<'_>,
     from_pct: i64,
     to_pct: i64,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::volume_changes::Entity::insert(crate::entity::volume_changes::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -318,7 +326,10 @@ async fn write_volume_change(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event volume_changes 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event volume_changes",
+        source,
+    })?;
     Ok(())
 }
 
@@ -327,7 +338,7 @@ async fn write_mode_change(
     w: &BehaviorWrite<'_>,
     from_mode: crate::PlayMode,
     to_mode: crate::PlayMode,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::mode_changes::Entity::insert(crate::entity::mode_changes::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -338,7 +349,10 @@ async fn write_mode_change(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event mode_changes 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event mode_changes",
+        source,
+    })?;
     Ok(())
 }
 
@@ -349,7 +363,7 @@ async fn write_love_change(
     loved: bool,
     origin: LoveOrigin,
     remote_mirror: Option<RemoteMirror>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     let loved = i64::from(loved);
@@ -366,7 +380,10 @@ async fn write_love_change(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event love_changes 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event love_changes",
+        source,
+    })?;
     Ok(())
 }
 
@@ -376,7 +393,7 @@ async fn write_queue_op(
     op: QueueOp,
     song: Option<&SongId>,
     count: i64,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let (ns, song_value) = split_song(song);
     crate::entity::queue_ops::Entity::insert(crate::entity::queue_ops::ActiveModel {
         ts: Set(w.ts),
@@ -390,7 +407,10 @@ async fn write_queue_op(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event queue_ops 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event queue_ops",
+        source,
+    })?;
     Ok(())
 }
 
@@ -403,7 +423,7 @@ async fn write_playlist_op(
     song_count: i64,
     outcome: OpOutcome,
     error_kind: Option<PlaylistError>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let (ns, song_value) = split_song(song);
     let playlist_ref = playlist_ref.to_column();
     crate::entity::playlist_ops::Entity::insert(crate::entity::playlist_ops::ActiveModel {
@@ -421,7 +441,10 @@ async fn write_playlist_op(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event playlist_ops 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event playlist_ops",
+        source,
+    })?;
     Ok(())
 }
 
@@ -434,7 +457,7 @@ async fn write_fetch(
     trigger: FetchTrigger,
     outcome: FetchOutcome,
     latency_ms: i64,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::fetches::Entity::insert(crate::entity::fetches::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -449,7 +472,10 @@ async fn write_fetch(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event fetches 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event fetches",
+        source,
+    })?;
     Ok(())
 }
 
@@ -462,7 +488,7 @@ async fn write_download(
     outcome: DownloadOutcome,
     hooked: DownloadHook,
     path: Option<&str>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     crate::entity::downloads::Entity::insert(crate::entity::downloads::ActiveModel {
@@ -480,7 +506,10 @@ async fn write_download(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event downloads 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event downloads",
+        source,
+    })?;
     Ok(())
 }
 
@@ -491,7 +520,7 @@ async fn write_copy_render(
     ctx_kind: CopyContext,
     target_ref: Option<&str>,
     outcome: OpOutcome,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::copy_renders::Entity::insert(crate::entity::copy_renders::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -504,7 +533,10 @@ async fn write_copy_render(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event copy_renders 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event copy_renders",
+        source,
+    })?;
     Ok(())
 }
 
@@ -514,7 +546,7 @@ async fn write_action_invocation(
     name: &str,
     trigger: ActionTrigger,
     outcome: OpOutcome,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::action_invocations::Entity::insert(
         crate::entity::action_invocations::ActiveModel {
             ts: Set(w.ts),
@@ -528,12 +560,15 @@ async fn write_action_invocation(
     )
     .exec(w.pool)
     .await
-    .wrap_err("record_event action_invocations 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event action_invocations",
+        source,
+    })?;
     Ok(())
 }
 
 /// 落 config_overrides 一行。
-async fn write_config_override(w: &BehaviorWrite<'_>, path: &str) -> color_eyre::Result<()> {
+async fn write_config_override(w: &BehaviorWrite<'_>, path: &str) -> crate::Result<()> {
     crate::entity::config_overrides::Entity::insert(crate::entity::config_overrides::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -543,7 +578,10 @@ async fn write_config_override(w: &BehaviorWrite<'_>, path: &str) -> color_eyre:
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event config_overrides 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event config_overrides",
+        source,
+    })?;
     Ok(())
 }
 
@@ -553,7 +591,7 @@ async fn write_store_write(
     song: &SongId,
     key: &str,
     op: StoreOp,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     crate::entity::store_writes::Entity::insert(crate::entity::store_writes::ActiveModel {
@@ -568,7 +606,10 @@ async fn write_store_write(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event store_writes 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event store_writes",
+        source,
+    })?;
     Ok(())
 }
 
@@ -578,7 +619,7 @@ async fn write_spawn(
     program: &str,
     outcome: SpawnOutcome,
     exit_code: Option<i64>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::spawns::Entity::insert(crate::entity::spawns::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -590,12 +631,15 @@ async fn write_spawn(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event spawns 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event spawns",
+        source,
+    })?;
     Ok(())
 }
 
 /// 落 bus_messages 一行。
-async fn write_bus_message(w: &BehaviorWrite<'_>, name: &str) -> color_eyre::Result<()> {
+async fn write_bus_message(w: &BehaviorWrite<'_>, name: &str) -> crate::Result<()> {
     crate::entity::bus_messages::Entity::insert(crate::entity::bus_messages::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -605,15 +649,15 @@ async fn write_bus_message(w: &BehaviorWrite<'_>, name: &str) -> color_eyre::Res
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event bus_messages 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event bus_messages",
+        source,
+    })?;
     Ok(())
 }
 
 /// 落 fullscreen_changes 一行。
-async fn write_fullscreen_change(
-    w: &BehaviorWrite<'_>,
-    fullscreen: bool,
-) -> color_eyre::Result<()> {
+async fn write_fullscreen_change(w: &BehaviorWrite<'_>, fullscreen: bool) -> crate::Result<()> {
     let fullscreen = i64::from(fullscreen);
     crate::entity::fullscreen_changes::Entity::insert(
         crate::entity::fullscreen_changes::ActiveModel {
@@ -626,15 +670,15 @@ async fn write_fullscreen_change(
     )
     .exec(w.pool)
     .await
-    .wrap_err("record_event fullscreen_changes 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event fullscreen_changes",
+        source,
+    })?;
     Ok(())
 }
 
 /// 落 connection_rejects 一行。
-async fn write_connection_reject(
-    w: &BehaviorWrite<'_>,
-    reason: RejectReason,
-) -> color_eyre::Result<()> {
+async fn write_connection_reject(w: &BehaviorWrite<'_>, reason: RejectReason) -> crate::Result<()> {
     crate::entity::connection_rejects::Entity::insert(
         crate::entity::connection_rejects::ActiveModel {
             ts: Set(w.ts),
@@ -646,7 +690,10 @@ async fn write_connection_reject(
     )
     .exec(w.pool)
     .await
-    .wrap_err("record_event connection_rejects 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event connection_rejects",
+        source,
+    })?;
     Ok(())
 }
 
@@ -656,7 +703,7 @@ async fn write_client_connection(
     client: &str,
     duration_ms: i64,
     concurrent: i64,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::client_connections::Entity::insert(
         crate::entity::client_connections::ActiveModel {
             ts: Set(w.ts),
@@ -670,7 +717,10 @@ async fn write_client_connection(
     )
     .exec(w.pool)
     .await
-    .wrap_err("record_event client_connections 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event client_connections",
+        source,
+    })?;
     Ok(())
 }
 
@@ -682,7 +732,7 @@ async fn write_app_lifecycle(
     audio_backend: Option<AudioBackend>,
     session_restored: Option<bool>,
     client_version: Option<&str>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let session_restored = session_restored.map(i64::from);
     crate::entity::app_lifecycle::Entity::insert(crate::entity::app_lifecycle::ActiveModel {
         ts: Set(w.ts),
@@ -697,7 +747,10 @@ async fn write_app_lifecycle(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event app_lifecycle 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event app_lifecycle",
+        source,
+    })?;
     Ok(())
 }
 

@@ -16,7 +16,11 @@ fn map_write_error(e: &WriteError) -> mineral_stats::PlaylistError {
         WriteError::RateLimited => mineral_stats::PlaylistError::RateLimited,
         WriteError::NotSupported => mineral_stats::PlaylistError::NotSupported,
         WriteError::Api { .. } => mineral_stats::PlaylistError::Api,
-        WriteError::Other(_) => mineral_stats::PlaylistError::Other,
+        WriteError::Network
+        | WriteError::Parse
+        | WriteError::InvalidData
+        | WriteError::Storage
+        | WriteError::NotFound => mineral_stats::PlaylistError::Other,
     }
 }
 

@@ -341,7 +341,7 @@ fn diff_downloads(
                         bytes_done: row.bytes_done,
                         bytes_total: row.bytes_total,
                         speed_bps: row.speed_bps,
-                        failure: row.failure.clone(),
+                        failure: row.failure,
                     });
                 }
             }

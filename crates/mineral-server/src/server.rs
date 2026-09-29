@@ -78,7 +78,7 @@ impl Server {
         config_tree: serde_json::Value,
         script: Option<mineral_script::ScriptSender>,
         stats: crate::StatsRecorder,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self, crate::Error> {
         let channels = &sources.channels;
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
         let scheduler = Scheduler::new(channels, *config.channel_workers_per());
@@ -162,8 +162,8 @@ impl Server {
     ///
     /// 仅 daemon 模式调用 —— 控制的是常驻播放。注册失败(无 D-Bus session 等)
     /// 返回 `Err`,调用方应降级而非中止 daemon。
-    pub fn start_media_service(&self) -> color_eyre::Result<()> {
-        crate::media::start(self.player.clone())
+    pub fn start_media_service(&self) -> Result<(), crate::Error> {
+        crate::media::start(self.player.clone()).map_err(crate::Error::from)
     }
 
     /// 消费 server 句柄。daemon 关停路径在 accept loop 结束后调用,
@@ -186,7 +186,7 @@ impl Server {
     ///
     /// 每条新 connection 接受后,内部重跑 `PlayerCore::refresh_initial_loads`
     /// ——数据现状已由订阅初始快照兜底,这里是连接时顺手保鲜远端数据。
-    pub async fn serve(&self, listener: UnixListener) -> color_eyre::Result<()> {
+    pub async fn serve(&self, listener: UnixListener) -> Result<(), crate::Error> {
         let player = self.player.clone();
         let on_connect = move || player.refresh_initial_loads();
         let services = Arc::new(SessionServices {

@@ -29,7 +29,7 @@ fn lyric_text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 ///
 /// # Return:
 ///   装配好的 [`Lyrics`];任一路失败按缺省(空)处理。
-pub async fn lyrics(transport: &Transport, id: &SongId) -> color_eyre::Result<Lyrics> {
+pub async fn lyrics(transport: &Transport, id: &SongId) -> crate::Result<Lyrics> {
     let mut translation = Vec::<LyricLine>::new();
     let mut romanization = Vec::<LyricLine>::new();
     let mut lrc_linux = Vec::<LyricLine>::new();

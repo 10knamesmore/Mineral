@@ -4,14 +4,13 @@ use std::num::{NonZeroU16, NonZeroU32};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use color_eyre::eyre::eyre;
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, StreamTrait};
 use rodio::cpal::{FromSample, Sample, SizedSample};
 
 use super::devices;
 use super::source::{QueueHandoff, take_samples};
-use crate::{AudioOutput, OutputTarget};
+use crate::{AudioOutput, Error, OutputTarget, Result};
 
 /// 缓冲请求以约 50 ms 音频时长为目标；帧数随后取最近的 2 的幂。
 const OUTPUT_BUFFERS_PER_SECOND: u32 = 20;
@@ -33,19 +32,19 @@ pub(super) struct DeviceStream {
 
 impl DeviceStream {
     /// 先打开并启动目标流；旧流仍持有队列时，新流只输出静音。
-    pub(super) fn open(target: OutputTarget, handoff: QueueHandoff) -> color_eyre::Result<Self> {
+    pub(super) fn open(target: OutputTarget, handoff: QueueHandoff) -> Result<Self> {
         let device = devices::resolve(&target)?;
         let (device_id, device_name) = devices::describe(&device)?;
-        let supported = device.default_output_config()?;
+        let supported = device
+            .default_output_config()
+            .map_err(|source| Error::OutputConfig { source })?;
         let sample_format = supported.sample_format();
         let mut config = supported.config();
         config.buffer_size = cpal::BufferSize::Fixed(nearest_power_of_two(
             config.sample_rate / OUTPUT_BUFFERS_PER_SECOND,
         ));
-        let channels = NonZeroU16::new(config.channels)
-            .ok_or_else(|| eyre!("output config has zero channels"))?;
-        let sample_rate = NonZeroU32::new(config.sample_rate)
-            .ok_or_else(|| eyre!("output config has zero sample rate"))?;
+        let channels = NonZeroU16::new(config.channels).ok_or(Error::ZeroChannels)?;
+        let sample_rate = NonZeroU32::new(config.sample_rate).ok_or(Error::ZeroSampleRate)?;
         let failed = Arc::new(AtomicBool::new(false));
         let callback_sequence = Arc::new(AtomicU64::new(0));
         let state = CallbackState {
@@ -56,7 +55,9 @@ impl DeviceStream {
             sequence: Arc::clone(&callback_sequence),
         };
         let stream = build_output_stream(&device, &config, sample_format, state)?;
-        stream.play()?;
+        stream
+            .play()
+            .map_err(|source| Error::PlayStream { source })?;
         let info = AudioOutput {
             target,
             device_id,
@@ -84,9 +85,13 @@ impl DeviceStream {
     }
 
     /// 暂停并重启同一条系统流，保留播放队列。
-    pub(super) fn restart(&self) -> color_eyre::Result<()> {
-        self.stream.pause()?;
-        self.stream.play()?;
+    pub(super) fn restart(&self) -> Result<()> {
+        self.stream
+            .pause()
+            .map_err(|source| Error::PauseStream { source })?;
+        self.stream
+            .play()
+            .map_err(|source| Error::PlayStream { source })?;
         Ok(())
     }
 }
@@ -115,12 +120,12 @@ fn build_output_stream(
     config: &cpal::StreamConfig,
     format: cpal::SampleFormat,
     state: CallbackState,
-) -> color_eyre::Result<cpal::Stream> {
+) -> Result<cpal::Stream> {
     macro_rules! build {
         ($($format:ident, $sample:ty);+ $(;)?) => {
             match format {
                 $(cpal::SampleFormat::$format => build_typed_output_stream::<$sample>(device, config, state),)+
-                _ => Err(eyre!("unsupported output sample format: {format:?}")),
+                _ => Err(Error::UnsupportedSampleFormat { format }),
             }
         };
     }
@@ -132,7 +137,7 @@ fn build_typed_output_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     state: CallbackState,
-) -> color_eyre::Result<cpal::Stream>
+) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<rodio::Sample>,
 {
@@ -144,27 +149,29 @@ where
         failed,
         sequence,
     } = state;
-    Ok(device.build_output_stream::<T, _, _>(
-        config,
-        move |data, _| {
-            sequence.fetch_add(1, Ordering::Relaxed);
-            if samples.is_none() {
-                samples = take_samples(&handoff, channels, sample_rate);
-            }
-            for sample in data {
-                *sample = samples
-                    .as_mut()
-                    .and_then(Iterator::next)
-                    .map(Sample::from_sample)
-                    .unwrap_or(T::EQUILIBRIUM);
-            }
-        },
-        move |error| {
-            failed.store(true, Ordering::Relaxed);
-            mineral_log::error!(target: "audio", error = %error, "audio output stream error");
-        },
-        None,
-    )?)
+    device
+        .build_output_stream::<T, _, _>(
+            config,
+            move |data, _| {
+                sequence.fetch_add(1, Ordering::Relaxed);
+                if samples.is_none() {
+                    samples = take_samples(&handoff, channels, sample_rate);
+                }
+                for sample in data {
+                    *sample = samples
+                        .as_mut()
+                        .and_then(Iterator::next)
+                        .map(Sample::from_sample)
+                        .unwrap_or(T::EQUILIBRIUM);
+                }
+            },
+            move |error| {
+                failed.store(true, Ordering::Relaxed);
+                mineral_log::error!(target: "audio", error = mineral_log::chain(&error), "audio output stream error");
+            },
+            None,
+        )
+        .map_err(|source| Error::BuildStream { source })
 }
 
 /// 返回最接近目标帧数的 2 的幂，最小为 1。

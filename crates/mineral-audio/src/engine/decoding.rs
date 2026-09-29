@@ -3,7 +3,6 @@
 use std::io::{Read, Seek};
 use std::time::Duration;
 
-use color_eyre::eyre::eyre;
 use rodio::Source;
 use rodio::decoder::DecoderBuilder;
 use rodio::source::SeekError;
@@ -78,10 +77,7 @@ where
 }
 
 /// Builds a rodio decoder and enables arbitrary seek only when byte length is known.
-pub(crate) fn build_decoder<R>(
-    reader: R,
-    byte_len: Option<u64>,
-) -> color_eyre::Result<rodio::Decoder<R>>
+pub(crate) fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> crate::Result<rodio::Decoder<R>>
 where
     R: Read + Seek + Send + Sync + 'static,
 {
@@ -89,5 +85,7 @@ where
     if let Some(length) = byte_len {
         builder = builder.with_byte_len(length);
     }
-    builder.build().map_err(|error| eyre!("decode: {error}"))
+    builder
+        .build()
+        .map_err(|source| crate::Error::Decode { source })
 }

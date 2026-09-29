@@ -11,11 +11,15 @@
 
 mod command;
 mod config;
+mod error;
 mod os;
 mod state;
 
 pub use command::{LoopMode, MediaCommand};
 pub use config::MediaConfig;
+pub use error::Error;
+/// Result of a system media service operation.
+pub type Result<T> = std::result::Result<T, Error>;
 pub use os::MediaService;
 pub use state::{NowPlaying, PlaybackState};
 

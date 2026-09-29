@@ -4,14 +4,14 @@
 
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::eyre;
+use crate::{Error, Result};
 
 /// 解析 `$HOME`;未设(罕见)返回 `Err`。
 ///
 /// # Return:
 ///   `$HOME` 路径。
-pub(crate) fn home_dir() -> color_eyre::Result<PathBuf> {
-    let h = std::env::var_os("HOME").ok_or_else(|| eyre!("HOME 未设置，无法确定 mineral 目录"))?;
+pub(crate) fn home_dir() -> Result<PathBuf> {
+    let h = std::env::var_os("HOME").ok_or(Error::MissingHome)?;
     Ok(PathBuf::from(h))
 }
 
@@ -24,7 +24,7 @@ pub(crate) fn home_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。
-fn xdg_base(env: &str, fallback: &str) -> color_eyre::Result<PathBuf> {
+fn xdg_base(env: &str, fallback: &str) -> Result<PathBuf> {
     if let Some(v) = std::env::var_os(env).filter(|v| !v.is_empty())
         && Path::new(&v).is_absolute()
     {
@@ -37,7 +37,7 @@ fn xdg_base(env: &str, fallback: &str) -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。
-pub(crate) fn config_dir() -> color_eyre::Result<PathBuf> {
+pub(crate) fn config_dir() -> Result<PathBuf> {
     xdg_base("XDG_CONFIG_HOME", ".config")
 }
 
@@ -45,7 +45,7 @@ pub(crate) fn config_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。
-pub(crate) fn data_dir() -> color_eyre::Result<PathBuf> {
+pub(crate) fn data_dir() -> Result<PathBuf> {
     xdg_base("XDG_DATA_HOME", ".local/share")
 }
 
@@ -53,7 +53,7 @@ pub(crate) fn data_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。
-pub(crate) fn cache_dir() -> color_eyre::Result<PathBuf> {
+pub(crate) fn cache_dir() -> Result<PathBuf> {
     xdg_base("XDG_CACHE_HOME", ".cache")
 }
 
@@ -62,7 +62,7 @@ pub(crate) fn cache_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。
-pub(crate) fn music_dir() -> color_eyre::Result<PathBuf> {
+pub(crate) fn music_dir() -> Result<PathBuf> {
     if let Some(v) = std::env::var_os("XDG_MUSIC_DIR").filter(|v| !v.is_empty())
         && Path::new(&v).is_absolute()
     {

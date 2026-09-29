@@ -31,20 +31,24 @@ pub enum ChannelCommand {
 ///
 /// # Return:
 ///   命令执行结果。
-pub async fn run(args: ChannelArgs) -> color_eyre::Result<()> {
+pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
     match args.channel {
         ChannelCommand::Netease(cli) => {
             // 自 eval 配置取网易云网络参数:代理 / 超时对扫码登录同样生效。
             let (config, _warnings) =
                 mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
             let nc = netease_config_from(config.sources().netease());
-            mineral_channel_netease::cli::run(cli, &nc).await
+            mineral_channel_netease::cli::run(cli, &nc)
+                .await
+                .map_err(Into::into)
         }
         ChannelCommand::Bilibili(cli) => {
             let (config, _warnings) =
                 mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
             let bc = bilibili_config_from(config.sources().bilibili());
-            mineral_channel_bilibili::cli::run(cli, &bc).await
+            mineral_channel_bilibili::cli::run(cli, &bc)
+                .await
+                .map_err(Into::into)
         }
     }
 }

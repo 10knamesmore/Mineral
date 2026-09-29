@@ -39,7 +39,7 @@ pub struct Tui {
 
 impl Tui {
     /// 创建 backend(暂未进入 raw mode)。
-    pub fn new() -> color_eyre::Result<Self> {
+    pub fn new() -> io::Result<Self> {
         let backend = CrosstermBackend::new(io::stdout());
         let terminal = Terminal::new(backend)?;
         Ok(Self {
@@ -50,7 +50,7 @@ impl Tui {
     }
 
     /// 进入 raw mode + alternate screen,并安装 panic hook 兜底恢复终端。
-    pub fn enter(&mut self) -> color_eyre::Result<()> {
+    pub fn enter(&mut self) -> io::Result<()> {
         enable_raw_mode()?;
         // 必须在切 alternate screen 前查:切屏后原屏幕(shell 提示符所在)的光标位置即不可得。
         // raw mode 已开,可读 DSR 响应;headless / 管道下查询失败则留 `None`,绝不阻断启动。
@@ -100,7 +100,7 @@ impl Tui {
     }
 
     /// 退出 alternate screen + raw mode,并 pop 标题栈(若之前 push 过)。多次调用幂等。
-    pub fn exit(&mut self) -> color_eyre::Result<()> {
+    pub fn exit(&mut self) -> io::Result<()> {
         restore_terminal(&self.title_pushed)?;
         self.terminal.show_cursor()?;
         Ok(())
@@ -112,7 +112,7 @@ impl Tui {
     }
 
     /// 渲染一帧；回调可在 cell 输出前发送图片指令，失败则终止本帧。
-    pub fn draw<F>(&mut self, f: F) -> color_eyre::Result<()>
+    pub fn draw<F>(&mut self, f: F) -> io::Result<()>
     where
         F: FnOnce(&mut Frame<'_>) -> io::Result<()>,
     {

@@ -6,6 +6,7 @@
 use mineral_channel_core::ChannelCaps;
 use mineral_model::SourceKind;
 use mineral_protocol::{HandshakeRejected, ScriptBind, WireError};
+use thiserror::Error;
 
 /// 会话容量参数(默认值面向 TUI;CLI 可用 [`Self::cli`])。
 #[derive(Clone, Copy, Debug)]
@@ -53,45 +54,23 @@ impl ClientConfig {
 }
 
 /// 会话建立失败。
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ConnectError {
     /// 传输层失败。
-    Wire(WireError),
+    #[error("连接传输失败")]
+    Wire(#[from] WireError),
 
     /// 握手被拒(版本不匹配)。
-    Rejected(HandshakeRejected),
+    #[error("握手被拒")]
+    Rejected(#[from] HandshakeRejected),
 
-    /// 协议违规(首帧不是 Welcome 等)。
-    Protocol {
-        /// 人读细节。
-        detail: String,
-    },
-}
+    /// daemon 在握手期间关闭连接，未发出 Welcome。
+    #[error("握手期间连接关闭")]
+    HandshakeClosed,
 
-impl std::fmt::Display for ConnectError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Wire(e) => write!(f, "{e}"),
-            Self::Rejected(e) => write!(f, "{e}"),
-            Self::Protocol { detail } => f.write_str(detail),
-        }
-    }
-}
-
-impl std::error::Error for ConnectError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Wire(source) => Some(source),
-            Self::Rejected(source) => Some(source),
-            Self::Protocol { .. } => None,
-        }
-    }
-}
-
-impl From<WireError> for ConnectError {
-    fn from(value: WireError) -> Self {
-        Self::Wire(value)
-    }
+    /// 握手首答没有 Welcome。
+    #[error("握手首答缺少 Welcome")]
+    MissingWelcome,
 }
 
 /// 会话运行指标(汇总,不逐条记录)。

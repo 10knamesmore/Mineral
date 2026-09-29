@@ -4,7 +4,6 @@ use std::ops::Range;
 
 use super::shared::plays_in;
 use crate::entity::{plays, sessions};
-use color_eyre::eyre::WrapErr as _;
 use sea_orm::sea_query::{self, Expr, ExprTrait, Func, Iden, Order, Query, WindowStatement};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, QueryTrait};
 
@@ -35,7 +34,7 @@ impl StatsStore {
     ///
     /// # Return:
     ///   续航聚合;无数据各项为 0
-    pub async fn endurance(&self, range: Range<i64>) -> color_eyre::Result<Endurance> {
+    pub async fn endurance(&self, range: Range<i64>) -> crate::Result<Endurance> {
         let Some(db) = self.pool() else {
             return Ok(Endurance {
                 sessions: 0,
@@ -59,8 +58,11 @@ impl StatsStore {
             .into_model::<EnduranceRow>()
             .one(db)
             .await
-            .wrap_err("endurance 查询失败")?
-            .ok_or_else(|| color_eyre::eyre::eyre!("endurance 聚合未返回行"))?;
+            .map_err(|source| crate::Error::Database {
+                operation: "endurance 查询",
+                source,
+            })?
+            .ok_or(crate::Error::MissingAggregate { query: "endurance" })?;
         let days = plays_in(range)
             .select_only()
             .column_as(
@@ -97,13 +99,23 @@ impl StatsStore {
         let result = db
             .query_one(&longest)
             .await
-            .wrap_err("endurance streak 查询失败")?
-            .ok_or_else(|| color_eyre::eyre::eyre!("endurance streak 聚合未返回行"))?;
+            .map_err(|source| crate::Error::Database {
+                operation: "endurance streak 查询",
+                source,
+            })?
+            .ok_or(crate::Error::MissingAggregate {
+                query: "endurance streak",
+            })?;
         Ok(Endurance {
             sessions: row.sessions,
             avg_ms: row.avg_ms.unwrap_or(0),
             longest_ms: row.longest_ms.unwrap_or(0),
-            streak_days: result.try_get_by_index(/*index*/ 0)?,
+            streak_days: result.try_get_by_index(/*index*/ 0).map_err(|source| {
+                crate::Error::Database {
+                    operation: "decode endurance streak length",
+                    source,
+                }
+            })?,
         })
     }
 }

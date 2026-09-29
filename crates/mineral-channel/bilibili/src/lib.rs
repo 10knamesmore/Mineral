@@ -11,6 +11,7 @@ pub mod config;
 pub mod convert;
 pub mod credential;
 pub mod error;
+pub use error::{Error, Result};
 pub mod sign;
 pub mod transport;
 pub mod wire;

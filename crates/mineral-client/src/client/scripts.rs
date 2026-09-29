@@ -1,7 +1,7 @@
 //! 脚本绑定、具名动作、复制模板与逐曲持久值。
 
 use mineral_model::SongId;
-use mineral_protocol::{FailureKind, OperationResult, ScriptBind};
+use mineral_protocol::{CopyTextFailure, FailureKind, OperationResult, ScriptBind};
 
 use super::Client;
 use crate::operation::{Outcome, Pending, SubmitError, decode_applied, decode_query};
@@ -36,7 +36,7 @@ impl Client {
         match self.invoke_action_pending(name, ctx, args) {
             Ok(pending) => pending.outcome().await,
             Err(error) => Outcome::Unknown {
-                detail: format!("未提交:{error}"),
+                reason: error.into(),
             },
         }
     }
@@ -75,7 +75,7 @@ impl Client {
         &self,
         index: usize,
         ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> Outcome<Result<String, String>> {
+    ) -> Outcome<Result<String, CopyTextFailure>> {
         self.request(
             mineral_protocol::Request::RenderCopyTemplate { index, ctx },
             decode_copy_template,
@@ -95,7 +95,7 @@ impl Client {
         &self,
         index: usize,
         ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> Result<Pending<Result<String, String>>, SubmitError> {
+    ) -> Result<Pending<Result<String, CopyTextFailure>>, SubmitError> {
         self.submit(
             mineral_protocol::Request::RenderCopyTemplate { index, ctx },
             decode_copy_template,
@@ -155,7 +155,7 @@ impl Client {
 fn decode_copy_template(
     result: OperationResult,
     request_name: &'static str,
-) -> Outcome<Result<String, String>> {
+) -> Outcome<Result<String, CopyTextFailure>> {
     match result {
         OperationResult::Query(response) => match *response {
             mineral_protocol::Response::CopyText(text) => Outcome::Applied(text),

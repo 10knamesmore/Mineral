@@ -12,13 +12,13 @@ rust-version.workspace = true
 mineral-model  = { workspace = true }
 async-trait    = { workspace = true }
 thiserror      = { workspace = true }
-color-eyre     = { workspace = true }
 rustc-hash     = { workspace = true }
 serde          = { workspace = true }
 typed-builder  = { workspace = true }
 derive-getters = { workspace = true }
 
 [dev-dependencies]
+color-eyre = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

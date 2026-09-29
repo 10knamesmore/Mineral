@@ -3,13 +3,11 @@
 //! `account_uid` 在二维码登录成功后补齐持久化凭证中的用户身份;
 //! `liked_song_ids` 返回该身份的远端喜欢歌曲集合。
 
-use color_eyre::eyre::eyre;
 use mineral_model::{SongId, SourceKind, UserId};
 use rustc_hash::FxHashSet;
 use serde_json::json;
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::{Error, Result};
 
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
@@ -36,7 +34,9 @@ pub async fn account_uid(transport: &Transport) -> Result<UserId> {
         .get("account")
         .and_then(|x| x.get("id"))
         .and_then(serde_json::Value::as_i64)
-        .ok_or_else(|| eyre!("account response missing `account.id` (logged in?)"))?;
+        .ok_or_else(|| Error::InvalidData {
+            field: "account.id",
+        })?;
     Ok(UserId::new(SourceKind::NETEASE, id.to_string()))
 }
 

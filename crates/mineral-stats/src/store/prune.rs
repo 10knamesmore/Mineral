@@ -1,7 +1,6 @@
 //! retention:按时间裁剪 stats.db 的旧流水。
 
 use crate::entity::{plays, sessions};
-use color_eyre::eyre::WrapErr as _;
 use sea_orm::sea_query::{Condition, Expr, ExprTrait, Query};
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, TransactionTrait};
 
@@ -32,29 +31,38 @@ impl StatsStore {
     ///
     /// # Params:
     ///   - `before_ms`: 裁剪水位;严格早于此的行被删
-    pub async fn prune(&self, before_ms: i64) -> color_eyre::Result<()> {
+    pub async fn prune(&self, before_ms: i64) -> crate::Result<()> {
         let Some(db) = self.pool() else {
             return Ok(());
         };
-        let tx = db.begin().await.wrap_err("prune 事务开启失败")?;
+        let tx = db.begin().await.map_err(|source| crate::Error::Database {
+            operation: "prune 事务开启",
+            source,
+        })?;
         plays::Entity::delete_many()
             .filter(plays::Column::StartedAt.lt(before_ms))
             .exec(&tx)
             .await
-            .wrap_err("prune plays 失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "prune plays",
+                source,
+            })?;
         for table in EVENT_TABLES {
-            table
-                .delete_before(&tx, before_ms)
-                .await
-                .wrap_err_with(|| format!("prune {} 失败", table.name()))?;
+            table.delete_before(&tx, before_ms).await?;
         }
         sessions::Entity::delete_many()
             .filter(sessions::Column::EndedAt.lt(before_ms))
             .filter(unreferenced_session_guard(None))
             .exec(&tx)
             .await
-            .wrap_err("prune sessions 失败")?;
-        tx.commit().await.wrap_err("prune 提交失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "prune sessions",
+                source,
+            })?;
+        tx.commit().await.map_err(|source| crate::Error::Database {
+            operation: "prune 提交",
+            source,
+        })?;
         Ok(())
     }
 
@@ -70,7 +78,7 @@ impl StatsStore {
     ///
     /// # Return:
     ///   将被删除的总行数
-    pub async fn count_before(&self, before_ms: i64) -> color_eyre::Result<i64> {
+    pub async fn count_before(&self, before_ms: i64) -> crate::Result<i64> {
         let Some(db) = self.pool() else {
             return Ok(0);
         };
@@ -79,13 +87,13 @@ impl StatsStore {
                 .filter(plays::Column::StartedAt.lt(before_ms))
                 .count(db)
                 .await
-                .wrap_err("count_before plays 失败")?,
+                .map_err(|source| crate::Error::Database {
+                    operation: "count_before plays",
+                    source,
+                })?,
         )?;
         for table in EVENT_TABLES {
-            total += table
-                .count(db, Some(i64::MIN..before_ms))
-                .await
-                .wrap_err_with(|| format!("count_before {} 失败", table.name()))?;
+            total += table.count(db, Some(i64::MIN..before_ms)).await?;
         }
         total += i64::try_from(
             sessions::Entity::find()
@@ -93,7 +101,10 @@ impl StatsStore {
                 .filter(unreferenced_session_guard(Some(before_ms)))
                 .count(db)
                 .await
-                .wrap_err("count_before sessions 失败")?,
+                .map_err(|source| crate::Error::Database {
+                    operation: "count_before sessions",
+                    source,
+                })?,
         )?;
         Ok(total)
     }
@@ -183,18 +194,17 @@ mod tests {
         }
     }
 
+    /// 统计指定持久化表的行数，供裁剪结果断言使用。
     async fn count(pool: &DatabaseConnection, table: &str) -> color_eyre::Result<i64> {
         match table {
             "plays" => Ok(i64::try_from(plays::Entity::find().count(pool).await?)?),
             "sessions" => Ok(i64::try_from(sessions::Entity::find().count(pool).await?)?),
-            name => {
-                EVENT_TABLES
-                    .iter()
-                    .find(|table| table.name() == name)
-                    .ok_or_else(|| color_eyre::eyre::eyre!("unknown event table {name}"))?
-                    .count(pool, /*range*/ None)
-                    .await
-            }
+            name => Ok(EVENT_TABLES
+                .iter()
+                .find(|table| table.name() == name)
+                .ok_or_else(|| color_eyre::eyre::eyre!("unknown event table {name}"))?
+                .count(pool, /*range*/ None)
+                .await?),
         }
     }
 
@@ -336,7 +346,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prune_disabled_is_noop() -> color_eyre::Result<()> {
+    async fn prune_disabled_is_noop() -> crate::Result<()> {
         StatsStore::disabled().prune(1000).await
     }
 }

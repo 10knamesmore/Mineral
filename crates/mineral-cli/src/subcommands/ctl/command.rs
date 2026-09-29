@@ -7,6 +7,99 @@ use std::str::FromStr;
 use clap::{Args, Subcommand, ValueEnum};
 use mineral_protocol::PlayMode;
 
+/// 控制命令的位置和音量参数解析失败。
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+    /// 时间格式不符合可接受的段数。
+    #[error("时长 `{raw}` 用法:SS / MM:SS / H:MM:SS 或 <n>s|m|h")]
+    TimeFormat {
+        /// 原始参数。
+        raw: String,
+    },
+
+    /// 时间段不是无符号整数。
+    #[error("时长 `{raw}` 含非数字段 `{field}`")]
+    TimeField {
+        /// 原始参数。
+        raw: String,
+
+        /// 失败的时间段。
+        field: String,
+
+        /// 整数解析错误。
+        #[source]
+        source: std::num::ParseIntError,
+    },
+
+    /// 非最高位的分秒段超过 59。
+    #[error("时长 `{raw}` 的 `{field}` 超出 0..=59")]
+    TimeRange {
+        /// 原始参数。
+        raw: String,
+
+        /// 越界的段。
+        field: String,
+    },
+
+    /// 时间量无法换算为毫秒。
+    #[error("时长 `{raw}` 过大")]
+    TimeOverflow {
+        /// 原始参数。
+        raw: String,
+    },
+
+    /// 相对位置解析失败。
+    #[error("相对位置 `{raw}` 不合法")]
+    RelativeTime {
+        /// 原始带符号参数。
+        raw: String,
+
+        /// 时间量错误。
+        #[source]
+        source: Box<Self>,
+    },
+
+    /// 相对位置超过有符号整数上限。
+    #[error("相对位置 `{raw}` 过大")]
+    RelativeOverflow {
+        /// 原始参数。
+        raw: String,
+
+        /// 整数转换错误。
+        #[source]
+        source: std::num::TryFromIntError,
+    },
+
+    /// 音量增量不是有符号整数。
+    #[error("音量 `{raw}` 的增量不是 -32768..=32767 的整数")]
+    VolumeDelta {
+        /// 原始参数。
+        raw: String,
+
+        /// 整数解析错误。
+        #[source]
+        source: std::num::ParseIntError,
+    },
+
+    /// 绝对音量不是无符号整数。
+    #[error("音量 `{raw}` 不是 0..=100 的整数")]
+    VolumeNumber {
+        /// 原始参数。
+        raw: String,
+
+        /// 整数解析错误。
+        #[source]
+        source: std::num::ParseIntError,
+    },
+
+    /// 绝对音量越界。
+    #[error("音量 `{raw}` 超出 0..=100")]
+    VolumeRange {
+        /// 原始参数。
+        raw: String,
+    },
+}
+
 /// `mineral ctl` 的参数。
 #[derive(Args, Debug, Clone)]
 pub struct CtlArgs {
@@ -188,7 +281,7 @@ pub(super) fn format_position(ms: u64) -> String {
 }
 
 impl FromStr for SeekSpec {
-    type Err = String;
+    type Err = ParseError;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let raw = raw.trim();
@@ -207,13 +300,19 @@ impl FromStr for SeekSpec {
 /// # Params:
 ///   - `rest`: 去掉符号后的取值
 ///   - `raw`: 原始取值(报错时原样回显)
-fn magnitude_ms(rest: &str, raw: &str) -> Result<i64, String> {
-    let ms = parse_time_ms(rest).map_err(|detail| format!("相对位置 `{raw}` 不合法:{detail}"))?;
-    i64::try_from(ms).map_err(|_overflow| format!("相对位置 `{raw}` 过大"))
+fn magnitude_ms(rest: &str, raw: &str) -> Result<i64, ParseError> {
+    let ms = parse_time_ms(rest).map_err(|source| ParseError::RelativeTime {
+        raw: raw.to_owned(),
+        source: Box::new(source),
+    })?;
+    i64::try_from(ms).map_err(|source| ParseError::RelativeOverflow {
+        raw: raw.to_owned(),
+        source,
+    })
 }
 
 impl FromStr for VolumeSpec {
-    type Err = String;
+    type Err = ParseError;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let raw = raw.trim();
@@ -232,10 +331,13 @@ impl FromStr for VolumeSpec {
 /// # Params:
 ///   - `rest`: 去掉符号后的取值
 ///   - `raw`: 原始取值(报错时原样回显)
-fn volume_delta(rest: &str, raw: &str) -> Result<i16, String> {
+fn volume_delta(rest: &str, raw: &str) -> Result<i16, ParseError> {
     rest.trim()
         .parse::<i16>()
-        .map_err(|_invalid| format!("音量 `{raw}` 的增量不是 -32768..=32767 的整数"))
+        .map_err(|source| ParseError::VolumeDelta {
+            raw: raw.to_owned(),
+            source,
+        })
 }
 
 /// 解析时间量:`SS`、`MM:SS`、`H:MM:SS` 或 `<n>s|m|h`,都落到毫秒。
@@ -244,13 +346,17 @@ fn volume_delta(rest: &str, raw: &str) -> Result<i16, String> {
 ///   - `raw`: 命令行原始取值
 ///
 /// # Return:
-///   毫秒;写法不合法时返回人读原因(clap 作为参数错误展示)。
-fn parse_time_ms(raw: &str) -> Result<u64, String> {
+///   毫秒;写法不合法时返回结构化解析错误(clap 负责展示)。
+fn parse_time_ms(raw: &str) -> Result<u64, ParseError> {
     let raw = raw.trim();
     if let Some((digits, unit)) = split_unit_suffix(raw) {
         let value = digits
             .parse::<u64>()
-            .map_err(|_too_large| format!("时长 `{raw}` 含非数字量 `{digits}`"))?;
+            .map_err(|source| ParseError::TimeField {
+                raw: raw.to_owned(),
+                field: digits.to_owned(),
+                source,
+            })?;
         let seconds_per_unit = match unit {
             's' => 1_u64,
             'm' => 60,
@@ -259,7 +365,9 @@ fn parse_time_ms(raw: &str) -> Result<u64, String> {
         return value
             .checked_mul(seconds_per_unit)
             .and_then(|seconds| seconds.checked_mul(1_000))
-            .ok_or_else(|| format!("时长 `{raw}` 过大"));
+            .ok_or_else(|| ParseError::TimeOverflow {
+                raw: raw.to_owned(),
+            });
     }
     parse_colon_ms(raw)
 }
@@ -288,46 +396,62 @@ fn split_unit_suffix(raw: &str) -> Option<(&str, char)> {
 ///
 /// # Params:
 ///   - `raw`: 命令行原始取值
-fn parse_colon_ms(raw: &str) -> Result<u64, String> {
+fn parse_colon_ms(raw: &str) -> Result<u64, ParseError> {
     let fields = raw.split(':').collect::<Vec<&str>>();
     if fields.is_empty() || fields.len() > 3 {
-        return Err(format!(
-            "时长 `{raw}` 用法:SS / MM:SS / H:MM:SS 或 <n>s|m|h"
-        ));
+        return Err(ParseError::TimeFormat {
+            raw: raw.to_owned(),
+        });
     }
     let mut total_seconds = 0_u64;
     for (index, field) in fields.iter().enumerate() {
         let value = field
             .parse::<u64>()
-            .map_err(|_not_a_number| format!("时长 `{raw}` 含非数字段 `{field}`"))?;
+            .map_err(|source| ParseError::TimeField {
+                raw: raw.to_owned(),
+                field: (*field).to_owned(),
+                source,
+            })?;
         // 最高位(冒号段的首位)不设上限,其余位是分 / 秒,必须合法。
         let leading = index == 0;
         if !leading && value > 59 {
-            return Err(format!("时长 `{raw}` 的 `{field}` 超出 0..=59"));
+            return Err(ParseError::TimeRange {
+                raw: raw.to_owned(),
+                field: (*field).to_owned(),
+            });
         }
         total_seconds = total_seconds
             .checked_mul(60)
             .and_then(|sum| sum.checked_add(value))
-            .ok_or_else(|| format!("时长 `{raw}` 过大"))?;
+            .ok_or_else(|| ParseError::TimeOverflow {
+                raw: raw.to_owned(),
+            })?;
     }
     total_seconds
         .checked_mul(1_000)
-        .ok_or_else(|| format!("时长 `{raw}` 过大"))
+        .ok_or_else(|| ParseError::TimeOverflow {
+            raw: raw.to_owned(),
+        })
 }
 
 /// 解析绝对音量(0..=100)。
 ///
 /// # Params:
 ///   - `raw`: 命令行原始取值
-fn parse_volume_absolute(raw: &str) -> Result<u8, String> {
+fn parse_volume_absolute(raw: &str) -> Result<u8, ParseError> {
     let value = raw
         .trim()
         .parse::<u16>()
-        .map_err(|_not_a_number| format!("音量 `{raw}` 不是 0..=100 的整数"))?;
+        .map_err(|source| ParseError::VolumeNumber {
+            raw: raw.to_owned(),
+            source,
+        })?;
     u8::try_from(value)
         .ok()
         .filter(|pct| *pct <= 100)
-        .ok_or_else(|| format!("音量 `{raw}` 超出 0..=100"))
+        .ok_or_else(|| ParseError::VolumeRange {
+            raw: raw.to_owned(),
+        })
 }
 
 #[cfg(test)]
@@ -337,14 +461,12 @@ mod tests {
 
     /// 解析一个位置;写法不合法即测试失败。
     fn seek(raw: &str) -> color_eyre::Result<SeekSpec> {
-        raw.parse::<SeekSpec>()
-            .map_err(color_eyre::eyre::Report::msg)
+        raw.parse::<SeekSpec>().map_err(Into::into)
     }
 
     /// 解析一个音量;写法不合法即测试失败。
     fn volume(raw: &str) -> color_eyre::Result<VolumeSpec> {
-        raw.parse::<VolumeSpec>()
-            .map_err(color_eyre::eyre::Report::msg)
+        raw.parse::<VolumeSpec>().map_err(Into::into)
     }
 
     /// 绝对位置的各种写法都落到毫秒,单位后缀与冒号段等价。

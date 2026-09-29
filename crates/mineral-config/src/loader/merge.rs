@@ -12,7 +12,7 @@ use mlua::{Function, Lua, Table};
 ///
 /// # Return:
 ///   合并后的新表
-pub(crate) fn deep_merge(lua: &Lua, default: Table, user: Table) -> color_eyre::Result<Table> {
+pub(crate) fn deep_merge(lua: &Lua, default: Table, user: Table) -> mlua::Result<Table> {
     let merge_fn: Function = lua
         .load(include_str!("../lua/merge.lua"))
         .set_name("merge.lua")

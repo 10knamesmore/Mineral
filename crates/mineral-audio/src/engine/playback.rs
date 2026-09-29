@@ -10,6 +10,7 @@ use rodio::Source;
 
 use super::decoding::{InstanceSource, build_decoder};
 use super::output::Output;
+use crate::Error;
 use crate::command::AudioCommand;
 use crate::queue_slots::{Boundary, PlayHead, Slot};
 use crate::snapshot::{AudioBackend, AudioSnapshot};
@@ -91,11 +92,11 @@ impl Engine {
     }
 
     /// Replaces the output queue with one already-opened current media item.
-    fn play(&mut self, media: OpenedMedia) -> color_eyre::Result<()> {
+    fn play(&mut self, media: OpenedMedia) -> crate::Result<()> {
         // rodio append after stop waits for the callback to drain the previous queue.
         if self.output.info().is_none() {
             media.cancellation().cancel();
-            return Err(color_eyre::eyre::eyre!("audio output is unavailable"));
+            return Err(Error::OutputUnavailable);
         }
         let song_id = media.info().song_id.qualified();
         self.output.player().stop();
@@ -110,7 +111,7 @@ impl Engine {
     }
 
     /// Appends already-opened next media behind current without reopening it.
-    fn append_next(&mut self, media: OpenedMedia) -> color_eyre::Result<()> {
+    fn append_next(&mut self, media: OpenedMedia) -> crate::Result<()> {
         if !self.head.cur.occupied {
             media.cancellation().cancel();
             return Ok(());
@@ -126,7 +127,7 @@ impl Engine {
         &mut self,
         media: OpenedMedia,
         slot_name: &'static str,
-    ) -> color_eyre::Result<Slot> {
+    ) -> crate::Result<Slot> {
         let byte_len = (media.seek_support() == SeekSupport::RandomAccess)
             .then_some(media.byte_len())
             .flatten();

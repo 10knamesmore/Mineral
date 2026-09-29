@@ -2,17 +2,17 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
-use color_eyre::eyre::eyre;
 use mineral_model::{AlbumRef, ArtistId, ArtistRef, MediaUrl, Song, SongId, SourceKind};
 
 use super::{context::ScanContext, identity};
 use crate::{
     catalog::{Catalog, FileRecord, LocalPlaylist},
+    error::{Error, Result},
     metadata,
 };
 
 /// Include every recognized file and group songs by their directly containing directory.
-pub(crate) fn build(context: ScanContext) -> color_eyre::Result<Catalog> {
+pub(crate) fn build(context: ScanContext) -> Result<Catalog> {
     let mut files = context.probes.into_iter().collect::<Vec<_>>();
     files.sort_by(|(left, _), (right, _)| left.cmp(right));
 
@@ -21,7 +21,7 @@ pub(crate) fn build(context: ScanContext) -> color_eyre::Result<Catalog> {
     for (path, metadata) in files {
         let directory = path
             .parent()
-            .ok_or_else(|| eyre!("local song has no parent directory: {}", path.display()))?
+            .ok_or_else(|| Error::MissingParent { path: path.clone() })?
             .to_path_buf();
         let id = identity::song(&path);
         let artists = metadata
@@ -36,9 +36,15 @@ pub(crate) fn build(context: ScanContext) -> color_eyre::Result<Catalog> {
         let album = metadata
             .album
             .as_ref()
-            .map(|name| -> color_eyre::Result<_> {
+            .map(|name| -> Result<_> {
                 Ok(AlbumRef {
-                    id: identity::album(name, &metadata.album_artists)?,
+                    id: identity::album(name, &metadata.album_artists).map_err(|source| {
+                        Error::NumberOverflow {
+                            field: "album identity field length",
+                            path: path.clone(),
+                            source,
+                        }
+                    })?,
                     name: name.clone(),
                 })
             })
@@ -48,7 +54,15 @@ pub(crate) fn build(context: ScanContext) -> color_eyre::Result<Catalog> {
             .name(metadata.name.clone())
             .artists(artists)
             .album(album)
-            .duration_ms(metadata.duration_ms()?)
+            .duration_ms(
+                metadata
+                    .duration_ms()
+                    .map_err(|source| Error::NumberOverflow {
+                        field: "song duration in milliseconds",
+                        path: path.clone(),
+                        source,
+                    })?,
+            )
             .cover_url(metadata::cover(&path, &metadata).map(MediaUrl::Local))
             .source_url(Some(MediaUrl::Local(path.clone())))
             .build();

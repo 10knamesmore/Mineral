@@ -25,7 +25,7 @@ impl SongMetaRow {
     ///
     /// # Return:
     ///   重建的 [`Song`];`duration_ms` 负值(库损坏)时报错。
-    pub(crate) fn into_song(self, artists: Vec<SongArtistRow>) -> color_eyre::Result<Song> {
+    pub(crate) fn into_song(self, artists: Vec<SongArtistRow>) -> crate::Result<Song> {
         let source = SourceKind::from_name(&self.namespace);
         let artists = artists
             .into_iter()

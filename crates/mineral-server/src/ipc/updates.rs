@@ -254,7 +254,7 @@ async fn send_events(
     id: SubscriptionId,
     version: &mut u64,
     out: &mpsc::Sender<SessionMessage>,
-) -> Result<(), ()> {
+) -> Result<(), mpsc::error::SendError<SessionMessage>> {
     for event in events {
         *version = version.saturating_add(1);
         let message = SessionMessage::Update(UpdateEnvelope {
@@ -264,9 +264,7 @@ async fn send_events(
             index: 0,
             payload: UpdatePayload::Event(Box::new(event.clone())),
         });
-        if out.send(message).await.is_err() {
-            return Err(());
-        }
+        out.send(message).await?;
     }
     Ok(())
 }

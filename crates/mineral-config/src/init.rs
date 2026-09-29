@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::{Error, Result};
+
 /// 用户配置模板(首次生成;已存在则不覆盖)。
 const CONFIG_TEMPLATE: &str = include_str!("lua/template.lua");
 
@@ -53,8 +55,12 @@ impl std::fmt::Display for InitOutcome {
 ///
 /// # Return:
 ///   写入 / 跳过的文件清单(供 CLI 打印)。
-pub fn run_init(config_dir: &Path) -> color_eyre::Result<Vec<InitOutcome>> {
-    std::fs::create_dir_all(config_dir)?;
+pub fn run_init(config_dir: &Path) -> Result<Vec<InitOutcome>> {
+    std::fs::create_dir_all(config_dir).map_err(|source| Error::InitIo {
+        operation: "创建配置目录",
+        path: config_dir.to_path_buf(),
+        source,
+    })?;
     let mut outcomes = Vec::<InitOutcome>::new();
 
     outcomes.push(write_if_absent(
@@ -72,7 +78,11 @@ pub fn run_init(config_dir: &Path) -> color_eyre::Result<Vec<InitOutcome>> {
     )?);
 
     let meta_dir = config_dir.join("lua").join("meta");
-    std::fs::create_dir_all(&meta_dir)?;
+    std::fs::create_dir_all(&meta_dir).map_err(|source| Error::InitIo {
+        operation: "创建 Lua 元数据目录",
+        path: meta_dir.clone(),
+        source,
+    })?;
     outcomes.push(overwrite(&meta_dir.join("mineral.lua"), META_MINERAL)?);
     // Config 类型 stub 是 Rust schema 的投影,每次拼装最新产物覆盖。
     outcomes.push(overwrite(
@@ -91,11 +101,15 @@ pub fn run_init(config_dir: &Path) -> color_eyre::Result<Vec<InitOutcome>> {
 ///
 /// # Return:
 ///   写入 / 跳过结果
-fn write_if_absent(path: &Path, content: &str) -> color_eyre::Result<InitOutcome> {
+fn write_if_absent(path: &Path, content: &str) -> Result<InitOutcome> {
     if path.exists() {
         Ok(InitOutcome::Skipped(path.to_path_buf()))
     } else {
-        std::fs::write(path, content)?;
+        std::fs::write(path, content).map_err(|source| Error::InitIo {
+            operation: "写入配置资产",
+            path: path.to_path_buf(),
+            source,
+        })?;
         Ok(InitOutcome::Written(path.to_path_buf()))
     }
 }
@@ -108,8 +122,12 @@ fn write_if_absent(path: &Path, content: &str) -> color_eyre::Result<InitOutcome
 ///
 /// # Return:
 ///   写入结果
-fn overwrite(path: &Path, content: &str) -> color_eyre::Result<InitOutcome> {
-    std::fs::write(path, content)?;
+fn overwrite(path: &Path, content: &str) -> Result<InitOutcome> {
+    std::fs::write(path, content).map_err(|source| Error::InitIo {
+        operation: "覆盖配置资产",
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(InitOutcome::Written(path.to_path_buf()))
 }
 

@@ -1,7 +1,6 @@
 //! 全局会话存储。
 
 use crate::entity::{session_queue, session_state};
-use color_eyre::eyre::WrapErr;
 use mineral_log::debug;
 use mineral_model::{SongId, SourceKind};
 use sea_orm::sea_query::OnConflict;
@@ -51,12 +50,15 @@ impl SessionStore {
     ///
     /// # Return:
     ///   成功返回 `Ok(())`；降级(无 pool)也静默成功。
-    pub async fn save(&self, snap: &SessionSnapshot) -> color_eyre::Result<()> {
+    pub async fn save(&self, snap: &SessionSnapshot) -> crate::Result<()> {
         let Some(db) = self.persist.pool() else {
             return Ok(());
         };
         debug!(target: "persist", queue_len = snap.queue.len(), "保存会话");
-        let tx = db.begin().await.wrap_err("开启 save 会话事务失败")?;
+        let tx = db.begin().await.map_err(|source| crate::Error::Database {
+            operation: "开启 save 会话事务",
+            source,
+        })?;
         session_state::Entity::insert(session_state::ActiveModel {
             id: Set(0),
             cur_namespace: Set(snap
@@ -83,11 +85,17 @@ impl SessionStore {
         )
         .exec_without_returning(&tx)
         .await
-        .wrap_err("保存会话状态(session_state)失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "保存会话状态(session_state)",
+            source,
+        })?;
         session_queue::Entity::delete_many()
             .exec(&tx)
             .await
-            .wrap_err("清空会话队列(session_queue)失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "清空会话队列(session_queue)",
+                source,
+            })?;
         for (index, id) in snap.queue.iter().enumerate() {
             session_queue::Entity::insert(session_queue::ActiveModel {
                 position: Set(i64::try_from(index)?),
@@ -96,9 +104,16 @@ impl SessionStore {
             })
             .exec_without_returning(&tx)
             .await
-            .wrap_err_with(|| format!("写入会话队列项失败 position={index}"))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "写入会话队列项",
+                record: index.to_string(),
+                source,
+            })?;
         }
-        tx.commit().await.wrap_err("提交 save 会话事务失败")?;
+        tx.commit().await.map_err(|source| crate::Error::Database {
+            operation: "提交 save 会话事务",
+            source,
+        })?;
         Ok(())
     }
 
@@ -106,14 +121,17 @@ impl SessionStore {
     ///
     /// # Return:
     ///   命中返回完整会话(队列按 position 升序重建)，否则 None。
-    pub async fn load(&self) -> color_eyre::Result<Option<SessionSnapshot>> {
+    pub async fn load(&self) -> crate::Result<Option<SessionSnapshot>> {
         let Some(db) = self.persist.pool() else {
             return Ok(None);
         };
         let Some(head) = session_state::Entity::find_by_id(0)
             .one(db)
             .await
-            .wrap_err("读会话状态(session_state)失败")?
+            .map_err(|source| crate::Error::Database {
+                operation: "读会话状态(session_state)",
+                source,
+            })?
         else {
             return Ok(None);
         };
@@ -125,7 +143,10 @@ impl SessionStore {
             .order_by_asc(session_queue::Column::Position)
             .all(db)
             .await
-            .wrap_err("读会话队列(session_queue)失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "读会话队列(session_queue)",
+                source,
+            })?;
         let queue = rows
             .into_iter()
             .map(|row| SongId::new(SourceKind::from_name(&row.namespace), row.song_value))

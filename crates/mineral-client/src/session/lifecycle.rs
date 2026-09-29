@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use mineral_protocol::{
-    ClientInfo, CloseReason, HandshakeRejected, MessageBatch, PlayerVersions, Request, RequestId,
-    SessionMessage, SubscribeRequest, SubscriptionId, SubscriptionTopic, Wire,
+    ClientInfo, CloseReason, MessageBatch, PlayerVersions, Request, RequestId, SessionMessage,
+    SubscribeRequest, SubscriptionId, SubscriptionTopic, Wire,
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -250,26 +250,15 @@ pub(crate) async fn open_session(
                 None
             }
         }),
-        None => {
-            return Err(ConnectError::Protocol {
-                detail: "daemon 在握手期间关闭了连接".to_owned(),
-            });
-        }
+        None => return Err(ConnectError::HandshakeClosed),
     };
     let Some(hello) = welcome else {
-        return Err(ConnectError::Protocol {
-            detail: "握手首答不是 Welcome".to_owned(),
-        });
+        return Err(ConnectError::MissingWelcome);
     };
     if let Err(rejected) = hello.ensure_accepted() {
         // 握手被拒后关闭承载,不启动会话读写任务。
         let _ = wire.close().await;
-        return Err(match rejected.downcast::<HandshakeRejected>() {
-            Ok(rejected) => ConnectError::Rejected(rejected),
-            Err(other) => ConnectError::Protocol {
-                detail: format!("{other:#}"),
-            },
-        });
+        return Err(ConnectError::Rejected(rejected));
     }
 
     let mirror = Arc::new(Mirror::new(config.event_capacity, config.pcm_window));

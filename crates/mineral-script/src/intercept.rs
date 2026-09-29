@@ -110,7 +110,7 @@ fn run_intercept(
 /// 回执槽);返回值解释:`nil`(或 `true`)= 放行;`false` / `{ skip = 原因 }` =
 /// 跳过;`{ url = ?, quality = ? }` = 改写;`mineral.DEFER` = 裁决稍后经
 /// `ctx.resolve(...)` 补交(返回 `None`,回执留在 `pending` 槽)。Lua 错误 /
-/// 非法返回值按放行处理(拦截失败不致命),记日志 + error toast。
+/// 非法返回值按放行处理(拦截失败不致命),完整错误链进日志并推送结构化失败类别。
 fn run_hooks(
     lua: &Lua,
     host: &ScriptHost,
@@ -212,12 +212,12 @@ fn interpret_hook_return(value: &mlua::Value) -> mlua::Result<crate::hooks::Hook
             if let Some(reason) = lua_field::<Option<String>>(table, ENTITY, "skip")? {
                 return Ok(HookDecision::Skip { reason });
             }
-            let new_url = lua_field::<Option<String>>(table, ENTITY, "url")?
-                .map(|raw| {
-                    raw.parse::<mineral_model::MediaUrl>()
-                        .map_err(|e| mlua::Error::runtime(format!("hook 返回的 url 解析失败: {e}")))
-                })
-                .transpose()?;
+            let new_url = lua_field::<Option<String>>(table, ENTITY, "url")?.map(|raw| {
+                match raw.parse::<mineral_model::MediaUrl>() {
+                    Ok(url) => url,
+                    Err(never) => match never {},
+                }
+            });
             let new_quality = lua_field::<Option<String>>(table, ENTITY, "quality")?
                 .map(|raw| parse_bitrate(&raw))
                 .transpose()?;

@@ -27,7 +27,7 @@ impl ClientHandle {
     /// Queries devices on the dedicated audio thread.
     pub(crate) async fn audio_outputs(
         &self,
-    ) -> color_eyre::Result<Vec<mineral_audio::OutputDevice>> {
+    ) -> Result<Vec<mineral_audio::OutputDevice>, mineral_audio::Error> {
         self.player.audio().output_devices().await
     }
 
@@ -35,7 +35,7 @@ impl ClientHandle {
     pub(crate) async fn set_audio_output(
         &self,
         target: mineral_audio::OutputTarget,
-    ) -> color_eyre::Result<()> {
+    ) -> Result<(), mineral_audio::Error> {
         self.player.audio().select_output(target).await
     }
 
@@ -62,7 +62,10 @@ impl ClientHandle {
     ///
     /// # Return:
     ///   切换后的新 loved 状态。
-    pub(crate) async fn toggle_love_async(&self, song: &Song) -> color_eyre::Result<bool> {
+    pub(crate) async fn toggle_love_async(
+        &self,
+        song: &Song,
+    ) -> Result<bool, crate::favorites::FavoriteError> {
         // 埋点在 toggle_favorite 单点(client / 脚本入口同享),此处只穿透 actor。
         self.player
             .toggle_favorite(song, mineral_stats::Actor::User)
@@ -129,8 +132,7 @@ impl ClientHandle {
         name: &str,
         ctx: Option<mineral_protocol::KeyContext>,
         args: Vec<String>,
-    ) -> color_eyre::Result<()> {
-        // trigger:带 KeyContext = TUI 键触发;无 = CLI `mineral action`。
+    ) -> Result<(), crate::notify::ScriptError> {
         let trigger = if ctx.is_some() {
             mineral_stats::ActionTrigger::Tui
         } else {
@@ -156,12 +158,12 @@ impl ClientHandle {
     ///   - `ctx`: 模板作用的实体
     ///
     /// # Return:
-    ///   `Ok(text)` = 剪贴板文本;`Err(msg)` = 人读错误。
+    ///   `Ok(text)` = 剪贴板文本;`Err` = 脚本未启用、线程退出或回调失败。
     pub(crate) async fn render_copy_template_async(
         &self,
         index: usize,
         ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> Result<String, String> {
+    ) -> Result<String, crate::notify::ScriptError> {
         // 埋点前先据 ctx 取类型 + 目标(ctx 随即被 render 移走)。
         let (ctx_kind, target_ref) = match &ctx {
             mineral_protocol::CopyTemplateCtx::Song(s) => {
@@ -219,10 +221,10 @@ impl ClientHandle {
             Ok(ids) => {
                 let outcome = self.player.queue_reorder(&ids);
                 if matches!(outcome, QueueEditOutcome::Stale) {
-                    self.player.notify().toast(
-                        mineral_protocol::ToastKind::Warn,
-                        "queue transform returned a song outside the queue".to_owned(),
-                    );
+                    mineral_log::warn!(target: "script", index, "queue transform returned a song outside the queue");
+                    self.player
+                        .notify()
+                        .failure(mineral_protocol::FailureNotice::QueueTransformInvalidSong);
                 }
                 if matches!(outcome, QueueEditOutcome::Applied) {
                     self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
@@ -233,16 +235,11 @@ impl ClientHandle {
                 }
                 outcome
             }
-            Err(message) => {
-                mineral_log::warn!(
-                    target: "script",
-                    index,
-                    error = message.as_str(),
-                    "queue transform failed, leaving the queue untouched"
-                );
+            Err(error) => {
+                mineral_log::warn!(target: "script", index, error = mineral_log::chain(&error), "queue transform failed, leaving the queue untouched");
                 self.player
                     .notify()
-                    .toast(mineral_protocol::ToastKind::Warn, message);
+                    .failure(mineral_protocol::FailureNotice::QueueTransformFailed);
                 QueueEditOutcome::NoOp
             }
         }
@@ -257,7 +254,7 @@ impl ClientHandle {
         &self,
         id: &SongId,
         key: &str,
-    ) -> color_eyre::Result<mineral_protocol::StoreValue> {
+    ) -> Result<mineral_protocol::StoreValue, mineral_persist::Error> {
         self.player
             .persist()
             .scope(id.namespace())
@@ -276,7 +273,7 @@ impl ClientHandle {
         id: &SongId,
         key: &str,
         value: &mineral_protocol::StoreValue,
-    ) -> color_eyre::Result<()> {
+    ) -> Result<(), mineral_persist::Error> {
         self.player
             .persist()
             .scope(id.namespace())
@@ -363,7 +360,7 @@ impl ClientHandle {
     pub(crate) async fn query_song_stats_async(
         &self,
         id: &SongId,
-    ) -> color_eyre::Result<Option<mineral_protocol::SongStatsWire>> {
+    ) -> Result<Option<mineral_protocol::SongStatsWire>, crate::error::SongStatsError> {
         if !self.player.inner.stats.records_plays_for(id.namespace()) {
             return Ok(None);
         }
@@ -602,7 +599,7 @@ impl ClientHandle {
     ///
     /// # Params:
     ///   - `id`: 下载 id
-    pub(crate) fn stop_download(&self, id: &DownloadId) -> color_eyre::Result<()> {
+    pub(crate) fn stop_download(&self, id: &DownloadId) -> Result<(), crate::download::StopError> {
         self.player.stop_download(id)
     }
 

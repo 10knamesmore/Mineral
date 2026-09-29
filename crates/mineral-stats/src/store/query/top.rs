@@ -4,7 +4,6 @@ use std::ops::Range;
 
 use crate::PlayMode;
 use crate::entity::{plays, song_artists, songs};
-use color_eyre::eyre::WrapErr as _;
 use mineral_model::{AlbumId, ArtistId, SourceKind};
 use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::{ColumnTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, Select};
@@ -80,7 +79,7 @@ impl StatsStore {
         range: Range<i64>,
         by: TopBy,
         options: &ReportOptions,
-    ) -> color_eyre::Result<Vec<TopSong>> {
+    ) -> crate::Result<Vec<TopSong>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -90,7 +89,10 @@ impl StatsStore {
             .into_model::<TopSongRow>()
             .all(db)
             .await
-            .wrap_err("top_songs 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "top_songs 查询",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|row| TopSong {
@@ -118,7 +120,7 @@ impl StatsStore {
         range: Range<i64>,
         by: TopBy,
         options: &ReportOptions,
-    ) -> color_eyre::Result<Vec<TopAlbum>> {
+    ) -> crate::Result<Vec<TopAlbum>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -140,7 +142,10 @@ impl StatsStore {
             .into_model::<TopAlbumRow>()
             .all(db)
             .await
-            .wrap_err("top_albums 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "top_albums 查询",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|row| TopAlbum {
@@ -169,7 +174,7 @@ impl StatsStore {
         range: Range<i64>,
         by: TopBy,
         options: &ReportOptions,
-    ) -> color_eyre::Result<Vec<TopArtist>> {
+    ) -> crate::Result<Vec<TopArtist>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -193,7 +198,10 @@ impl StatsStore {
             .into_model::<TopArtistRow>()
             .all(db)
             .await
-            .wrap_err("top_artists 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "top_artists 查询",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|row| TopArtist {
@@ -217,7 +225,7 @@ impl StatsStore {
         &self,
         range: Range<i64>,
         limit: i64,
-    ) -> color_eyre::Result<Vec<TopSong>> {
+    ) -> crate::Result<Vec<TopSong>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -226,7 +234,10 @@ impl StatsStore {
             .into_model::<TopSongRow>()
             .all(db)
             .await
-            .wrap_err("top_repeat_songs 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "top_repeat_songs 查询",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|row| TopSong {
@@ -256,7 +267,7 @@ impl StatsStore {
         kind: Option<&str>,
         min: i64,
         limit: i64,
-    ) -> color_eyre::Result<Vec<ContextSlice>> {
+    ) -> crate::Result<Vec<ContextSlice>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -282,7 +293,10 @@ impl StatsStore {
             .into_model::<ContextSlice>()
             .all(db)
             .await
-            .wrap_err("top_contexts 查询失败")
+            .map_err(|source| crate::Error::Database {
+                operation: "top_contexts 查询",
+                source,
+            })
     }
 }
 

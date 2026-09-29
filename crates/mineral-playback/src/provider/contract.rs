@@ -5,7 +5,7 @@ use mineral_model::SourceKind;
 use tokio_util::sync::CancellationToken;
 
 use super::PlaybackRequest;
-use crate::{DirectMedia, OpenOptions, OpenedMedia};
+use crate::{DirectMedia, OpenOptions, OpenedMedia, Result};
 
 /// Resolves source identities into process-local prepared playback plans.
 ///
@@ -28,7 +28,7 @@ pub trait PlaybackProvider: Send + Sync {
         &self,
         request: PlaybackRequest,
         cancellation: CancellationToken,
-    ) -> color_eyre::Result<Box<dyn PreparedPlayback>>;
+    ) -> Result<Box<dyn PreparedPlayback>>;
 }
 
 /// A resolved, unopened, single-use playback plan.
@@ -49,5 +49,5 @@ pub trait PreparedPlayback: Send {
     ///
     /// # Return:
     ///   Decoder-ready encoded media.
-    async fn open(self: Box<Self>, options: OpenOptions) -> color_eyre::Result<OpenedMedia>;
+    async fn open(self: Box<Self>, options: OpenOptions) -> Result<OpenedMedia>;
 }

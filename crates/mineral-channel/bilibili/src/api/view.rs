@@ -15,7 +15,7 @@ const VIEW_URL: &str = "https://api.bilibili.com/x/web-interface/view";
 ///
 /// # Return:
 ///   视频详情 DTO。
-pub async fn video_info(transport: &Transport, bvid: &str) -> color_eyre::Result<VideoInfo> {
+pub async fn video_info(transport: &Transport, bvid: &str) -> crate::Result<VideoInfo> {
     let data = transport
         .get_data(&format!("{VIEW_URL}?bvid={bvid}"))
         .await?;

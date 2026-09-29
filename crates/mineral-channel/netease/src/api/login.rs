@@ -1,10 +1,8 @@
 //! 网易云二维码登录端点。
 
-use color_eyre::eyre::eyre;
 use serde_json::json;
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::{Error, Result};
 
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
@@ -33,7 +31,9 @@ pub async fn login_qr_get_key(transport: &Transport) -> Result<LoginQrCode> {
     let unikey = v
         .get("unikey")
         .and_then(|x| x.as_str())
-        .ok_or_else(|| eyre!("qrcode/unikey response missing `unikey`"))?
+        .ok_or_else(|| Error::InvalidData {
+            field: "qrcode/unikey.unikey",
+        })?
         .to_owned();
     let chain_id = crate::device::generate_chain_id();
     let url = format!("http://music.163.com/login?codekey={unikey}&chainId={chain_id}",);
@@ -62,8 +62,9 @@ pub async fn login_qr_check(transport: &Transport, unikey: &str) -> Result<i64> 
     let code = result
         .get("code")
         .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-    // 801=等待扫码 802=待确认 803=成功 800=失效
+        .ok_or(crate::Error::InvalidData {
+            field: "QR login status code",
+        })?;
     mineral_log::debug!(target: "login", code, "qr check status");
     Ok(code)
 }

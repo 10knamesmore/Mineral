@@ -1,6 +1,5 @@
 //! 某来源命名空间下的存储视图。
 
-use color_eyre::eyre::WrapErr;
 use mineral_log::trace;
 use mineral_model::{AlbumId, ArtistId, CollectionIndex, PlaylistId, SongId, SourceKind};
 use sea_orm::sea_query::OnConflict;
@@ -76,7 +75,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   命中返回 `Ok(Some(name))`,否则 `Ok(None)`。
-    pub async fn album_name(&self, id: &AlbumId) -> color_eyre::Result<Option<String>> {
+    pub async fn album_name(&self, id: &AlbumId) -> crate::Result<Option<String>> {
         let Some(db) = self.pool() else {
             return Ok(None);
         };
@@ -90,7 +89,11 @@ impl NamespaceStore {
             .into_tuple::<String>()
             .one(db)
             .await
-            .wrap_err_with(|| format!("回查专辑名失败 album={}", id.value()))
+            .map_err(|source| crate::Error::Record {
+                operation: "回查专辑名",
+                record: id.value().to_owned(),
+                source,
+            })
     }
 
     /// 按 artist id 回查艺名(取任一署名行 `song_artists.artist_name`;艺名同样只作为歌的
@@ -101,7 +104,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   命中返回 `Ok(Some(name))`,否则 `Ok(None)`。
-    pub async fn artist_name(&self, id: &ArtistId) -> color_eyre::Result<Option<String>> {
+    pub async fn artist_name(&self, id: &ArtistId) -> crate::Result<Option<String>> {
         let Some(db) = self.pool() else {
             return Ok(None);
         };
@@ -114,7 +117,11 @@ impl NamespaceStore {
             .into_tuple::<String>()
             .one(db)
             .await
-            .wrap_err_with(|| format!("回查艺名失败 artist={}", id.value()))
+            .map_err(|source| crate::Error::Record {
+                operation: "回查艺名",
+                record: id.value().to_owned(),
+                source,
+            })
     }
 
     /// 按状态 transition 设/取消一首歌的 favorite membership。降级 no-op。
@@ -125,7 +132,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   实际创建或删除 membership 返回 `true`；同状态 no-op 或降级返回 `false`。
-    pub async fn set_loved(&self, id: &SongId, loved: bool) -> color_eyre::Result<bool> {
+    pub async fn set_loved(&self, id: &SongId, loved: bool) -> crate::Result<bool> {
         let Some(db) = self.pool() else {
             return Ok(false);
         };
@@ -146,7 +153,11 @@ impl NamespaceStore {
             )
             .exec_without_returning(db)
             .await
-            .wrap_err_with(|| format!("写收藏失败 song={}", id.value()))?
+            .map_err(|source| crate::Error::Record {
+                operation: "写收藏",
+                record: id.value().to_owned(),
+                source,
+            })?
         } else {
             song_favorites::Entity::delete_by_id((
                 self.namespace().to_owned(),
@@ -154,7 +165,11 @@ impl NamespaceStore {
             ))
             .exec(db)
             .await
-            .wrap_err_with(|| format!("取消收藏失败 song={}", id.value()))?
+            .map_err(|source| crate::Error::Record {
+                operation: "取消收藏",
+                record: id.value().to_owned(),
+                source,
+            })?
             .rows_affected
         };
         Ok(changed != 0)
@@ -167,7 +182,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   存在 favorite membership 时 true。
-    pub async fn is_loved(&self, id: &SongId) -> color_eyre::Result<bool> {
+    pub async fn is_loved(&self, id: &SongId) -> crate::Result<bool> {
         let Some(db) = self.pool() else {
             return Ok(false);
         };
@@ -178,7 +193,11 @@ impl NamespaceStore {
             ))
             .one(db)
             .await
-            .wrap_err_with(|| format!("查收藏失败 song={}", id.value()))?
+            .map_err(|source| crate::Error::Record {
+                operation: "查收藏",
+                record: id.value().to_owned(),
+                source,
+            })?
             .is_some(),
         )
     }
@@ -187,7 +206,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   本 namespace 的 favorite SongId 集合。
-    pub async fn loved_ids(&self) -> color_eyre::Result<rustc_hash::FxHashSet<SongId>> {
+    pub async fn loved_ids(&self) -> crate::Result<rustc_hash::FxHashSet<SongId>> {
         let Some(db) = self.pool() else {
             return Ok(rustc_hash::FxHashSet::default());
         };
@@ -195,7 +214,10 @@ impl NamespaceStore {
             .filter(song_favorites::Column::Namespace.eq(self.namespace()))
             .all(db)
             .await
-            .wrap_err("列出收藏身份失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "列出收藏身份",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|row| SongId::new(self.source, row.song_value))
@@ -218,17 +240,17 @@ impl NamespaceStore {
         name: Option<&str>,
         track_update_time: Option<i64>,
         entries: &[CachedPlaylistEntry],
-    ) -> color_eyre::Result<()> {
+    ) -> crate::Result<()> {
         let Some(db) = self.pool() else {
             return Ok(());
         };
         let ns = self.namespace();
         let pid = id.value();
         trace!(target: "persist", playlist = pid, tracks = entries.len(), "put_playlist_cache");
-        let tx = db
-            .begin()
-            .await
-            .wrap_err("开启 put_playlist_cache 事务失败")?;
+        let tx = db.begin().await.map_err(|source| crate::Error::Database {
+            operation: "开启 put_playlist_cache 事务",
+            source,
+        })?;
         playlist_cache::Entity::insert(playlist_cache::ActiveModel {
             namespace: Set(ns.to_owned()),
             playlist_id: Set(pid.to_owned()),
@@ -250,13 +272,21 @@ impl NamespaceStore {
         )
         .exec_without_returning(&tx)
         .await
-        .wrap_err_with(|| format!("upsert playlist_cache 失败 playlist={pid}"))?;
+        .map_err(|source| crate::Error::Record {
+            operation: "upsert playlist_cache",
+            record: pid.to_string(),
+            source,
+        })?;
         playlist_entries::Entity::delete_many()
             .filter(playlist_entries::Column::PlaylistNamespace.eq(ns))
             .filter(playlist_entries::Column::PlaylistValue.eq(pid))
             .exec(&tx)
             .await
-            .wrap_err_with(|| format!("清空 playlist_entries 失败 playlist={pid}"))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "清空 playlist_entries",
+                record: pid.to_string(),
+                source,
+            })?;
         for batch in entries.chunks(100) {
             let models = batch
                 .iter()
@@ -269,15 +299,21 @@ impl NamespaceStore {
                         song_value: Set(entry.song_id.value().to_owned()),
                     })
                 })
-                .collect::<color_eyre::Result<Vec<_>>>()?;
+                .collect::<crate::Result<Vec<_>>>()?;
             playlist_entries::Entity::insert_many(models)
                 .exec_without_returning(&tx)
                 .await
-                .wrap_err_with(|| format!("批量写入 playlist_entries 失败 playlist={pid}"))?;
+                .map_err(|source| crate::Error::Record {
+                    operation: "批量写入 playlist_entries",
+                    record: pid.to_string(),
+                    source,
+                })?;
         }
-        tx.commit()
-            .await
-            .wrap_err_with(|| format!("提交 put_playlist_cache 事务失败 playlist={pid}"))?;
+        tx.commit().await.map_err(|source| crate::Error::Record {
+            operation: "提交 put_playlist_cache 事务",
+            record: pid.to_string(),
+            source,
+        })?;
         Ok(())
     }
 
@@ -291,7 +327,7 @@ impl NamespaceStore {
     pub async fn get_playlist_cache(
         &self,
         id: &PlaylistId,
-    ) -> color_eyre::Result<Option<PlaylistCacheEntry>> {
+    ) -> crate::Result<Option<PlaylistCacheEntry>> {
         let Some(db) = self.pool() else {
             return Ok(None);
         };
@@ -300,7 +336,11 @@ impl NamespaceStore {
         let Some(head) = playlist_cache::Entity::find_by_id((ns.to_owned(), pid.to_owned()))
             .one(db)
             .await
-            .wrap_err_with(|| format!("查 playlist_cache 失败 playlist={pid}"))?
+            .map_err(|source| crate::Error::Record {
+                operation: "查 playlist_cache",
+                record: pid.to_string(),
+                source,
+            })?
         else {
             return Ok(None);
         };
@@ -310,7 +350,11 @@ impl NamespaceStore {
             .order_by_asc(playlist_entries::Column::CollectionIndex)
             .all(db)
             .await
-            .wrap_err_with(|| format!("查 playlist_entries 失败 playlist={pid}"))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "查 playlist_entries",
+                record: pid.to_string(),
+                source,
+            })?;
         let entries = rows
             .into_iter()
             .map(|row| {
@@ -322,7 +366,7 @@ impl NamespaceStore {
                     ),
                 })
             })
-            .collect::<color_eyre::Result<Vec<_>>>()?;
+            .collect::<crate::Result<Vec<_>>>()?;
         Ok(Some(PlaylistCacheEntry {
             name: head.name,
             fetched_at: head.fetched_at,

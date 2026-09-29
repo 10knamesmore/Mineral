@@ -436,6 +436,13 @@ async fn sidecar_encodings_take_priority_and_are_read_on_each_request() -> color
         library.lyrics(&song.id).await?.lines,
         vec![LyricLine::untimed("untimed sidecar")]
     );
+    for invalid in [&[0xff][..], &[0xff, 0xfe, 0x61], &[0xff, 0xfe, 0x00, 0xd8]] {
+        tokio::fs::write(&sidecar, invalid).await?;
+        assert!(matches!(
+            library.lyrics(&song.id).await,
+            Err(mineral_channel_core::Error::Parse { .. })
+        ));
+    }
     tokio::fs::remove_file(&sidecar).await?;
     assert_eq!(library.lyrics(&song.id).await?.lines, embedded);
     assert_eq!(named(&playlists(&library).await?, "sidecar")?.id, song.id);

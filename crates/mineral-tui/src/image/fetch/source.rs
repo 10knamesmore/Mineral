@@ -2,10 +2,25 @@
 
 use std::sync::Arc;
 
-use color_eyre::eyre::{bail, eyre};
 use isahc::{AsyncReadResponseExt, HttpClient};
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::CacheIndex;
+
+/// 下载远端封面失败。
+#[derive(Debug, thiserror::Error)]
+enum DownloadError {
+    /// HTTP 请求失败。
+    #[error("request cover")]
+    Request(#[from] isahc::Error),
+
+    /// 服务端返回非成功状态。
+    #[error("cover HTTP status {0}")]
+    Status(u16),
+
+    /// 读取 HTTP 响应体失败。
+    #[error("read cover body")]
+    Body(#[source] std::io::Error),
+}
 
 /// 读取 Local 源或取得 Remote 压缩字节，Remote miss 时下载并尝试写入磁盘缓存。
 ///
@@ -47,7 +62,6 @@ pub(super) async fn load_source(
             let bytes = match tokio::fs::read(path).await {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    let error = color_eyre::Report::new(error);
                     mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&error), "read file failed");
                     return None;
                 }
@@ -71,7 +85,6 @@ async fn cached_read(key: &str, cache: Option<&Arc<CacheIndex>>) -> Option<Vec<u
     match tokio::fs::read(&path).await {
         Ok(bytes) => Some(bytes),
         Err(e) => {
-            let e = color_eyre::Report::new(e);
             mineral_log::warn!(target: "cover", key = %key, error = mineral_log::chain(&e), "缓存文件读失败,回退网络");
             None
         }
@@ -99,15 +112,12 @@ fn log_downloaded(url: &str, started: std::time::Instant, bytes: usize) {
 ///
 /// # Return:
 ///   原始字节;网络失败或非 2xx 状态返回 `Err`。
-async fn download(client: &HttpClient, key: &str) -> color_eyre::Result<Vec<u8>> {
-    let mut resp = client
-        .get_async(key)
-        .await
-        .map_err(|e| eyre!("http: {e}"))?;
+async fn download(client: &HttpClient, key: &str) -> Result<Vec<u8>, DownloadError> {
+    let mut resp = client.get_async(key).await?;
     if !resp.status().is_success() {
-        bail!("http status {}", resp.status());
+        return Err(DownloadError::Status(resp.status().as_u16()));
     }
-    resp.bytes().await.map_err(|e| eyre!("read body: {e}"))
+    resp.bytes().await.map_err(DownloadError::Body)
 }
 
 /// 把 Remote 压缩源数据写入磁盘缓存。

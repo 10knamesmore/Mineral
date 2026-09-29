@@ -44,7 +44,7 @@ pub(crate) fn table_path(root: &Table, path: &[&str]) -> Option<Table> {
                 mineral_log::debug!(
                     target: "config",
                     path = path.get(..=depth).unwrap_or_default().join("."),
-                    error = mineral_log::chain(color_eyre::Report::new(e)),
+                    error = mineral_log::chain(&e),
                     "路径读取失败,跳过提取"
                 );
                 return None;

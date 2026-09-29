@@ -5,6 +5,7 @@
 //! 不匹配时 server 回 `accepted == false`,client 提示重启 daemon 后干净退出。
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// 结构化包版本(workspace 统一版本)。两端相等才互通——同仓同发版前提下,
 /// 二进制版本就是协议版本。比较走 `Eq`,人读展示走 `Display`(`0.4.2` 形)。
@@ -112,12 +113,12 @@ impl ServerHello {
         }
     }
 
-    /// 被接受则 `Ok(())`,被拒则给出人话错误(client 侧握手校验的单一入口,
+    /// 被接受则 `Ok(())`,被拒则返回结构化拒绝原因(client 侧握手校验的单一入口,
     /// oneshot 与长连接 client 共用)。
     ///
     /// # Errors
     /// 握手被拒(版本不匹配)。
-    pub fn ensure_accepted(&self) -> color_eyre::Result<()> {
+    pub fn ensure_accepted(&self) -> Result<(), HandshakeRejected> {
         if self.accepted {
             return Ok(());
         }
@@ -125,8 +126,7 @@ impl ServerHello {
             reason: self.reason,
             server_version: self.version,
             client_version: PkgVersion::current(),
-        }
-        .into())
+        })
     }
 
     /// 拒绝连接的应答。
@@ -140,9 +140,9 @@ impl ServerHello {
     }
 }
 
-/// daemon 对握手的结构化拒绝。普通 client 将其作为人话错误展示;
-/// `mineral stop` 可据 [`Self::reason`] 精确识别版本错配并走进程信号 fallback。
-#[derive(Clone, Debug)]
+/// daemon 对握手的结构化拒绝。调用方据 [`Self::reason`] 识别版本错配。
+#[derive(Clone, Debug, Error)]
+#[error("daemon 拒绝连接: {reason:?} (server {server_version}, client {client_version})")]
 pub struct HandshakeRejected {
     /// daemon 给出的拒绝原因。
     reason: Option<RejectReason>,
@@ -160,22 +160,19 @@ impl HandshakeRejected {
     pub fn reason(&self) -> Option<RejectReason> {
         self.reason
     }
-}
 
-impl std::fmt::Display for HandshakeRejected {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.reason {
-            Some(RejectReason::VersionMismatch) => write!(
-                f,
-                "daemon 版本 {} 与 client 版本 {} 不一致,请重启 daemon",
-                self.server_version, self.client_version
-            ),
-            None => f.write_str("daemon 拒绝了连接(未给出原因)"),
-        }
+    /// 返回 daemon 握手应答的包版本。
+    #[must_use]
+    pub fn server_version(&self) -> PkgVersion {
+        self.server_version
+    }
+
+    /// 返回发起连接的 client 包版本。
+    #[must_use]
+    pub fn client_version(&self) -> PkgVersion {
+        self.client_version
     }
 }
-
-impl std::error::Error for HandshakeRejected {}
 
 /// 握手被拒的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,7 +187,8 @@ pub enum Subscription {
     /// 属性变更([`Event::PropertyChanged`](crate::Event::PropertyChanged))。
     Property,
 
-    /// 瞬时提示([`Event::Toast`](crate::Event::Toast))。
+    /// 通知事件([`Event::Failure`](crate::Event::Failure)、
+    /// [`Event::Toast`](crate::Event::Toast)、卡片与撤卡)。
     Toast,
 
     /// 生命周期事件(曲终 / 下载完成)。

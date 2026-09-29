@@ -7,9 +7,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{WrapErr, eyre};
 use mineral_model::UserId;
 use serde::{Deserialize, Serialize};
+
+use crate::Error;
 
 /// 凭证文件名,放在 `mineral_paths::data_dir()` 下。
 pub const CREDENTIAL_FILE: &str = "netease.json";
@@ -28,7 +29,7 @@ pub struct StoredNeteaseAuth {
 ///
 /// # Return:
 ///   `<data_dir>/netease.json` 的绝对路径。本函数不创建目录、不做存在性检查。
-pub fn credential_path() -> color_eyre::Result<PathBuf> {
+pub fn credential_path() -> crate::Result<PathBuf> {
     Ok(mineral_paths::data_dir()?.join(CREDENTIAL_FILE))
 }
 
@@ -39,7 +40,7 @@ pub fn credential_path() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   成功返回 `Ok(())`;父目录创建失败、序列化失败或写盘失败时返回 `Err`。
-pub fn save(auth: &StoredNeteaseAuth) -> color_eyre::Result<PathBuf> {
+pub fn save(auth: &StoredNeteaseAuth) -> crate::Result<PathBuf> {
     let path = credential_path()?;
     write_to(&path, auth)?;
     mineral_log::info!(target: "credential", path = %path.display(), uid = auth.user_id.as_str(), "credential saved");
@@ -52,7 +53,7 @@ pub fn save(auth: &StoredNeteaseAuth) -> color_eyre::Result<PathBuf> {
 ///   - `Ok(Some(auth))`: 文件存在且解析成功
 ///   - `Ok(None)`: 文件不存在(尚未登录,正常状态)
 ///   - `Err(_)`: 文件存在但读/解析失败(磁盘损坏、JSON schema 漂移等)
-pub fn load_stored() -> color_eyre::Result<Option<StoredNeteaseAuth>> {
+pub fn load_stored() -> crate::Result<Option<StoredNeteaseAuth>> {
     let path = credential_path()?;
     let loaded = read_from(&path)?;
     match &loaded {
@@ -65,28 +66,41 @@ pub fn load_stored() -> color_eyre::Result<Option<StoredNeteaseAuth>> {
 }
 
 /// 把 `auth` 序列化成 JSON 写到 `path`,父目录不存在时自动创建。
-fn write_to(path: &Path, auth: &StoredNeteaseAuth) -> color_eyre::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| eyre!("netease 凭证路径缺少父目录: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create credential dir failed: {}", parent.display()))?;
-    let json = serde_json::to_string_pretty(auth).context("serialize netease auth failed")?;
-    fs::write(path, json)
-        .with_context(|| format!("write netease auth failed: {}", path.display()))?;
+fn write_to(path: &Path, auth: &StoredNeteaseAuth) -> crate::Result<()> {
+    let parent = path.parent().ok_or_else(|| Error::InvalidCredentialPath {
+        path: path.to_path_buf(),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| Error::File {
+        operation: "create credential directory",
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    let json = serde_json::to_string_pretty(auth)?;
+    fs::write(path, json).map_err(|source| Error::File {
+        operation: "write credential",
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(())
 }
 
 /// 从 `path` 读凭证;文件不存在 → `Ok(None)`,其他 IO/解析失败 → `Err`。
-fn read_from(path: &Path) -> color_eyre::Result<Option<StoredNeteaseAuth>> {
+fn read_from(path: &Path) -> crate::Result<Option<StoredNeteaseAuth>> {
     match fs::read_to_string(path) {
         Ok(text) => {
-            let auth: StoredNeteaseAuth = serde_json::from_str(&text)
-                .with_context(|| format!("parse netease auth failed: {}", path.display()))?;
+            let auth: StoredNeteaseAuth =
+                serde_json::from_str(&text).map_err(|source| Error::Parse {
+                    context: path.display().to_string(),
+                    source: Box::new(source),
+                })?;
             Ok(Some(auth))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("read netease auth failed: {}", path.display())),
+        Err(source) => Err(Error::File {
+            operation: "read credential",
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 

@@ -9,4 +9,4 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use lifecycle::{DownloadManager, DownloadRuntime};
+pub(crate) use lifecycle::{DownloadManager, DownloadRuntime, StopError};

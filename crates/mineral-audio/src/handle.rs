@@ -6,7 +6,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use color_eyre::eyre::eyre;
 use mineral_playback::OpenedMedia;
 use parking_lot::Mutex;
 use ringbuf::traits::{Consumer, Split};
@@ -17,6 +16,7 @@ use crate::command::AudioCommand;
 use crate::engine;
 use crate::snapshot::AudioSnapshot;
 use crate::tap::SharedProd;
+use crate::{Error, Result};
 
 /// 音频引擎启动参数(来自用户配置 `audio` 段;生产构造方为 daemon 启动链)。
 #[non_exhaustive]
@@ -111,7 +111,7 @@ impl AudioHandle {
     ///
     /// # Return:
     ///   `Err` 仅在引擎线程 spawn / runtime 构建等**真错**时返回;无音频设备**不**算错(降级)。
-    pub fn spawn(mode: AudioMode, params: EngineParams) -> color_eyre::Result<(Self, SpectrumTap)> {
+    pub fn spawn(mode: AudioMode, params: EngineParams) -> Result<(Self, SpectrumTap)> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<AudioCommand>();
         let snapshot = Arc::new(Mutex::new(AudioSnapshot {
             volume_pct: (*params.initial_volume()).min(100),
@@ -127,7 +127,7 @@ impl AudioHandle {
         let sr_atomic = Arc::new(AtomicU32::new(0));
         let tap_pushed = Arc::new(AtomicU64::new(0));
 
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<color_eyre::Result<()>>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<()>>(1);
         let io = engine::EngineIo {
             snapshot: Arc::clone(&snapshot),
             seek_mailbox: Arc::clone(&seek_mailbox),
@@ -142,12 +142,12 @@ impl AudioHandle {
             .spawn(move || {
                 engine::run(&cmd_rx, &io, mode, &params);
             })
-            .map_err(|e| eyre!("spawn audio thread: {e}"))?;
+            .map_err(|source| Error::SpawnThread { source })?;
 
         match ready_rx.recv() {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(eyre!("audio engine startup channel: {e}")),
+            Err(source) => return Err(Error::StartupInterrupted { source }),
         }
 
         let handle = Self {
@@ -218,30 +218,32 @@ impl AudioHandle {
     }
 
     /// Enumerates output devices on the audio engine's host.
-    pub async fn output_devices(&self) -> color_eyre::Result<Vec<crate::OutputDevice>> {
+    pub async fn output_devices(&self) -> Result<Vec<crate::OutputDevice>> {
         let (reply, result) = tokio::sync::oneshot::channel();
         self.inner
             .cmd_tx
             .send(AudioCommand::ListOutputs(reply))
-            .map_err(|error| eyre!("audio engine stopped: {error}"))?;
-        result
-            .await
-            .map_err(|error| eyre!("audio device query interrupted: {error}"))?
+            .map_err(|mpsc::SendError(_command)| Error::EngineStopped)?;
+        result.await.map_err(|source| Error::ReplyInterrupted {
+            operation: "device query",
+            source,
+        })?
     }
 
     /// Switches streams without replacing the current decoder or queued next track.
     ///
     /// # Params:
     ///   - `target`: System default routing or a stable CPAL device identifier.
-    pub async fn select_output(&self, target: crate::OutputTarget) -> color_eyre::Result<()> {
+    pub async fn select_output(&self, target: crate::OutputTarget) -> Result<()> {
         let (reply, result) = tokio::sync::oneshot::channel();
         self.inner
             .cmd_tx
             .send(AudioCommand::SelectOutput { target, reply })
-            .map_err(|error| eyre!("audio engine stopped: {error}"))?;
-        result
-            .await
-            .map_err(|error| eyre!("audio output selection interrupted: {error}"))?
+            .map_err(|mpsc::SendError(_command)| Error::EngineStopped)?;
+        result.await.map_err(|source| Error::ReplyInterrupted {
+            operation: "output selection",
+            source,
+        })?
     }
 
     /// UI tick 拉一次:engine 已经更新过的最新状态。

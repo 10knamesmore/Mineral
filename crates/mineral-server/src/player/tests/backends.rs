@@ -64,21 +64,23 @@ impl PlaybackProvider for TestPlaybackProvider {
         &self,
         request: PlaybackRequest,
         cancellation: tokio_util::sync::CancellationToken,
-    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+    ) -> Result<Box<dyn PreparedPlayback>, mineral_playback::Error> {
         if !self.delay.is_zero() {
             tokio::select! {
                 biased;
                 () = cancellation.cancelled() => {
-                    return Err(color_eyre::eyre::eyre!("test playback resolve cancelled"));
+                    return Err(mineral_playback::Error::Cancelled);
                 }
                 () = tokio::time::sleep(self.delay) => {}
             }
         }
         if cancellation.is_cancelled() {
-            return Err(color_eyre::eyre::eyre!("test playback resolve cancelled"));
+            return Err(mineral_playback::Error::Cancelled);
         }
         if self.fail {
-            return Err(color_eyre::eyre::eyre!("test playback unavailable"));
+            return Err(mineral_playback::Error::Provider {
+                source: Box::new(std::io::Error::other("test playback unavailable")),
+            });
         }
         let info = PlaybackMediaInfo {
             song_id: request.song_id().clone(),
@@ -91,7 +93,10 @@ impl PlaybackProvider for TestPlaybackProvider {
         let url = url::Url::parse(&format!(
             "https://example.com/{}.mp3",
             request.song_id().value()
-        ))?;
+        ))
+        .map_err(|source| mineral_playback::Error::Provider {
+            source: Box::new(source),
+        })?;
         let direct = self.direct.then(|| {
             DirectMedia::remote(
                 info.clone(),
@@ -110,12 +115,19 @@ impl PreparedPlayback for TestPreparedPlayback {
         self.direct.as_ref()
     }
 
-    async fn open(self: Box<Self>, options: OpenOptions) -> color_eyre::Result<OpenedMedia> {
+    async fn open(
+        self: Box<Self>,
+        options: OpenOptions,
+    ) -> Result<OpenedMedia, mineral_playback::Error> {
         if options.cancellation().is_cancelled() {
-            return Err(color_eyre::eyre::eyre!("test playback open cancelled"));
+            return Err(mineral_playback::Error::Cancelled);
         }
         let bytes = b"test".to_vec();
-        let byte_len = Some(u64::try_from(bytes.len())?);
+        let byte_len = Some(u64::try_from(bytes.len()).map_err(|source| {
+            mineral_playback::Error::Provider {
+                source: Box::new(source),
+            }
+        })?);
         let reader: Box<dyn MediaReader> = Box::new(Cursor::new(bytes));
         Ok(OpenedMedia::new(
             reader,
@@ -149,7 +161,7 @@ pub(super) fn test_playback_registry(
             provider
         })
         .collect::<Vec<Arc<dyn PlaybackProvider>>>();
-    PlaybackRegistry::new(providers)
+    Ok(PlaybackRegistry::new(providers)?)
 }
 
 #[async_trait]

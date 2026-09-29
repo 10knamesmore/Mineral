@@ -43,35 +43,47 @@ impl CacheTable {
     }
 
     /// 建立索引表并载入已有记录。
-    pub(super) async fn load(self, db: &DatabaseConnection) -> color_eyre::Result<Vec<CacheRow>> {
+    pub(super) async fn load(self, db: &DatabaseConnection) -> crate::Result<Vec<CacheRow>> {
         let schema = Schema::new(DbBackend::Sqlite);
         let mut table = match self {
             Self::Audio => schema.create_table_from_entity(audio_cache::Entity),
             Self::Cover => schema.create_table_from_entity(cover_cache::Entity),
         };
-        db.execute(table.if_not_exists()).await?;
+        db.execute(table.if_not_exists())
+            .await
+            .map_err(|source| crate::Error::Cache {
+                operation: "create table",
+                table: self.name(),
+                key: None,
+                source,
+            })?;
         Ok(match self {
-            Self::Audio => {
-                audio_cache::Entity::find()
-                    .into_model::<CacheRow>()
-                    .all(db)
-                    .await?
-            }
-            Self::Cover => {
-                cover_cache::Entity::find()
-                    .into_model::<CacheRow>()
-                    .all(db)
-                    .await?
-            }
+            Self::Audio => audio_cache::Entity::find()
+                .into_model::<CacheRow>()
+                .all(db)
+                .await
+                .map_err(|source| crate::Error::Cache {
+                    operation: "load rows",
+                    table: self.name(),
+                    key: None,
+                    source,
+                })?,
+            Self::Cover => cover_cache::Entity::find()
+                .into_model::<CacheRow>()
+                .all(db)
+                .await
+                .map_err(|source| crate::Error::Cache {
+                    operation: "load rows",
+                    table: self.name(),
+                    key: None,
+                    source,
+                })?,
         })
     }
 
     /// 覆盖一条缓存记录，保留具名字段映射。
-    pub(super) async fn upsert(
-        self,
-        db: &DatabaseConnection,
-        row: CacheRow,
-    ) -> color_eyre::Result<()> {
+    pub(super) async fn upsert(self, db: &DatabaseConnection, row: CacheRow) -> crate::Result<()> {
+        let key = row.key.clone();
         match self {
             Self::Audio => {
                 audio_cache::Entity::insert(audio_cache::ActiveModel {
@@ -90,7 +102,13 @@ impl CacheTable {
                         .to_owned(),
                 )
                 .exec_without_returning(db)
-                .await?;
+                .await
+                .map_err(|source| crate::Error::Cache {
+                    operation: "upsert",
+                    table: self.name(),
+                    key: Some(key.clone()),
+                    source,
+                })?;
             }
             Self::Cover => {
                 cover_cache::Entity::insert(cover_cache::ActiveModel {
@@ -109,33 +127,71 @@ impl CacheTable {
                         .to_owned(),
                 )
                 .exec_without_returning(db)
-                .await?;
+                .await
+                .map_err(|source| crate::Error::Cache {
+                    operation: "upsert",
+                    table: self.name(),
+                    key: Some(key.clone()),
+                    source,
+                })?;
             }
         }
         Ok(())
     }
 
     /// 删除指定缓存键。
-    pub(super) async fn delete(self, db: &DatabaseConnection, key: &str) -> color_eyre::Result<()> {
+    pub(super) async fn delete(self, db: &DatabaseConnection, key: &str) -> crate::Result<()> {
         match self {
             Self::Audio => {
-                audio_cache::Entity::delete_by_id(key).exec(db).await?;
+                audio_cache::Entity::delete_by_id(key)
+                    .exec(db)
+                    .await
+                    .map_err(|source| crate::Error::Cache {
+                        operation: "delete",
+                        table: self.name(),
+                        key: Some(key.to_owned()),
+                        source,
+                    })?;
             }
             Self::Cover => {
-                cover_cache::Entity::delete_by_id(key).exec(db).await?;
+                cover_cache::Entity::delete_by_id(key)
+                    .exec(db)
+                    .await
+                    .map_err(|source| crate::Error::Cache {
+                        operation: "delete",
+                        table: self.name(),
+                        key: Some(key.to_owned()),
+                        source,
+                    })?;
             }
         }
         Ok(())
     }
 
     /// 清空此用途的全部索引记录。
-    pub(super) async fn clear(self, db: &DatabaseConnection) -> color_eyre::Result<()> {
+    pub(super) async fn clear(self, db: &DatabaseConnection) -> crate::Result<()> {
         match self {
             Self::Audio => {
-                audio_cache::Entity::delete_many().exec(db).await?;
+                audio_cache::Entity::delete_many()
+                    .exec(db)
+                    .await
+                    .map_err(|source| crate::Error::Cache {
+                        operation: "clear",
+                        table: self.name(),
+                        key: None,
+                        source,
+                    })?;
             }
             Self::Cover => {
-                cover_cache::Entity::delete_many().exec(db).await?;
+                cover_cache::Entity::delete_many()
+                    .exec(db)
+                    .await
+                    .map_err(|source| crate::Error::Cache {
+                        operation: "clear",
+                        table: self.name(),
+                        key: None,
+                        source,
+                    })?;
             }
         }
         Ok(())

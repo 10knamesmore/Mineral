@@ -4,6 +4,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+use crate::Result;
+
 /// Filesystem destination for one complete decoder-ready encoded media instance.
 #[derive(Clone, Debug)]
 pub struct CaptureTarget {
@@ -68,7 +70,7 @@ impl CapturedMedia {
 /// moving the file into durable cache storage.
 pub struct CaptureReceipt {
     /// Provider-owned completion and integrity verification.
-    completion: Pin<Box<dyn Future<Output = color_eyre::Result<CapturedMedia>> + Send>>,
+    completion: Pin<Box<dyn Future<Output = Result<CapturedMedia>> + Send>>,
 }
 
 impl CaptureReceipt {
@@ -79,7 +81,7 @@ impl CaptureReceipt {
     #[must_use]
     pub fn new<F>(completion: F) -> Self
     where
-        F: Future<Output = color_eyre::Result<CapturedMedia>> + Send + 'static,
+        F: Future<Output = Result<CapturedMedia>> + Send + 'static,
     {
         Self {
             completion: Box::pin(completion),
@@ -93,7 +95,7 @@ impl CaptureReceipt {
     ///
     /// # Error:
     ///   Returns the producer, cancellation, filesystem, or integrity failure.
-    pub async fn wait(self) -> color_eyre::Result<CapturedMedia> {
+    pub async fn wait(self) -> Result<CapturedMedia> {
         self.completion.await
     }
 }

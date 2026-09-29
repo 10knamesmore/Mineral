@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use mineral_protocol::{Event, TextSpan, ToastKind};
+use mineral_protocol::{Event, FailureNotice, TextSpan, ToastKind};
 use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -75,9 +75,7 @@ fn reload_once(
     // eval 前播种一个时点快照,使 observe 能回放、顶层 get 可立即读取。
     // eval 期间发生的任意属性变更仍可能只投给旧 VM;新 VM 要等该属性下次变化才会收到更新。
     host.seed_props((parts.props_snapshot)());
-    let loaded = mineral_config::load_with_vm(config_path, |lua| {
-        install_api(lua, &host).map_err(color_eyre::Report::new)
-    });
+    let loaded = mineral_config::load_with_vm(config_path, |lua| install_api(lua, &host));
     let loaded = match loaded {
         Ok(parts) => parts,
         Err(e) => {
@@ -87,11 +85,11 @@ fn reload_once(
                 error = mineral_log::chain(&e),
                 "脚本重载失败,保留旧脚本"
             );
-            toast(
-                &parts.push_tx,
-                ToastKind::Error,
-                format!("脚本重载失败,保留旧脚本:{e}"),
-            );
+            let _ = parts
+                .push_tx
+                .send(Event::Failure(FailureNotice::ScriptReloadFailed {
+                    previous_kept: runtime.is_some(),
+                }));
             record_script_lifecycle(
                 parts,
                 mineral_stats::ScriptEvent::ReloadFail,
@@ -106,15 +104,15 @@ fn reload_once(
         // (同 id 顶替不刷屏,修好后干净重载撤卡)。
         let detail = loaded.warnings.first().map_or_else(
             || "config.lua 缺失或未通过求值".to_owned(),
-            std::string::ToString::to_string,
+            |warning| mineral_log::chain(warning),
         );
-        mineral_log::warn!(target: "script", detail, "脚本重载失败,保留旧脚本");
+        mineral_log::warn!(target: "script", error = detail, "脚本重载失败,保留旧脚本");
         warning_card(&parts.push_tx, &loaded.warnings);
-        toast(
-            &parts.push_tx,
-            ToastKind::Error,
-            format!("脚本重载失败,保留旧脚本:{detail}"),
-        );
+        let _ = parts
+            .push_tx
+            .send(Event::Failure(FailureNotice::ScriptReloadFailed {
+                previous_kept: runtime.is_some(),
+            }));
         record_script_lifecycle(parts, mineral_stats::ScriptEvent::ReloadFail, Some(detail));
         return;
     };
@@ -146,11 +144,11 @@ fn reload_once(
                 error = mineral_log::chain(&e),
                 "重载后脚本线程启动失败,脚本不可用"
             );
-            toast(
-                &parts.push_tx,
-                ToastKind::Error,
-                "脚本线程启动失败,脚本不可用(详见日志)".to_owned(),
-            );
+            let _ = parts
+                .push_tx
+                .send(Event::Failure(FailureNotice::ScriptReloadFailed {
+                    previous_kept: false,
+                }));
             record_script_lifecycle(
                 parts,
                 mineral_stats::ScriptEvent::ReloadFail,
@@ -181,21 +179,26 @@ fn toast(push_tx: &UnboundedSender<Event>, kind: ToastKind, content: String) {
     });
 }
 
-/// 配置告警驻留卡(同 [`CONFIG_CARD_ID`] 顶替):逐条 warning 一行。
+/// 推送配置告警的字段路径；诊断详情写入日志，由 client 构造驻留卡。
 fn warning_card(push_tx: &UnboundedSender<Event>, warnings: &[mineral_config::ConfigWarning]) {
     if warnings.is_empty() {
         return;
     }
-    let _ = push_tx.send(Event::Card {
-        kind: ToastKind::Warn,
-        id: Some(CONFIG_CARD_ID.to_owned()),
-        title: vec![TextSpan::plain("config.lua warnings")],
-        body: warnings
-            .iter()
-            .map(|w| vec![TextSpan::plain(w.to_string())])
-            .collect(),
-        ttl_secs: None,
-    });
+    for warning in warnings {
+        mineral_log::warn!(
+            target: "script",
+            error = mineral_log::chain(warning),
+            "config.lua validation warning"
+        );
+    }
+    let fields = warnings
+        .iter()
+        .filter_map(|warning| match warning {
+            mineral_config::ConfigWarning::Deserialize { path, .. } => path.clone(),
+            _ => None,
+        })
+        .collect();
+    let _ = push_tx.send(Event::Failure(FailureNotice::ConfigRejected { fields }));
 }
 
 #[cfg(test)]
@@ -249,9 +252,7 @@ mod tests {
             let (cmd_tx, _cmd_rx) = unbounded_channel();
             let (push_tx, _push_rx) = unbounded_channel();
             let host = ScriptHost::new(cmd_tx.clone(), push_tx.clone());
-            let loaded = mineral_config::load_with_vm(&path, |lua| {
-                install_api(lua, &host).map_err(color_eyre::Report::new)
-            })?;
+            let loaded = mineral_config::load_with_vm(&path, |lua| install_api(lua, &host))?;
             assert!(
                 loaded.warnings.is_empty(),
                 "初始配置不应有 warning: {:?}",
@@ -312,7 +313,10 @@ mod tests {
             return {}
             "#,
         )?;
-        assert_eq!(rig.invoke("a.old")?, ActionOutcome::Done, "旧 action 就绪");
+        assert!(
+            matches!(rig.invoke("a.old")?, ActionOutcome::Done),
+            "旧 action 就绪"
+        );
 
         rig.rewrite_and_reload(
             r#"
@@ -320,10 +324,12 @@ mod tests {
             return {}
             "#,
         )?;
-        assert_eq!(rig.invoke("b.new")?, ActionOutcome::Done, "新 action 生效");
-        assert_eq!(
-            rig.invoke("a.old")?,
-            ActionOutcome::NotFound,
+        assert!(
+            matches!(rig.invoke("b.new")?, ActionOutcome::Done),
+            "新 action 生效"
+        );
+        assert!(
+            matches!(rig.invoke("a.old")?, ActionOutcome::NotFound),
             "旧 action 整体退役(注册表原子换,无残留)"
         );
         Ok(())
@@ -340,9 +346,8 @@ mod tests {
         )?;
         // 写坏的 Lua:eval 失败,旧 VM 必须原样存活。
         rig.rewrite_and_reload("this is not lua ((")?;
-        assert_eq!(
-            rig.invoke("keep.me")?,
-            ActionOutcome::Done,
+        assert!(
+            matches!(rig.invoke("keep.me")?, ActionOutcome::Done),
             "重载失败保留旧脚本,不空窗"
         );
         Ok(())
@@ -387,14 +392,12 @@ mod tests {
             return {}
             "#,
         )?;
-        assert_eq!(
-            rig.invoke("get.seeded")?,
-            ActionOutcome::Done,
+        assert!(
+            matches!(rig.invoke("get.seeded")?, ActionOutcome::Done),
             "重载后顶层 mineral.get 必须读到播种的属性值"
         );
-        assert_eq!(
-            rig.invoke("observe.replayed")?,
-            ActionOutcome::Done,
+        assert!(
+            matches!(rig.invoke("observe.replayed")?, ActionOutcome::Done),
             "重载后 observe 注册必须回放播种的属性值"
         );
         Ok(())
@@ -407,14 +410,14 @@ mod tests {
         // "daemon 起动后才写 config.lua" 的升级语义(runtime None → Some 由
         // boot 的 None 分支太绕,这里以空注册表近似)。
         let mut rig = Rig::boot("return {}")?;
-        assert_eq!(rig.invoke("late.comer")?, ActionOutcome::NotFound);
+        assert!(matches!(rig.invoke("late.comer")?, ActionOutcome::NotFound));
         rig.rewrite_and_reload(
             r#"
             mineral.action("late.comer", function() end)
             return {}
             "#,
         )?;
-        assert_eq!(rig.invoke("late.comer")?, ActionOutcome::Done);
+        assert!(matches!(rig.invoke("late.comer")?, ActionOutcome::Done));
         Ok(())
     }
 }

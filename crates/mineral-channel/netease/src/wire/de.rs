@@ -5,13 +5,11 @@
 //! 不知道是第几条、哪个字段。这里用 `serde_path_to_error` 包一层,把出错位置
 //! 的字段路径(如 `[12].al.name`)并进错误信息。
 
-use color_eyre::eyre::eyre;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::{Error, Result};
 
 /// 把 `null` 收成空串。网易云对失效 / 下架歌曲会把 name 类字段(歌名 / 艺术家名 /
 /// 专辑名)返回 `null`,裸 `String` 反序列化会炸掉整批(已实锤:歌单 5036089714 的
@@ -62,15 +60,19 @@ where
 ///   - `value`: 待反序列化的 JSON。
 ///
 /// # Return:
-///   成功得 `T`;失败得形如 ``at `[12].al.name`: invalid type: null, expected a string`` 的错误。
+///   成功返回 `T`；失败保留字段路径及 serde 原始原因。
 pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T> {
-    serde_path_to_error::deserialize(value).map_err(|e| eyre!("at `{}`: {}", e.path(), e.inner()))
+    serde_path_to_error::deserialize(value).map_err(|e| {
+        let context = e.path().to_string();
+        Error::Parse {
+            context,
+            source: Box::new(e.into_inner()),
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use color_eyre::eyre::eyre;
-
     use super::from_value;
     use crate::wire::song::AlbumSong;
 
@@ -83,13 +85,15 @@ mod tests {
             { "id": "not-a-number", "name": "x", "ar": [], "al": { "id": 3, "name": "a" }, "dt": 0 }
         ]);
         let Err(err) = from_value::<Vec<AlbumSong>>(raw) else {
-            return Err(eyre!("expected deserialize to fail on bad id type"));
+            return Err(crate::Error::InvalidData {
+                field: "expected invalid id type",
+            });
         };
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("[1].id"),
-            "want field path in error, got: {msg}"
-        );
+        assert!(matches!(
+            err,
+            crate::Error::Parse { context, source }
+                if context == "[1].id" && source.is::<serde_json::Error>()
+        ));
         Ok(())
     }
 }

@@ -3,7 +3,6 @@
 use std::ops::Range;
 
 use crate::entity::{plays, sessions};
-use color_eyre::eyre::WrapErr as _;
 use mineral_model::SongId;
 use sea_orm::sea_query::{Expr, ExprTrait, Func, Query};
 use sea_orm::{
@@ -47,7 +46,7 @@ impl StatsStore {
         range: Range<i64>,
         source: Option<&str>,
         limit: i64,
-    ) -> color_eyre::Result<Vec<PlayTail>> {
+    ) -> crate::Result<Vec<PlayTail>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -67,7 +66,10 @@ impl StatsStore {
             .into_model::<PlayTailRow>()
             .all(db)
             .await
-            .wrap_err("recent_plays 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "recent_plays 查询",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|row| PlayTail {
@@ -80,7 +82,7 @@ impl StatsStore {
     }
 
     /// 埋点系统自身状态:plays / sessions / 全部事件表行数 + 播放时间覆盖。
-    pub async fn status(&self) -> color_eyre::Result<StatusReport> {
+    pub async fn status(&self) -> crate::Result<StatusReport> {
         let Some(db) = self.pool() else {
             return Ok(StatusReport {
                 plays: 0,
@@ -123,14 +125,14 @@ impl StatsStore {
         let row = StatusRow::find_by_statement(db.get_database_backend().build(&query))
             .one(db)
             .await
-            .wrap_err("status 查询失败")?
-            .ok_or_else(|| color_eyre::eyre::eyre!("status 聚合未返回行"))?;
+            .map_err(|source| crate::Error::Database {
+                operation: "status 查询",
+                source,
+            })?
+            .ok_or(crate::Error::MissingAggregate { query: "status" })?;
         let mut events = 0_i64;
         for table in crate::store::prune::EVENT_TABLES {
-            events += table
-                .count(db, /*range*/ None)
-                .await
-                .wrap_err_with(|| format!("status count {} 失败", table.name()))?;
+            events += table.count(db, /*range*/ None).await?;
         }
         Ok(StatusReport {
             plays: row.plays,
@@ -142,7 +144,7 @@ impl StatsStore {
     }
 
     /// 总量:收听 ms / 播放次数 / 完播数 / 跳歌数 / 涉及歌曲数 / 活跃天数(UTC 日)。
-    pub async fn totals(&self, range: Range<i64>) -> color_eyre::Result<Totals> {
+    pub async fn totals(&self, range: Range<i64>) -> crate::Result<Totals> {
         let Some(db) = self.pool() else {
             return Ok(Totals::default());
         };
@@ -173,12 +175,15 @@ impl StatsStore {
             .into_model::<Totals>()
             .one(db)
             .await
-            .wrap_err("totals 查询失败")?
-            .ok_or_else(|| color_eyre::eyre::eyre!("totals 聚合未返回行"))
+            .map_err(|source| crate::Error::Database {
+                operation: "totals 查询",
+                source,
+            })?
+            .ok_or(crate::Error::MissingAggregate { query: "totals" })
     }
 
     /// 返回 `QuerySongStats` 使用的单曲全量汇总；从未播放返回 `None`。
-    pub async fn song_summary(&self, id: &SongId) -> color_eyre::Result<Option<SongSummary>> {
+    pub async fn song_summary(&self, id: &SongId) -> crate::Result<Option<SongSummary>> {
         let Some(db) = self.pool() else {
             return Ok(None);
         };
@@ -197,8 +202,13 @@ impl StatsStore {
             .into_model::<SongSummary>()
             .one(db)
             .await
-            .wrap_err("song_summary 查询失败")?
-            .ok_or_else(|| color_eyre::eyre::eyre!("song_summary 聚合未返回行"))?;
+            .map_err(|source| crate::Error::Database {
+                operation: "song_summary 查询",
+                source,
+            })?
+            .ok_or(crate::Error::MissingAggregate {
+                query: "song_summary",
+            })?;
         Ok((row.plays != 0).then_some(row))
     }
 }

@@ -15,7 +15,6 @@ mineral-paths         = { workspace = true }
 mineral-log           = { workspace = true }
 mineral-playback      = { workspace = true }
 
-color-eyre      = { workspace = true }
 async-trait     = { workspace = true }
 serde           = { workspace = true }
 serde_json      = { workspace = true }
@@ -39,6 +38,7 @@ clap       = { workspace = true }
 qrcode     = { workspace = true }
 
 [dev-dependencies]
+color-eyre = { workspace = true }
 tempfile = "3"
 insta    = { workspace = true }
 mineral-test = { workspace = true }

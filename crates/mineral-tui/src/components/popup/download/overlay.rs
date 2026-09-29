@@ -1,7 +1,7 @@
 //! downloads docked overlay.
 
 use crossterm::event::KeyEvent;
-use mineral_protocol::{DownloadOrigin, DownloadStatus, SongDownloadView};
+use mineral_protocol::{DownloadFailure, DownloadOrigin, DownloadStatus, SongDownloadView};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
@@ -105,8 +105,8 @@ impl DownloadRow<'_> {
             DownloadStatus::Failed => self
                 .download
                 .failure
-                .as_deref()
-                .unwrap_or("Provider error")
+                .as_ref()
+                .map_or("Download failed", download_failure_text)
                 .to_owned(),
             DownloadStatus::Queued
             | DownloadStatus::Resolving
@@ -179,7 +179,7 @@ impl DownloadOverlay {
         let base = format!(" {} · {origin}", row.quality.as_str());
         let label = row.failure.as_ref().map_or_else(
             || format!("{base} "),
-            |failure| format!("{base} · {failure} "),
+            |failure| format!("{base} · {} ", download_failure_text(failure)),
         );
         Some(
             Line::from(label)
@@ -322,6 +322,19 @@ impl Overlay for DownloadOverlay {
             | Action::OpenHelp
             | Action::InvokeScript(_) => None,
         }
+    }
+}
+
+/// Frontend label for a structured download failure, without daemon diagnostics.
+fn download_failure_text(failure: &DownloadFailure) -> &'static str {
+    match failure {
+        DownloadFailure::Unavailable => "Unavailable",
+        DownloadFailure::Preparation => "Prepare failed",
+        DownloadFailure::Read => "Read failed",
+        DownloadFailure::Storage => "Save failed",
+        DownloadFailure::InvalidMedia => "Invalid media",
+        DownloadFailure::InvalidRewrite => "Rewrite failed",
+        DownloadFailure::Internal => "Download failed",
     }
 }
 

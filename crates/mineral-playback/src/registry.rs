@@ -2,11 +2,10 @@
 
 use std::sync::Arc;
 
-use color_eyre::eyre::eyre;
 use mineral_model::SourceKind;
 use rustc_hash::FxHashMap;
 
-use crate::PlaybackProvider;
+use crate::{Error, PlaybackProvider, Result};
 
 /// Immutable process-local playback provider registry.
 #[derive(Clone, Default)]
@@ -23,12 +22,14 @@ impl PlaybackRegistry {
     ///
     /// # Return:
     ///   An immutable registry, or an error when two providers serve the same source.
-    pub fn new(providers: Vec<Arc<dyn PlaybackProvider>>) -> color_eyre::Result<Self> {
+    pub fn new(providers: Vec<Arc<dyn PlaybackProvider>>) -> Result<Self> {
         let mut by_source = FxHashMap::<SourceKind, Arc<dyn PlaybackProvider>>::default();
         for provider in providers {
             let source = provider.source();
             if by_source.insert(source, provider).is_some() {
-                return Err(eyre!("duplicate playback provider for {source:?}"));
+                return Err(Error::DuplicateProvider {
+                    source_kind: source,
+                });
             }
         }
         Ok(Self {

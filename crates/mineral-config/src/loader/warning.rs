@@ -1,37 +1,59 @@
 //! 加载过程中的非致命问题类型。出现即表示该层(或整份)用户配置回落了默认。
 
+use std::io;
+use std::path::PathBuf;
+
 /// 加载过程中的非致命问题。仅针对**用户** `config.lua`;内置 `default.lua` 损坏
 /// 是程序员错误,由守卫测试拦截、启动期 fail,不进本类型。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConfigWarning {
-    /// 用户 `config.lua` eval 失败(语法错 / 运行期错 / 返回非表)。`detail` 含 file:line。
-    Eval {
-        /// 人类可读详情(Lua 错误首行 + 定位)。
-        detail: String,
+    /// 读取用户配置失败；文件不存在不生成告警。
+    #[error("读取用户配置 {} 失败,已回落默认", .path.display())]
+    Read {
+        /// 读取失败的配置文件路径。
+        path: PathBuf,
+
+        /// 文件系统返回的原始错误。
+        #[source]
+        source: io::Error,
     },
 
-    /// 合并后整表反序列化失败。`path` 是出错字段路径,如 `audio.volume`。
-    Deserialize {
-        /// 出错字段路径(可能为空,表示顶层 / 无法定位)。
-        path: String,
+    /// 用户配置求值失败(语法错 / 运行期错 / 返回非表)。
+    #[error("用户配置 {} 求值失败,已回落默认", .path.display())]
+    Eval {
+        /// 求值失败的配置文件路径。
+        path: PathBuf,
 
-        /// 类型 / 取值错误详情。
-        detail: String,
+        /// Lua 返回的原始错误,包含可定位的脚本信息。
+        #[source]
+        source: mlua::Error,
+    },
+
+    /// Lua 表无法转成配置树。
+    #[error("用户配置转成配置树失败,已回落默认")]
+    Serialize {
+        /// Lua 值序列化失败的原始错误。
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// 合并后的配置树无法落型。`path` 是出错字段路径,如 `audio.volume`。
+    #[error("config.lua {location}错误,已回落默认", location = warning_location(.path.as_deref()))]
+    Deserialize {
+        /// 出错字段路径；顶层错误或无法定位字段时为 `None`。
+        path: Option<String>,
+
+        /// JSON 配置树落型失败的原始错误。
+        #[source]
+        source: serde_json::Error,
     },
 }
 
-impl std::fmt::Display for ConfigWarning {
-    /// 单行展示(供 toast):eval 错带定位,反序列化错带字段路径。
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Eval { detail } => write!(f, "config.lua 加载失败,已回落默认:{detail}"),
-            Self::Deserialize { path, detail } if path.is_empty() => {
-                write!(f, "config.lua 类型错误,已回落默认:{detail}")
-            }
-            Self::Deserialize { path, detail } => {
-                write!(f, "config.lua 字段 `{path}` 错误,已回落默认:{detail}")
-            }
-        }
+/// 路径缺席时诊断配置整体,否则诊断具体字段。
+fn warning_location(path: Option<&str>) -> String {
+    match path {
+        Some(path) => format!("字段 `{path}` "),
+        None => "类型".to_owned(),
     }
 }

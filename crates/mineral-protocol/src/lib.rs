@@ -16,6 +16,7 @@
 mod codec;
 mod download;
 mod event;
+mod failure_notice;
 mod handshake;
 mod key;
 mod message;
@@ -25,20 +26,22 @@ mod session;
 mod store;
 mod wire;
 
-pub use codec::{Framed, decode, encode, framed, recv, send};
+pub use codec::{CodecError, Framed, decode, encode, framed, recv, send};
 pub use download::{
-    DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary, DownloadTarget, DownloadWave,
-    SongDownloadView,
+    DownloadFailure, DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary, DownloadTarget,
+    DownloadWave, SongDownloadView,
 };
 pub use event::{
     BusValue, Event, FinishReason, PropName, PropValue, SpanAlign, SpanFg, TextSpan, ToastKind,
 };
+pub use failure_notice::FailureNotice;
 pub use handshake::{
     ClientInfo, HandshakeRejected, PkgVersion, RejectReason, ServerHello, Subscription,
 };
 pub use key::{KeyContext, PlaylistRef, ScriptBind, ViewKind};
 pub use message::{
-    CopyTemplateCtx, PlayQueueError, QueueContextWire, Request, Response, SongStatsWire,
+    CopyTemplateCtx, CopyTextFailure, PlayQueueError, QueueContextWire, Request, Response,
+    SongStatsWire,
 };
 pub use mineral_task::ChannelFetchKindTag;
 pub use player::{

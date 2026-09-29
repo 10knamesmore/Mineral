@@ -373,7 +373,7 @@ pub struct QueryId(pub(crate) u64);
 /// 异步查询的结果(结构化;Lua 值的转换在脚本线程的 dispatch 层)。
 ///
 /// 失败统一走 [`Self::Error`],Lua 回调收 `(nil, err)`。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ResolveValue {
     /// per-song 持久值(`store.get` / `store.inc`)。
     Store(mineral_protocol::StoreValue),
@@ -399,8 +399,8 @@ pub enum ResolveValue {
     /// 子进程结束(`mineral.spawn` 回调)。
     Spawn(crate::proc::SpawnResult),
 
-    /// 查询失败(人读信息)。
-    Error(String),
+    /// 查询失败;底层 source 沿线程回执传递,到 Lua 回调边界才渲染成字符串。
+    Error(Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// 歌单在脚本侧的轻量投影(不携带曲目,曲目另经 `library.tracks` 拉)。
@@ -549,7 +549,7 @@ pub(crate) enum ScriptMsg {
         ctx: mineral_protocol::CopyTemplateCtx,
 
         /// 渲染结果回执(接收端 drop 时静默丢)。
-        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+        reply: tokio::sync::oneshot::Sender<crate::Result<String>>,
     },
 
     /// 跑一个具名队列变换(config `queue.transforms[index]` 的函数),回执新的队列顺序
@@ -568,7 +568,7 @@ pub(crate) enum ScriptMsg {
         selected: Option<usize>,
 
         /// 新顺序的 id 序列回执(接收端 drop 时静默丢)。
-        reply: tokio::sync::oneshot::Sender<Result<Vec<mineral_model::SongId>, String>>,
+        reply: tokio::sync::oneshot::Sender<crate::Result<Vec<mineral_model::SongId>>>,
     },
 
     /// 优雅停机:主循环退出,线程结束。
@@ -576,7 +576,7 @@ pub(crate) enum ScriptMsg {
 }
 
 /// 一次具名动作调用的结果。
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ActionOutcome {
     /// 回调执行完成。
     Done,
@@ -584,8 +584,8 @@ pub enum ActionOutcome {
     /// 该名字未注册。
     NotFound,
 
-    /// 回调执行失败(Lua 错误 / 超看门狗硬阈值被中断),携带单行错误信息。
-    Failed(String),
+    /// 回调执行失败,保留结构化错误和 Lua source。
+    Failed(crate::Error),
 }
 
 #[cfg(test)]

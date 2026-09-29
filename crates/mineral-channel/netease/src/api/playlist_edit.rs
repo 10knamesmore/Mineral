@@ -12,8 +12,7 @@
 use mineral_model::{PlaylistId, SongId};
 use serde_json::{Value, json};
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::Result;
 
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;

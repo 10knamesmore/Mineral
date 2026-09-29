@@ -11,12 +11,16 @@ mod cache_index;
 mod client_store;
 mod db;
 mod entity;
+mod error;
 mod migration;
 mod pool;
 mod server_store;
 
 pub use cache_index::{CacheEntryStat, CacheIndex, CacheStats, Evicted};
 pub use client_store::{ClientStore, TrackPosRow};
+pub use error::Error;
+/// Persistence operation result.
+pub type Result<T> = std::result::Result<T, Error>;
 pub use db::{
     CachedPlaylistEntry, NamespaceStore, PlaylistCacheEntry, RESERVED_KEYS, SessionSnapshot,
     SessionStore,

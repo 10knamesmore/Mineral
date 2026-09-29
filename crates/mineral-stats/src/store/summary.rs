@@ -6,7 +6,6 @@ use crate::entity::{
     action_invocations, cache_harvests, downloads, fetches, gapless_boundaries, hook_fires,
     love_changes, script_lifecycle, searches,
 };
-use color_eyre::eyre::WrapErr as _;
 use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Select};
 
@@ -28,7 +27,7 @@ impl StatsStore {
         &self,
         range: std::ops::Range<i64>,
         limit: i64,
-    ) -> color_eyre::Result<EventSummary> {
+    ) -> crate::Result<EventSummary> {
         let Some(db) = self.pool() else {
             return Ok(EventSummary::default());
         };
@@ -36,10 +35,7 @@ impl StatsStore {
         for table in EVENT_TABLES {
             table_counts.push(EventCount {
                 table: table.name().to_owned(),
-                count: table
-                    .count(db, Some(range.clone()))
-                    .await
-                    .wrap_err_with(|| format!("event_summary count {} 失败", table.name()))?,
+                count: table.count(db, Some(range.clone())).await?,
             });
         }
         let top_searches = tally::<searches::Entity>(
@@ -53,7 +49,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary top_searches 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary top_searches",
+            source,
+        })?;
         let love_by_origin = tally::<love_changes::Entity>(
             Expr::col((love_changes::Entity, love_changes::Column::Origin)),
             love_changes::Column::Id,
@@ -65,7 +64,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary love_by_origin 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary love_by_origin",
+            source,
+        })?;
         let downloads_by_outcome = tally::<downloads::Entity>(
             Expr::col((downloads::Entity, downloads::Column::Outcome)),
             downloads::Column::Id,
@@ -76,7 +78,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary downloads_by_outcome 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary downloads_by_outcome",
+            source,
+        })?;
         let harvests_by_outcome = tally::<cache_harvests::Entity>(
             Expr::col((cache_harvests::Entity, cache_harvests::Column::Outcome)),
             cache_harvests::Column::Id,
@@ -87,7 +92,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary harvests_by_outcome 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary harvests_by_outcome",
+            source,
+        })?;
         let top_fetches = tally::<fetches::Entity>(
             Expr::col((fetches::Entity, fetches::Column::FetchKind)),
             fetches::Column::Id,
@@ -98,7 +106,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary top_fetches 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary top_fetches",
+            source,
+        })?;
         let top_actions = tally::<action_invocations::Entity>(
             Expr::col((action_invocations::Entity, action_invocations::Column::Name)),
             action_invocations::Column::Id,
@@ -109,7 +120,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary top_actions 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary top_actions",
+            source,
+        })?;
         let hooks_by_decision = tally::<hook_fires::Entity>(
             Expr::col((hook_fires::Entity, hook_fires::Column::Decision)),
             hook_fires::Column::Id,
@@ -120,7 +134,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary hooks_by_decision 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary hooks_by_decision",
+            source,
+        })?;
         let gapless_by_result = tally::<gapless_boundaries::Entity>(
             Expr::col((
                 gapless_boundaries::Entity,
@@ -134,7 +151,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary gapless_by_result 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary gapless_by_result",
+            source,
+        })?;
         let script_by_event = tally::<script_lifecycle::Entity>(
             Expr::col((script_lifecycle::Entity, script_lifecycle::Column::Event)),
             script_lifecycle::Column::Id,
@@ -145,7 +165,10 @@ impl StatsStore {
         .into_model::<Tally>()
         .all(db)
         .await
-        .wrap_err("event_summary script_by_event 失败")?;
+        .map_err(|source| crate::Error::Database {
+            operation: "event_summary script_by_event",
+            source,
+        })?;
         Ok(EventSummary {
             table_counts,
             top_searches,

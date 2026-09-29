@@ -1,13 +1,11 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use color_eyre::eyre::{WrapErr, eyre};
 use isahc::{
     AsyncReadResponseExt, HttpClient, Request, config::Configurable, cookies::CookieJar, http::Uri,
 };
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::{Error, Result};
 
 use crate::config::NeteaseConfig;
 use crate::crypto::{eapi, linuxapi, weapi};
@@ -50,9 +48,15 @@ impl Transport {
             .max_connections(*config.max_connections())
             .cookies();
         if let Some(p) = config.proxy().as_deref() {
-            builder = builder.proxy(Some(p.parse().context("invalid proxy url")?));
+            builder = builder.proxy(Some(p.parse().map_err(|source| Error::Network {
+                operation: "parse proxy URL",
+                source: Box::new(source),
+            })?));
         }
-        let client = builder.build().context("build isahc client failed")?;
+        let client = builder.build().map_err(|source| Error::Network {
+            operation: "build HTTP client",
+            source: Box::new(source),
+        })?;
         Ok(Self {
             client,
             csrf: Mutex::new(String::new()),
@@ -66,9 +70,15 @@ impl Transport {
             .cookies()
             .cookie_jar(jar);
         if let Some(p) = config.proxy().as_deref() {
-            builder = builder.proxy(Some(p.parse().context("invalid proxy url")?));
+            builder = builder.proxy(Some(p.parse().map_err(|source| Error::Network {
+                operation: "parse proxy URL",
+                source: Box::new(source),
+            })?));
         }
-        let client = builder.build().context("build isahc client failed")?;
+        let client = builder.build().map_err(|source| Error::Network {
+            operation: "build HTTP client",
+            source: Box::new(source),
+        })?;
         Ok(Self {
             client,
             csrf: Mutex::new(String::new()),
@@ -83,7 +93,7 @@ impl Transport {
     /// 用于联调 example —— 即使端点返回非 200 也想看到完整 body 排查。
     pub async fn ping(&self, spec: RequestSpec<'_>) -> Result<(i64, serde_json::Value)> {
         let v = self.request_lax(spec).await?;
-        let code = parse_code(&v);
+        let code = parse_code(&v)?;
         Ok((code, v))
     }
 
@@ -110,20 +120,18 @@ impl Transport {
     pub async fn request(&self, spec: RequestSpec<'_>) -> Result<serde_json::Value> {
         let endpoint = spec.path;
         let value = self.request_lax(spec).await?;
-        let code = parse_code(&value);
+        let code = parse_code(&value)?;
         if code != 200 {
             let message = value
                 .get("message")
                 .or_else(|| value.get("msg"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("(no message)");
+                .and_then(|v| v.as_str());
             mineral_log::warn!(target: "channel_netease", endpoint, code, message, "api error");
-            // 结构化携带 code,channel 边界 downcast 映射(301/512/...);
-            // 别改回 eyre! 字符串——downcast 链断了映射就退化成 Other
-            return Err(color_eyre::Report::new(ApiCodeError {
+            return Err(ApiCodeError {
                 code,
-                message: message.to_owned(),
-            }));
+                message: message.map(str::to_owned),
+            }
+            .into());
         }
         Ok(value)
     }
@@ -170,14 +178,23 @@ impl Transport {
             .header("Referer", BASE_URL)
             .header("User-Agent", ua)
             .body(body)
-            .map_err(|e| eyre!("build request: {e}"))?;
+            .map_err(|source| Error::Network {
+                operation: "build request",
+                source: Box::new(source),
+            })?;
 
         let mut resp = self
             .client
             .send_async(req)
             .await
-            .map_err(|e| eyre!("send: {e}"))?;
-        let bytes = resp.bytes().await.map_err(|e| eyre!("read body: {e}"))?;
+            .map_err(|source| Error::Network {
+                operation: "send request",
+                source: Box::new(source),
+            })?;
+        let bytes = resp.bytes().await.map_err(|source| Error::Network {
+            operation: "read response body",
+            source: Box::new(source),
+        })?;
 
         decode_response(bytes)
     }

@@ -1,17 +1,19 @@
 //! CPAL 输出设备枚举和按身份解析；不建立输出流。
 
-use color_eyre::eyre::eyre;
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-use crate::{OutputDevice, OutputTarget};
+use crate::{Error, OutputDevice, OutputTarget, Result};
 
 /// 返回 daemon 所在机器的输出设备；单个已拔出的设备不阻止返回其他设备。
-pub(super) fn list() -> color_eyre::Result<Vec<OutputDevice>> {
+pub(super) fn list() -> Result<Vec<OutputDevice>> {
     let host = cpal::default_host();
     let default_id = default_id();
     let mut devices = Vec::new();
-    for device in host.output_devices()? {
+    for device in host
+        .output_devices()
+        .map_err(|source| Error::ListDevices { source })?
+    {
         match describe(&device) {
             Ok((id, name)) => devices.push(OutputDevice {
                 is_default: default_id.as_ref() == Some(&id),
@@ -27,25 +29,35 @@ pub(super) fn list() -> color_eyre::Result<Vec<OutputDevice>> {
 }
 
 /// 解析一次选择；不存在的设备明确失败，不回退到扬声器。
-pub(super) fn resolve(target: &OutputTarget) -> color_eyre::Result<cpal::Device> {
+pub(super) fn resolve(target: &OutputTarget) -> Result<cpal::Device> {
     let host = cpal::default_host();
     match target {
-        OutputTarget::SystemDefault => host
-            .default_output_device()
-            .ok_or_else(|| eyre!("no default output device")),
+        OutputTarget::SystemDefault => host.default_output_device().ok_or(Error::NoDefaultDevice),
         OutputTarget::Device(id) => {
-            let id = id.parse::<cpal::DeviceId>()?;
-            host.device_by_id(&id)
-                .ok_or_else(|| eyre!("output device is unavailable: {id}"))
+            let parsed = id
+                .parse::<cpal::DeviceId>()
+                .map_err(|source| Error::InvalidDeviceId {
+                    id: id.clone(),
+                    source,
+                })?;
+            host.device_by_id(&parsed)
+                .ok_or_else(|| Error::DeviceUnavailable { id: id.clone() })
         }
     }
 }
 
 /// 读取 CPAL 返回的设备 ID 与名称。
-pub(super) fn describe(device: &cpal::Device) -> color_eyre::Result<(String, String)> {
+pub(super) fn describe(device: &cpal::Device) -> Result<(String, String)> {
     Ok((
-        device.id()?.to_string(),
-        device.description()?.name().to_owned(),
+        device
+            .id()
+            .map_err(|source| Error::DeviceId { source })?
+            .to_string(),
+        device
+            .description()
+            .map_err(|source| Error::DeviceName { source })?
+            .name()
+            .to_owned(),
     ))
 }
 

@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-use color_eyre::eyre::WrapErr;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 
 /// 连接(或创建)一个 sqlite 库文件,返回单连接池。
@@ -14,11 +13,14 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 ///
 /// # Return:
 ///   就绪连接池;连接失败返回 `Err`。
-pub(crate) async fn connect(db_path: &Path) -> color_eyre::Result<DatabaseConnection> {
+pub(crate) async fn connect(db_path: &Path) -> crate::Result<DatabaseConnection> {
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
     let mut options = ConnectOptions::new(url);
     options.max_connections(/*value*/ 1);
     Database::connect(options)
         .await
-        .wrap_err_with(|| format!("连接 sqlite 失败 path={}", db_path.display()))
+        .map_err(|source| crate::Error::Connect {
+            path: db_path.to_path_buf(),
+            source,
+        })
 }

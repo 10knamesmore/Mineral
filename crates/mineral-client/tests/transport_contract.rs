@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use color_eyre::eyre::{WrapErr, eyre};
 use mineral_client::Client;
 use mineral_client::connection::{ClientConfig, ConnectError};
-use mineral_client::operation::{Outcome, SubmitError};
+use mineral_client::operation::{Outcome, SubmitError, UnknownReason};
 use mineral_protocol::{
     FailureKind, MessageBatch, OperationResult, PlayQueueError, QueueContextWire, RejectReason,
     Request, Response, ServerHello, SessionMessage, SessionResult, SubscribeRequest,
@@ -96,7 +96,6 @@ async fn play_queue_normalizes_business_results() -> color_eyre::Result<()> {
             ),
         ];
         for (response, expected_kind) in cases {
-            let expected_detail = response.as_ref().err().map(ToString::to_string);
             let (client_wire, server_wire) = transport.pair(/*capacity*/ 64)?;
             let server = tokio::spawn(async move {
                 let mut wire = server_wire;
@@ -131,9 +130,8 @@ async fn play_queue_normalizes_business_results() -> color_eyre::Result<()> {
             );
             match (expected_kind, outcome) {
                 (None, Outcome::Applied(())) => {}
-                (Some(expected), Outcome::Failed { kind, detail }) => {
+                (Some(expected), Outcome::Failed { kind, .. }) => {
                     assert_eq!(kind, expected, "{transport:?}");
-                    assert_eq!(Some(detail), expected_detail, "{transport:?}");
                 }
                 (expected, actual) => {
                     return Err(eyre!(
@@ -244,7 +242,15 @@ async fn goodbye_unknowns_pending_and_closes_session() -> color_eyre::Result<()>
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
         let pending = client.submit(Request::Pause, applied)?;
         let outcome = timeout(Duration::from_secs(5), pending.outcome()).await?;
-        assert!(matches!(outcome, Outcome::Unknown { .. }), "{transport:?}");
+        assert!(
+            matches!(
+                outcome,
+                Outcome::Unknown {
+                    reason: UnknownReason::ResultLost
+                }
+            ),
+            "{transport:?}"
+        );
         timeout(Duration::from_secs(5), async {
             while client.connected() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -257,6 +263,36 @@ async fn goodbye_unknowns_pending_and_closes_session() -> color_eyre::Result<()>
             Some(SubmitError::Disconnected),
             "{transport:?}"
         );
+        server.await??;
+    }
+    Ok(())
+}
+
+/// 本地未提交与传输后失联在调用方可区分。
+#[tokio::test]
+async fn local_submit_failure_has_structured_unknown_reason() -> color_eyre::Result<()> {
+    for transport in TestTransport::ALL {
+        let (client_wire, server_wire) = transport.pair(64)?;
+        let server = tokio::spawn(async move {
+            let mut wire = server_wire;
+            accept_handshake(&mut wire).await?;
+            Ok::<(), color_eyre::Report>(())
+        });
+        let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
+        client.close();
+        timeout(Duration::from_secs(5), async {
+            while client.connected() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let outcome = client.queue_edit(mineral_protocol::QueueOp::Undo).await;
+        assert!(matches!(
+            outcome,
+            Outcome::Unknown {
+                reason: UnknownReason::NotSubmitted(SubmitError::Disconnected)
+            }
+        ));
         server.await??;
     }
     Ok(())
@@ -322,10 +358,52 @@ async fn handshake_rejection_is_structured() -> color_eyre::Result<()> {
                     Some(RejectReason::VersionMismatch),
                     "{transport:?}"
                 );
+                assert_eq!(
+                    rejected.server_version(),
+                    mineral_protocol::PkgVersion::current()
+                );
+                assert_eq!(
+                    rejected.client_version(),
+                    mineral_protocol::PkgVersion::current()
+                );
             }
             other => return Err(eyre!("{transport:?}: 期望结构化拒绝,实际 {other}")),
         }
         server.await??;
+    }
+    Ok(())
+}
+
+/// daemon 在握手期间断链以及返回非 Welcome 消息时分类不同。
+#[tokio::test]
+async fn handshake_protocol_failures_are_structured() -> color_eyre::Result<()> {
+    for transport in TestTransport::ALL {
+        for (reply, expected_closed) in [
+            (None, true),
+            (
+                Some(SessionMessage::Goodbye(
+                    mineral_protocol::CloseReason::ServerShutdown,
+                )),
+                false,
+            ),
+        ] {
+            let (client_wire, server_wire) = transport.pair(64)?;
+            let server = tokio::spawn(async move {
+                let mut wire = server_wire;
+                let _hello = wire.recv().await?.ok_or_else(|| eyre!("握手期间关闭"))?;
+                if let Some(reply) = reply {
+                    wire.send(MessageBatch::one(reply)).await?;
+                }
+                Ok::<(), color_eyre::Report>(())
+            });
+            let result = Client::from_wire(client_wire, "contract", ClientConfig::default()).await;
+            assert!(
+                (expected_closed && matches!(result.as_ref(), Err(ConnectError::HandshakeClosed)))
+                    || (!expected_closed
+                        && matches!(result.as_ref(), Err(ConnectError::MissingWelcome)))
+            );
+            server.await??;
+        }
     }
     Ok(())
 }

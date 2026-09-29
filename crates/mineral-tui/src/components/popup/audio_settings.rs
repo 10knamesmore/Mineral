@@ -65,8 +65,12 @@ impl AudioSettingsOverlay {
                 self.devices = Some(devices);
                 self.error = None;
             }
-            Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
-                mineral_log::warn!(target: "tui", detail, "audio device enumeration failed");
+            Outcome::Failed { detail, kind } => {
+                mineral_log::warn!(target: "tui", detail, ?kind, "audio device enumeration failed");
+                self.error = Some("Could not load output devices");
+            }
+            Outcome::Unknown { reason } => {
+                mineral_log::warn!(target: "tui", error = mineral_log::chain(&reason), "audio device enumeration unavailable");
                 self.error = Some("Could not load output devices");
             }
         }
@@ -81,8 +85,8 @@ impl AudioSettingsOverlay {
                 mineral_log::warn!(target: "tui", detail, "audio output switch failed");
                 Some("Could not switch output device")
             }
-            Outcome::Unknown { detail } => {
-                mineral_log::warn!(target: "tui", detail, "audio output switch result unavailable");
+            Outcome::Unknown { reason } => {
+                mineral_log::warn!(target: "tui", error = mineral_log::chain(reason), "audio output switch result unavailable");
                 Some("Output switch result unavailable")
             }
         };

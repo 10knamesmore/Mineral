@@ -39,7 +39,7 @@ pub struct QrcodePoll {
 ///
 /// # Return:
 ///   二维码 url + 轮询 key。
-pub async fn generate(transport: &Transport) -> color_eyre::Result<QrcodeGenerate> {
+pub async fn generate(transport: &Transport) -> crate::Result<QrcodeGenerate> {
     let data = transport.get_data(GENERATE_URL).await?;
     from_value(data)
 }
@@ -52,7 +52,7 @@ pub async fn generate(transport: &Transport) -> color_eyre::Result<QrcodeGenerat
 ///
 /// # Return:
 ///   登录状态。
-pub async fn poll(transport: &Transport, qrcode_key: &str) -> color_eyre::Result<QrcodePoll> {
+pub async fn poll(transport: &Transport, qrcode_key: &str) -> crate::Result<QrcodePoll> {
     let data = transport
         .get_data(&format!("{POLL_URL}?qrcode_key={qrcode_key}"))
         .await?;

@@ -1,6 +1,5 @@
 //! 歌曲元数据与艺人集合的事务批量写入。
 
-use color_eyre::eyre::WrapErr;
 use mineral_model::{MediaUrl, Song};
 use rustc_hash::FxHashMap;
 use sea_orm::sea_query::{self, Expr, Func, Iden, OnConflict};
@@ -14,25 +13,48 @@ const BATCH_ROWS: usize = 100;
 
 impl NamespaceStore {
     /// Replace one source's complete song projection, including absent fields and artists.
-    pub async fn replace_meta_batch(&self, songs: &[&Song]) -> color_eyre::Result<()> {
+    pub async fn replace_meta_batch(&self, songs: &[&Song]) -> crate::Result<()> {
         let Some(pool) = self.pool() else {
             return Ok(());
         };
         let namespace = self.namespace();
-        let transaction = pool.begin().await?;
+        let transaction = pool
+            .begin()
+            .await
+            .map_err(|source| crate::Error::Database {
+                operation: "开启来源元数据替换事务",
+                source,
+            })?;
         song_artists::Entity::delete_many()
             .filter(song_artists::Column::Namespace.eq(namespace))
             .exec(&transaction)
-            .await?;
+            .await
+            .map_err(|source| crate::Error::Record {
+                operation: "清空来源歌曲艺人",
+                record: namespace.to_owned(),
+                source,
+            })?;
         song_meta::Entity::delete_many()
             .filter(song_meta::Column::Namespace.eq(namespace))
             .exec(&transaction)
-            .await?;
+            .await
+            .map_err(|source| crate::Error::Record {
+                operation: "清空来源歌曲元数据",
+                record: namespace.to_owned(),
+                source,
+            })?;
         for batch in songs.chunks(BATCH_ROWS) {
             write_metadata(&transaction, namespace, batch).await?;
             replace_artists(&transaction, namespace, batch).await?;
         }
-        transaction.commit().await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|source| crate::Error::Record {
+                operation: "提交来源元数据替换事务",
+                record: namespace.to_owned(),
+                source,
+            })?;
         mineral_log::debug!(target: "persist", source = namespace, songs = songs.len(), "replaced source song metadata");
         Ok(())
     }
@@ -58,7 +80,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   成功返回 `Ok(())`;降级时同样 `Ok(())`。
-    pub async fn upsert_meta(&self, song: &Song) -> color_eyre::Result<()> {
+    pub async fn upsert_meta(&self, song: &Song) -> crate::Result<()> {
         self.upsert_meta_batch(&[song]).await
     }
 
@@ -72,20 +94,28 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   成功或禁用存储时返回 `Ok(())`；写入失败返回带来源上下文的错误。
-    pub async fn upsert_meta_batch(&self, songs: &[&Song]) -> color_eyre::Result<()> {
+    pub async fn upsert_meta_batch(&self, songs: &[&Song]) -> crate::Result<()> {
         let Some(pool) = self.pool().filter(|_| !songs.is_empty()) else {
             return Ok(());
         };
         let started = std::time::Instant::now();
         let ns = self.namespace();
-        let tx = pool.begin().await.wrap_err("开启批量元数据事务失败")?;
+        let tx = pool
+            .begin()
+            .await
+            .map_err(|source| crate::Error::Database {
+                operation: "开启批量元数据事务",
+                source,
+            })?;
         for batch in songs.chunks(BATCH_ROWS) {
             write_metadata(&tx, ns, batch).await?;
             replace_artists(&tx, ns, batch).await?;
         }
-        tx.commit()
-            .await
-            .wrap_err_with(|| format!("提交批量元数据事务失败 source={ns}"))?;
+        tx.commit().await.map_err(|source| crate::Error::Record {
+            operation: "提交批量元数据事务",
+            record: ns.to_owned(),
+            source,
+        })?;
         mineral_log::debug!(target: "persist", source = ns, songs = songs.len(),
             elapsed_ms = started.elapsed().as_millis(), "stored song metadata batch");
         Ok(())
@@ -101,7 +131,7 @@ async fn write_metadata(
     connection: &impl ConnectionTrait,
     ns: &str,
     songs: &[&Song],
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let models = songs
         .iter()
         .map(|song| {
@@ -112,17 +142,16 @@ async fn write_metadata(
                 alias: Set(song.alias.clone()),
                 album_id: Set(song.album.as_ref().map(|album| album.id.value().to_owned())),
                 album_name: Set(song.album.as_ref().map(|album| album.name.clone())),
-                duration_ms: Set(song
-                    .duration_ms
-                    .map(i64::try_from)
-                    .transpose()
-                    .wrap_err_with(|| {
-                        format!("歌曲时长不能存入 SQLite song={}", song.id.qualified())
-                    })?),
+                duration_ms: Set(song.duration_ms.map(i64::try_from).transpose().map_err(
+                    |source| crate::Error::Duration {
+                        song: song.id.qualified(),
+                        source,
+                    },
+                )?),
                 cover_url: Set(song.cover_url.as_ref().map(MediaUrl::to_string)),
             })
         })
-        .collect::<color_eyre::Result<Vec<_>>>()?;
+        .collect::<crate::Result<Vec<_>>>()?;
     let mut merge =
         OnConflict::columns([song_meta::Column::Namespace, song_meta::Column::SongValue]);
     merge.update_column(song_meta::Column::Name);
@@ -145,7 +174,11 @@ async fn write_metadata(
         .on_conflict(merge)
         .exec_without_returning(connection)
         .await
-        .wrap_err_with(|| format!("批量合并 song_meta 失败 source={ns}"))?;
+        .map_err(|source| crate::Error::Record {
+            operation: "批量合并 song_meta",
+            record: ns.to_owned(),
+            source,
+        })?;
     Ok(())
 }
 
@@ -154,7 +187,7 @@ async fn replace_artists(
     connection: &impl ConnectionTrait,
     ns: &str,
     songs: &[&Song],
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let mut replacements = FxHashMap::default();
     for &song in songs {
         if !song.artists.is_empty() {
@@ -169,7 +202,11 @@ async fn replace_artists(
         .filter(song_artists::Column::SongValue.is_in(replacements.keys().copied()))
         .exec(connection)
         .await
-        .wrap_err_with(|| format!("批量清空 song_artists 失败 source={ns}"))?;
+        .map_err(|source| crate::Error::Record {
+            operation: "批量清空 song_artists",
+            record: ns.to_owned(),
+            source,
+        })?;
     let mut artists = Vec::new();
     for (id, song) in replacements {
         for (index, artist) in song.artists.iter().enumerate() {
@@ -188,7 +225,11 @@ async fn replace_artists(
         song_artists::Entity::insert_many(artists.by_ref().take(BATCH_ROWS))
             .exec_without_returning(connection)
             .await
-            .wrap_err_with(|| format!("批量写入 song_artists 失败 source={ns}"))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "批量写入 song_artists",
+                record: ns.to_owned(),
+                source,
+            })?;
     }
     Ok(())
 }

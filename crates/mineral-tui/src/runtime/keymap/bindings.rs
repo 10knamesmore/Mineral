@@ -246,8 +246,7 @@ mod tests {
     use super::Keymap;
     use crate::runtime::action::{Action, ScrollStep, SeekDelta, SelectionMove, VolumeDelta};
 
-    /// 默认表的全部预期绑定(键字符串 → 动作),与重构前 `app.rs` 散落 match 逐键对齐。
-    /// 既是 `builtin_maps_every_known_key` 的断言源,也是快照 dump 的输入。
+    /// 默认键位与动作的完整对应表。
     fn expected_bindings() -> Vec<(&'static str, Action)> {
         vec![
             // ---- 全局(handle_key 直连段) ----

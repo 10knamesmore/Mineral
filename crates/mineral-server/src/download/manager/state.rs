@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use mineral_model::{BitRate, SongId};
 use mineral_protocol::{
-    DownloadId, DownloadStatus, DownloadSummary, DownloadWave, SongDownloadView,
+    DownloadFailure, DownloadId, DownloadStatus, DownloadSummary, DownloadWave, SongDownloadView,
 };
 use rustc_hash::FxHashMap;
 use tokio_util::sync::CancellationToken;
@@ -158,7 +158,7 @@ impl ManagerState {
         &mut self,
         id: &DownloadId,
         status: DownloadStatus,
-        failure: Option<String>,
+        failure: Option<DownloadFailure>,
     ) {
         let Some(row) = self.rows.get_mut(id) else {
             return;

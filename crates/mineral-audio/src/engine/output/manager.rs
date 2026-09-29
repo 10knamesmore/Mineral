@@ -72,12 +72,12 @@ impl Output {
     }
 
     /// 枚举 daemon 机器上的输出设备。
-    pub(crate) fn devices() -> color_eyre::Result<Vec<OutputDevice>> {
+    pub(crate) fn devices() -> crate::Result<Vec<OutputDevice>> {
         devices::list()
     }
 
     /// 目标流启动成功后才替换当前流；失败时保留当前输出和播放位置。
-    pub(crate) fn select(&mut self, target: OutputTarget) -> color_eyre::Result<()> {
+    pub(crate) fn select(&mut self, target: OutputTarget) -> crate::Result<()> {
         mineral_log::info!(target: "audio", selection = ?target, "opening audio output");
         let stream = DeviceStream::open(target.clone(), Arc::clone(&self.handoff))?;
         mineral_log::info!(target: "audio", device_id = %stream.info.device_id, device_name = %stream.info.device_name, sample_rate_hz = stream.info.sample_rate_hz, channels = stream.info.channels, sample_format = %stream.info.sample_format, "audio output selected");

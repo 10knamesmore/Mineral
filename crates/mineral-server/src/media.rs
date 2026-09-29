@@ -21,7 +21,7 @@ use crate::player::PlayerCore;
 ///
 /// # Return:
 ///   注册失败(如无 D-Bus session)返回 `Err`;调用方可据此降级(daemon 照常跑)。
-pub(crate) fn start(player: PlayerCore) -> color_eyre::Result<()> {
+pub(crate) fn start(player: PlayerCore) -> Result<(), mineral_media::Error> {
     let cmd_player = player.clone();
     let on_command: Arc<dyn Fn(MediaCommand) + Send + Sync> =
         Arc::new(move |cmd| handle_command(&cmd_player, cmd));
@@ -311,33 +311,41 @@ fn spawn_artwork_fetch(service: MediaService, cover: Option<MediaUrl>) {
     });
 }
 
+/// Cover retrieval failure on macOS.
+#[cfg(target_os = "macos")]
+#[derive(Debug, thiserror::Error)]
+enum CoverError {
+    /// HTTP request or response failed.
+    #[error("cover HTTP request failed")]
+    Http(#[from] reqwest::Error),
+
+    /// Local cover file could not be read.
+    #[error("local cover could not be read")]
+    File(#[from] std::io::Error),
+
+    /// The cover locator has no supported transport.
+    #[error("cover locator has no remote or local transport")]
+    UnsupportedLocator,
+}
+
 /// 取封面字节:远程走一次性 HTTP GET,本地直接读文件。
 #[cfg(target_os = "macos")]
-async fn load_cover_bytes(cover: &MediaUrl) -> color_eyre::Result<Vec<u8>> {
-    use color_eyre::eyre::{WrapErr, eyre};
-
+async fn load_cover_bytes(cover: &MediaUrl) -> Result<Vec<u8>, CoverError> {
     if let Some(remote) = cover.as_remote() {
-        let client = reqwest::Client::builder()
-            .build()
-            .wrap_err("构造封面 http client")?;
+        let client = reqwest::Client::builder().build()?;
         let bytes = client
             .get(remote.as_str())
             .send()
-            .await
-            .wrap_err("发起封面请求")?
-            .error_for_status()
-            .wrap_err("封面响应状态码非 2xx")?
+            .await?
+            .error_for_status()?
             .bytes()
-            .await
-            .wrap_err("读取封面字节")?;
+            .await?;
         return Ok(bytes.to_vec());
     }
     if let Some(path) = cover.as_local() {
-        return tokio::fs::read(path)
-            .await
-            .wrap_err_with(|| format!("读取本地封面 {}", path.display()));
+        return Ok(tokio::fs::read(path).await?);
     }
-    Err(eyre!("cover url 既非远程也非本地"))
+    Err(CoverError::UnsupportedLocator)
 }
 
 #[cfg(test)]

@@ -29,7 +29,7 @@ pub async fn search_albums(
     keyword: &str,
     page: u32,
     page_size: u32,
-) -> color_eyre::Result<PageResult<Album>> {
+) -> crate::Result<PageResult<Album>> {
     let data = transport
         .get_signed(
             SEARCH_URL,
@@ -71,7 +71,7 @@ pub async fn search_artists(
     keyword: &str,
     page: u32,
     page_size: u32,
-) -> color_eyre::Result<PageResult<Artist>> {
+) -> crate::Result<PageResult<Artist>> {
     let data = transport
         .get_signed(
             SEARCH_URL,

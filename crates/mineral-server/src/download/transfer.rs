@@ -8,15 +8,90 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use color_eyre::eyre::{WrapErr, eyre};
 use mineral_model::{BitRate, Song};
 use mineral_playback::{OpenOptions, PlaybackRegistry, PlaybackRequest};
-use mineral_protocol::DownloadId;
+use mineral_protocol::{DownloadFailure, DownloadId};
 use tokio_util::sync::CancellationToken;
 
 use super::environment::DownloadEnv;
 use super::partials::{owned_partial_path, remove_owned_partial};
 use crate::media_cache::library_relpath;
+
+/// Failure during a single provider-backed download attempt.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    /// No playback provider serves this source.
+    #[error("no playback provider for {0:?}")]
+    NoProvider(mineral_model::SourceKind),
+
+    /// Provider resolution or preparation failed.
+    #[error("download playback preparation failed")]
+    Playback(#[from] mineral_playback::Error),
+
+    /// The script rewrite did not provide a playable direct replacement.
+    #[error("download rewrite has no direct replacement")]
+    InvalidRewrite,
+
+    /// The attempt was stopped before committing the export.
+    #[error("download stopped")]
+    Stopped,
+
+    /// The reader reported more bytes than fit in the supplied buffer.
+    #[error("opened reader returned invalid byte count")]
+    InvalidReadCount,
+
+    /// The media reader failed.
+    #[error("download media read failed")]
+    Read(#[source] std::io::Error),
+
+    /// Filesystem operation failed at the indicated path.
+    #[error("download file operation failed at {path:?}")]
+    File {
+        /// File or directory being accessed.
+        path: PathBuf,
+
+        /// Original filesystem error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Writer worker terminated without a result.
+    #[error("download writer task failed")]
+    Writer(#[from] tokio::task::JoinError),
+
+    /// A byte or time count exceeded the representable size.
+    #[error("download byte or time count overflowed")]
+    Count(#[from] std::num::TryFromIntError),
+
+    /// The provider advertised more bytes than it delivered.
+    #[error("download truncated: {done} / {expected} bytes")]
+    Truncated {
+        /// Actual bytes received.
+        done: u64,
+
+        /// Minimum promised bytes.
+        expected: u64,
+    },
+
+    /// The permanent export root is not available.
+    #[error("download export directory is unavailable")]
+    Unavailable,
+}
+
+impl Error {
+    /// Categorizes the failed transfer for client-facing download state.
+    pub(crate) fn failure_kind(&self) -> DownloadFailure {
+        match self {
+            Self::NoProvider(_) | Self::Unavailable => DownloadFailure::Unavailable,
+            Self::Playback(_) => DownloadFailure::Preparation,
+            Self::Read(_) => DownloadFailure::Read,
+            Self::File { .. } => DownloadFailure::Storage,
+            Self::InvalidReadCount | Self::Truncated { .. } => DownloadFailure::InvalidMedia,
+            Self::InvalidRewrite => DownloadFailure::InvalidRewrite,
+            Self::Stopped | Self::Writer(_) | Self::Count(_) => DownloadFailure::Internal,
+        }
+    }
+}
 
 /// Callback shared by the async opener and blocking writer.
 type TransferReporter = Arc<dyn Fn(TransferUpdate) + Send + Sync>;
@@ -117,7 +192,7 @@ pub(crate) async fn download_song(
     attempt: DownloadAttempt<'_>,
     reporter: TransferReporter,
     speed_tick: Duration,
-) -> color_eyre::Result<DownloadOutcome> {
+) -> Result<DownloadOutcome, Error> {
     let DownloadEnv { music_dir, hooks } = *env;
     if crate::resolve::probe_export(music_dir, song, quality).is_some() {
         mineral_log::debug!(target: "download", song_id = song.id.as_str(), "已下载,跳过");
@@ -129,7 +204,7 @@ pub(crate) async fn download_song(
 
     let provider = playback
         .get(song.source())
-        .ok_or_else(|| eyre!("no playback provider for {:?}", song.source()))?;
+        .ok_or(Error::NoProvider(song.source()))?;
     let mut prepared = provider
         .resolve(
             PlaybackRequest::new(song.id.clone(), quality),
@@ -151,7 +226,7 @@ pub(crate) async fn download_song(
             let original_direct = prepared.direct_media().cloned();
             prepared =
                 crate::hook_bridge::rewrite_prepared(&song.id, original_direct.as_ref(), &spec)
-                    .ok_or_else(|| eyre!("download rewrite has no direct replacement"))?;
+                    .ok_or(Error::InvalidRewrite)?;
         }
         mineral_script::HookDecision::Skip { reason } => {
             mineral_log::info!(
@@ -180,7 +255,10 @@ pub(crate) async fn download_song(
     if let Some(parent) = export.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .wrap_err_with(|| format!("创建导出目录失败 {}", parent.display()))?;
+            .map_err(|source| Error::File {
+                path: parent.to_path_buf(),
+                source,
+            })?;
     }
     let part = owned_partial_path(&export, attempt.id);
     let reader = opened.into_reader();
@@ -204,8 +282,7 @@ pub(crate) async fn download_song(
             speed_tick,
         )
     })
-    .await
-    .map_err(|error| eyre!("download writer task: {error}"))?;
+    .await?;
     if let Err(error) = write_result {
         remove_owned_partial(&part).await;
         return Err(error);
@@ -239,7 +316,10 @@ pub(crate) async fn download_song(
         }
         Err(error) => {
             remove_owned_partial(&part).await;
-            Err(error).wrap_err_with(|| format!("commit download export {}", export.display()))
+            Err(Error::File {
+                path: export,
+                source: error,
+            })
         }
     }
 }
@@ -253,11 +333,13 @@ fn drain_opened(
     cancellation: &CancellationToken,
     reporter: &TransferReporter,
     speed_tick: Duration,
-) -> color_eyre::Result<()> {
+) -> Result<(), Error> {
     use std::io::{Read as _, Write as _};
 
-    let mut writer = std::fs::File::create(part)
-        .wrap_err_with(|| format!("create download part {}", part.display()))?;
+    let mut writer = std::fs::File::create(part).map_err(|source| Error::File {
+        path: part.to_path_buf(),
+        source,
+    })?;
     let mut buffer = vec![0u8; 64 * 1024];
     let mut done = 0u64;
     let mut ema = None::<u64>;
@@ -265,14 +347,15 @@ fn drain_opened(
     let mut window_bytes = 0u64;
     loop {
         ensure_not_cancelled(cancellation)?;
-        let read = reader.read(&mut buffer)?;
+        let read = reader.read(&mut buffer).map_err(Error::Read)?;
         if read == 0 {
             break;
         }
-        let bytes = buffer
-            .get(..read)
-            .ok_or_else(|| eyre!("opened reader returned invalid byte count"))?;
-        writer.write_all(bytes)?;
+        let bytes = buffer.get(..read).ok_or(Error::InvalidReadCount)?;
+        writer.write_all(bytes).map_err(|source| Error::File {
+            path: part.to_path_buf(),
+            source,
+        })?;
         done = done.saturating_add(u64::try_from(read)?);
         let elapsed = window_start.elapsed();
         if elapsed >= speed_tick {
@@ -292,7 +375,10 @@ fn drain_opened(
             window_bytes = done;
         }
     }
-    writer.flush()?;
+    writer.flush().map_err(|source| Error::File {
+        path: part.to_path_buf(),
+        source,
+    })?;
     reporter(TransferUpdate::Downloading {
         quality,
         bytes_done: done,
@@ -302,15 +388,15 @@ fn drain_opened(
     if let Some(expected) = byte_len
         && done < expected
     {
-        return Err(eyre!("download truncated: {done} / {expected} bytes"));
+        return Err(Error::Truncated { done, expected });
     }
     Ok(())
 }
 
 /// Fails an attempt after cooperative cancellation was requested.
-fn ensure_not_cancelled(cancellation: &CancellationToken) -> color_eyre::Result<()> {
+fn ensure_not_cancelled(cancellation: &CancellationToken) -> Result<(), Error> {
     if cancellation.is_cancelled() {
-        Err(eyre!("download stopped"))
+        Err(Error::Stopped)
     } else {
         Ok(())
     }
@@ -347,7 +433,7 @@ mod tests {
     /// Registers one fixed-URL test playback provider.
     fn playback(channel: UrlChannel) -> color_eyre::Result<PlaybackRegistry> {
         let provider: Arc<dyn PlaybackProvider> = Arc::new(channel);
-        PlaybackRegistry::new(vec![provider])
+        Ok(PlaybackRegistry::new(vec![provider])?)
     }
 
     /// Runs one transfer with an isolated identity and no-op progress reporter.
@@ -359,7 +445,7 @@ mod tests {
     ) -> color_eyre::Result<DownloadOutcome> {
         let id = DownloadId::new("test-download".to_owned());
         let cancellation = CancellationToken::new();
-        download_song(
+        Ok(download_song(
             playback,
             env,
             song,
@@ -371,7 +457,7 @@ mod tests {
             Arc::new(|_update| {}),
             /*speed_tick*/ Duration::from_millis(150),
         )
-        .await
+        .await?)
     }
 
     /// 回归:`download_song` 下完后**只**落永久导出目录,**不应**复制进 audio cache

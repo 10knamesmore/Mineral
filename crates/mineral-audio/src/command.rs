@@ -5,7 +5,7 @@ use mineral_playback::OpenedMedia;
 /// 投递给 engine 主循环的一条指令。
 pub(crate) enum AudioCommand {
     /// 枚举 daemon 所在机器的输出设备，结果仅返回请求者。
-    ListOutputs(tokio::sync::oneshot::Sender<color_eyre::Result<Vec<crate::OutputDevice>>>),
+    ListOutputs(tokio::sync::oneshot::Sender<crate::Result<Vec<crate::OutputDevice>>>),
 
     /// 切换输出设备；应答在新输出流启动成功或失败后发送。
     SelectOutput {
@@ -13,7 +13,7 @@ pub(crate) enum AudioCommand {
         target: crate::OutputTarget,
 
         /// 切换结论。
-        reply: tokio::sync::oneshot::Sender<color_eyre::Result<()>>,
+        reply: tokio::sync::oneshot::Sender<crate::Result<()>>,
     },
 
     /// Replaces current playback with already-opened media.

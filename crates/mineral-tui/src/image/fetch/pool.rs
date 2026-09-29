@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use color_eyre::eyre::eyre;
 use isahc::HttpClient;
 use isahc::config::Configurable;
 use mineral_config::{CoverConfig, CoverDecodePixelsConfig};
@@ -40,12 +39,11 @@ impl CoverFetcher {
         cfg: CoverConfig,
         cover_capacity: u64,
         store: Option<Arc<ClientStore>>,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self, isahc::Error> {
         let (tx, rx) = mpsc::unbounded_channel::<CoverRequest>();
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(*cfg.http_timeout_secs()))
-            .build()
-            .map_err(|e| eyre!("isahc client init failed: {e}"))?;
+            .build()?;
         // 磁盘缓存是优化项:store 不可用 / 目录解析失败不致命,降级成直连网络不缓存。
         let cache = Self::open_cache(store, cover_capacity).await;
         let ready = Arc::new(Mutex::new(Vec::<CoverCompletion>::new()));

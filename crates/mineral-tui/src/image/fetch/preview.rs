@@ -68,40 +68,42 @@ pub(super) async fn fetch_preview(
 
     let result = {
         let cfg = Arc::clone(cfg);
-        let preview = tokio::task::spawn_blocking(move || -> color_eyre::Result<PreviewResult> {
-            let sample = |image| {
-                if thumbnail {
-                    TerminalImage::thumbnail_preview(&image, pixels)
-                } else {
-                    TerminalImage::halfblock_preview(image, pixels, cells)
+        let preview = tokio::task::spawn_blocking(
+            move || -> Result<PreviewResult, crate::image::decode::Error> {
+                let sample = |image| {
+                    if thumbnail {
+                        TerminalImage::thumbnail_preview(&image, pixels)
+                    } else {
+                        TerminalImage::halfblock_preview(image, pixels, cells)
+                    }
+                };
+                if matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Jpeg)) {
+                    // JPEG 走低档位 IDCT 缩小解码,preview 很便宜;显示图仍需单独 decode,不带 full。
+                    let image = crate::image::decode::preview(&bytes, cells)?;
+                    let (preview, resident) = sample(image);
+                    return Ok(PreviewResult {
+                        preview,
+                        resident,
+                        full: None,
+                    });
                 }
-            };
-            if matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Jpeg)) {
-                // JPEG 走低档位 IDCT 缩小解码,preview 很便宜;显示图仍需单独 decode,不带 full。
-                let image = crate::image::decode::preview(&bytes, cells)?;
-                let (preview, resident) = sample(image);
-                return Ok(PreviewResult {
+                // 非 JPEG 源没有缩小解码能力,preview 本就要完整解码;一次解码同时产出
+                // 显示图(供 RAM LRU)与 preview 源,复用同次解码,避免后续 decode 再解一遍。
+                let image = crate::image::decode::display(&bytes, cfg.decode_pixels())?;
+                let palette = extract_palette(&image, cfg.kmeans());
+                let fingerprint = CoverFingerprint::of(&image);
+                let (preview, resident) = sample(image.clone());
+                Ok(PreviewResult {
                     preview,
                     resident,
-                    full: None,
-                });
-            }
-            // 非 JPEG 源没有缩小解码能力,preview 本就要完整解码;一次解码同时产出
-            // 显示图(供 RAM LRU)与 preview 源,复用同次解码,避免后续 decode 再解一遍。
-            let image = crate::image::decode::display(&bytes, cfg.decode_pixels())?;
-            let palette = extract_palette(&image, cfg.kmeans());
-            let fingerprint = CoverFingerprint::of(&image);
-            let (preview, resident) = sample(image.clone());
-            Ok(PreviewResult {
-                preview,
-                resident,
-                full: Some(PreviewFull {
-                    image: Arc::new(image),
-                    fingerprint,
-                    palette,
-                }),
-            })
-        })
+                    full: Some(PreviewFull {
+                        image: Arc::new(image),
+                        fingerprint,
+                        palette,
+                    }),
+                })
+            },
+        )
         .await;
         match preview {
             Ok(Ok(result)) => Some(result),
@@ -110,7 +112,6 @@ pub(super) async fn fetch_preview(
                 None
             }
             Err(error) => {
-                let error = color_eyre::Report::new(error);
                 mineral_log::warn!(target: "cover", url = %url, error = mineral_log::chain(&error), "preview task join failed");
                 None
             }

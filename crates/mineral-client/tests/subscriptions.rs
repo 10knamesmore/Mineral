@@ -297,6 +297,7 @@ async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
                     match event {
                         mineral_protocol::Event::ConfigChanged { .. } => config_seen = true,
                         mineral_protocol::Event::Toast { .. }
+                        | mineral_protocol::Event::Failure(_)
                         | mineral_protocol::Event::Card { .. }
                         | mineral_protocol::Event::PropertyChanged { .. }
                         | mineral_protocol::Event::TrackFinished { .. }
@@ -372,6 +373,14 @@ async fn downloads_detail_snapshot_and_delta() -> color_eyre::Result<()> {
                             failure: None,
                         },
                         DownloadDetailUpdate::Upsert(Box::new(row("d", DownloadStatus::Queued, 0))),
+                        DownloadDetailUpdate::Progress {
+                            id: DownloadId::new("d".to_owned()),
+                            status: DownloadStatus::Failed,
+                            bytes_done: 0,
+                            bytes_total: None,
+                            speed_bps: 0,
+                            failure: Some(mineral_protocol::DownloadFailure::Storage),
+                        },
                         DownloadDetailUpdate::Remove(DownloadId::new("b".to_owned())),
                     ],
                 }),
@@ -414,6 +423,11 @@ async fn downloads_detail_snapshot_and_delta() -> color_eyre::Result<()> {
             a.is_some_and(|row| row.bytes_done == 5_000 && row.speed_bps == 1_024),
             "{transport:?}: 进度增量应只改动态字段"
         );
+        let failed = rows.iter().find(|row| row.id.as_str() == "d");
+        assert!(failed.is_some_and(|row| {
+            row.status == DownloadStatus::Failed
+                && row.failure == Some(mineral_protocol::DownloadFailure::Storage)
+        }));
         server.await??;
     }
     Ok(())

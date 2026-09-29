@@ -149,7 +149,7 @@ pub struct OperationFailure {
     /// 失败类别(前端文案路由)。
     pub kind: FailureKind,
 
-    /// 人读诊断细节(日志 / 兜底展示;不作为稳定契约)。
+    /// 仅用于日志的诊断详情，不作为 UI 文案或稳定契约。
     pub detail: String,
 }
 
@@ -285,8 +285,8 @@ pub enum DownloadDetailUpdate {
         /// 平滑速度(字节/秒)。
         speed_bps: u64,
 
-        /// 失败链(仅失败态有值)。
-        failure: Option<String>,
+        /// 失败类别(仅失败态有值)。
+        failure: Option<crate::DownloadFailure>,
     },
 
     /// 移除(历史裁剪 / 收束)。
@@ -323,19 +323,19 @@ pub enum CloseReason {
 
     /// 协议违规(首帧不是 Hello、版本不匹配等)。
     Protocol {
-        /// 人读细节。
+        /// 仅用于日志的诊断详情，不作为 UI 文案。
         detail: String,
     },
 
     /// 背压或组装超限。
     Backpressure {
-        /// 人读细节。
+        /// 仅用于日志的诊断详情，不作为 UI 文案。
         detail: String,
     },
 
     /// 传输层断开。
     Transport {
-        /// 人读细节。
+        /// 仅用于日志的诊断详情，不作为 UI 文案。
         detail: String,
     },
 }

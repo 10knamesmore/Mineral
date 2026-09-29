@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use crate::DownloadOutcome;
 use crate::entity::downloads;
-use color_eyre::eyre::WrapErr;
 use mineral_model::{BitRate, SongId, SourceKind};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
@@ -17,9 +16,7 @@ impl StatsStore {
     ///
     /// # Return:
     ///   结构化三元组;quality / path 列异常的行跳过(数据是我方自己写的,不该有)。
-    pub async fn successful_downloads(
-        &self,
-    ) -> color_eyre::Result<Vec<(SongId, BitRate, PathBuf)>> {
+    pub async fn successful_downloads(&self) -> crate::Result<Vec<(SongId, BitRate, PathBuf)>> {
         let Some(pool) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -28,7 +25,10 @@ impl StatsStore {
             .filter(downloads::Column::Path.is_not_null())
             .all(pool)
             .await
-            .wrap_err("successful_downloads 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "successful_downloads 查询",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .filter_map(|r| {
@@ -58,7 +58,7 @@ mod tests {
         song_value: &str,
         outcome: DownloadOutcome,
         path: Option<&str>,
-    ) -> color_eyre::Result<()> {
+    ) -> crate::Result<()> {
         store
             .record_event(
                 1_000,

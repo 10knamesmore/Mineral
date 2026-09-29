@@ -12,6 +12,18 @@ const PROBE_ID: u32 = 299;
 /// 等待 Kitty 回执的上限。
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
+/// Kitty 共享内存探测失败。
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    /// 无法写入共享内存探针。
+    #[error("prepare Kitty probe")]
+    SharedMemory(#[from] super::shared_memory::Error),
+
+    /// 终端查询往返失败。
+    #[error("exchange Kitty probe")]
+    Exchange(#[from] crate::image::graphics::ExchangeError),
+}
+
 /// 探测终端是否能读取当前进程创建的 POSIX shared memory object。
 ///
 /// # Params:
@@ -32,7 +44,7 @@ pub(crate) fn probe_shared_memory(relay: TerminalRelay) -> bool {
 }
 
 /// 写入 1×1 RGBA 探针并等待对应回执。
-fn probe_result(relay: TerminalRelay) -> color_eyre::Result<bool> {
+fn probe_result(relay: TerminalRelay) -> Result<bool, Error> {
     let resource = SharedMemory::create(PROBE_ID, &[0, 0, 0, 255])?;
     let query = query_shared_memory(PROBE_ID, resource.name(), relay);
     let response = exchange(&query, PROBE_TIMEOUT, |buffer| {

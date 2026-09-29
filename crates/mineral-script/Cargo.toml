@@ -16,7 +16,7 @@ mineral-model    = { workspace = true }
 mineral-paths    = { workspace = true }
 mineral-protocol = { workspace = true }
 
-color-eyre     = { workspace = true }
+thiserror      = { workspace = true }
 derive-getters = { workspace = true }
 mlua           = { workspace = true }
 # workspace 统一声明只开 signal;sys.rs 取主机名需要 hostname(features 可加性合并)。
@@ -27,6 +27,7 @@ tokio          = { workspace = true }
 typed-builder  = { workspace = true }
 
 [dev-dependencies]
+color-eyre       = { workspace = true }
 mineral-test      = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest          = { workspace = true }

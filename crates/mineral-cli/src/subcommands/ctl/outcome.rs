@@ -3,7 +3,7 @@
 //! `skipped` 只可能由 CLI 产生(没有当前曲、时长未知、队列无变化),会话层看不到它;
 //! 失败类别则既可能是 daemon 给出的结构化类别,也可能是 CLI 本地判定。
 
-use mineral_client::operation::Outcome;
+use mineral_client::operation::{Outcome, UnknownReason};
 use mineral_protocol::FailureKind;
 
 /// 一条命令的结论态。
@@ -23,13 +23,13 @@ pub(super) enum State {
         /// 失败类别。
         reason: FailureReason,
 
-        /// daemon 给出的人读原因(CLI 判定时为空)。
+        /// CLI 本地生成的补充信息；daemon 诊断只记录日志。
         detail: Option<String>,
     },
 
     /// 结果未知:未提交 / 连接丢失 / 等状态超时。
     Unknown {
-        /// 人读原因。
+        /// CLI 根据未执行原因生成的人读说明。
         detail: String,
     },
 }
@@ -141,8 +141,8 @@ pub(super) fn state_from_outcome(outcome: Outcome<()>) -> State {
     match outcome {
         Outcome::Applied(()) => State::Applied,
         Outcome::Accepted(()) => State::Accepted,
-        Outcome::Failed { kind, detail } => failed_state(kind, detail),
-        Outcome::Unknown { detail } => unknown_state(detail),
+        Outcome::Failed { kind, detail } => failed_state(kind, &detail),
+        Outcome::Unknown { reason } => unknown_state(reason),
     }
 }
 
@@ -150,25 +150,33 @@ pub(super) fn state_from_outcome(outcome: Outcome<()>) -> State {
 ///
 /// # Params:
 ///   - `kind`: daemon 给出的失败类别
-///   - `detail`: daemon 给出的人读原因(空串不落成空 detail)
-pub(super) fn failed_state(kind: FailureKind, detail: String) -> State {
+///   - `detail`: daemon 的诊断信息(仅进入日志,不展示)。
+pub(super) fn failed_state(kind: FailureKind, detail: &str) -> State {
+    mineral_log::warn!(target: "cli", ?kind, detail = %detail, "daemon rejected ctl command");
     State::Failed {
         reason: FailureReason::Daemon(kind),
-        detail: (!detail.is_empty()).then_some(detail),
+        detail: None,
     }
 }
 
 /// 结果未知的结论态。
 ///
 /// # Params:
-///   - `detail`: 人读原因
-pub(super) fn unknown_state(detail: String) -> State {
-    State::Unknown { detail }
+///   - `reason`: client 给出的未提交或应答丢失分类。
+pub(super) fn unknown_state(reason: UnknownReason) -> State {
+    mineral_log::warn!(target: "cli", ?reason, "ctl outcome unknown");
+    let detail = match reason {
+        UnknownReason::NotSubmitted(_) => "命令未提交到 daemon",
+        UnknownReason::ResultLost => "无法确认 daemon 是否执行了命令",
+    };
+    State::Unknown {
+        detail: detail.to_owned(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use mineral_client::operation::Outcome;
+    use mineral_client::operation::{Outcome, SubmitError, UnknownReason};
     use mineral_protocol::FailureKind;
 
     use super::{FailureReason, SkipReason, State, state_from_outcome};
@@ -185,32 +193,17 @@ mod tests {
             }),
             State::Failed {
                 reason: FailureReason::Daemon(FailureKind::Invalid),
-                detail: Some("空队列".to_owned()),
-            }
-        );
-        assert_eq!(
-            state_from_outcome(Outcome::Unknown {
-                detail: "未提交".to_owned(),
-            }),
-            State::Unknown {
-                detail: "未提交".to_owned(),
-            }
-        );
-    }
-
-    /// 空 detail 不落成空串,免得人读输出尾随一个破折号。
-    #[test]
-    fn empty_failure_detail_is_dropped() {
-        assert_eq!(
-            state_from_outcome(Outcome::Failed {
-                kind: FailureKind::Internal,
-                detail: String::new(),
-            }),
-            State::Failed {
-                reason: FailureReason::Daemon(FailureKind::Internal),
                 detail: None,
             }
         );
+        let unknown = state_from_outcome(Outcome::Unknown {
+            reason: UnknownReason::NotSubmitted(SubmitError::Disconnected),
+        });
+        assert!(matches!(unknown, State::Unknown { .. }));
+        let lost = state_from_outcome(Outcome::Unknown {
+            reason: UnknownReason::ResultLost,
+        });
+        assert!(matches!(lost, State::Unknown { .. }));
     }
 
     /// 只有成功与跳过算成功;失败与未知都不是。

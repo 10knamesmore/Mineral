@@ -2,6 +2,7 @@
 //!
 //! 公共出口:
 //! - [`NeteaseChannel`] —— [`mineral_channel_core::MusicChannel`] 的具体实现
+//! - [`Error`] / [`Result`] —— 网易云请求与凭证的结构化错误出口
 //! - [`config::NeteaseConfig`] —— 客户端构造参数
 //!
 //! 模块架构(自底向上):
@@ -42,6 +43,7 @@ pub mod credential;
 pub mod crypto;
 pub mod device;
 mod error;
+pub use error::{Error, Result};
 mod playlist;
 pub mod transport;
 pub mod wire;

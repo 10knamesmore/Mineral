@@ -30,7 +30,7 @@ impl App {
 
     /// 同步主事件循环:绘制 → 等事件 → 每帧间隔拉数据 + 推进动画/频谱
     /// (节奏由配置 `animation.frame_tick_ms` 决定,默认 ~60fps)。
-    pub fn run(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
+    pub fn run(&mut self, tui: &mut Tui) -> crate::Result<()> {
         // 启动时先灌一次镜像(订阅已在连接后建立,首帧通常已到达)。
         self.sync_from_backend();
 

@@ -277,7 +277,7 @@ impl ScriptSender {
             reply,
         }) && let ScriptMsg::Action { reply, .. } = *failed
         {
-            let _ = reply.send(ActionOutcome::Failed("脚本未启用或线程已退出".to_owned()));
+            let _ = reply.send(ActionOutcome::Failed(crate::Error::Unavailable));
         }
         rx
     }
@@ -291,18 +291,18 @@ impl ScriptSender {
     ///   - `ctx`: 模板作用的实体
     ///
     /// # Return:
-    ///   oneshot 接收端;`await` 得到剪贴板文本或人读错误。
+    ///   oneshot 接收端;`await` 得到剪贴板文本或结构化脚本错误。
     #[must_use]
     pub fn render_copy_template(
         &self,
         index: usize,
         ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> tokio::sync::oneshot::Receiver<Result<String, String>> {
+    ) -> tokio::sync::oneshot::Receiver<crate::Result<String>> {
         let (reply, rx) = tokio::sync::oneshot::channel();
         if let Err(failed) = self.try_send(ScriptMsg::RenderCopyTemplate { index, ctx, reply })
             && let ScriptMsg::RenderCopyTemplate { reply, .. } = *failed
         {
-            let _ = reply.send(Err("脚本未启用或线程已退出".to_owned()));
+            let _ = reply.send(Err(crate::Error::Unavailable));
         }
         rx
     }
@@ -318,7 +318,7 @@ impl ScriptSender {
     ///   - `selected`: 光标下标(0-based),无则 `None`
     ///
     /// # Return:
-    ///   oneshot 接收端;`await` 得到新顺序的 id 序列或人读错误。
+    ///   oneshot 接收端;`await` 得到新顺序的 id 序列或结构化脚本错误。
     #[must_use]
     pub fn queue_transform(
         &self,
@@ -326,7 +326,7 @@ impl ScriptSender {
         queue: Vec<mineral_model::Song>,
         current: usize,
         selected: Option<usize>,
-    ) -> tokio::sync::oneshot::Receiver<Result<Vec<mineral_model::SongId>, String>> {
+    ) -> tokio::sync::oneshot::Receiver<crate::Result<Vec<mineral_model::SongId>>> {
         let (reply, rx) = tokio::sync::oneshot::channel();
         if let Err(failed) = self.try_send(ScriptMsg::QueueTransform {
             index,
@@ -336,7 +336,7 @@ impl ScriptSender {
             reply,
         }) && let ScriptMsg::QueueTransform { reply, .. } = *failed
         {
-            let _ = reply.send(Err("脚本未启用或线程已退出".to_owned()));
+            let _ = reply.send(Err(crate::Error::Unavailable));
         }
         rx
     }

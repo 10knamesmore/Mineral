@@ -75,6 +75,9 @@ fn netease_config() -> NeteaseConfig {
 use mineral_model::BitRate;
 use serde_json::json;
 
+/// 一项联调结果，失败时保留完整诊断和源错误链。
+type ProbeResult = (String, color_eyre::Result<String>);
+
 /// 凭证来源,用于决定 section 3/4 的行为。
 enum CredLevel {
     /// 本地 netease.json,带 uid。
@@ -130,7 +133,7 @@ async fn main() -> color_eyre::Result<()> {
     let has_cookie = !matches!(cred_level, CredLevel::Anonymous);
     let has_uid = matches!(cred_level, CredLevel::StoredJson);
 
-    let mut report: Vec<(String, std::result::Result<String, String>)> = Vec::new();
+    let mut report = Vec::<ProbeResult>::new();
 
     // ---------------- 1. 无登录联调 ----------------
     println!("=== 1. 无登录联调 ===");
@@ -209,7 +212,7 @@ async fn main() -> color_eyre::Result<()> {
             first
         }
         Err(e) => {
-            report.push(("search_songs".into(), Err(e.to_string())));
+            report.push(("search_songs".into(), Err(e.into())));
             print_last(&report);
             None
         }
@@ -382,10 +385,7 @@ async fn main() -> color_eyre::Result<()> {
 }
 
 /// artist 只读三连:搜索 → 详情(简介 + 热门曲)→ 专辑列表,全部匿名可用。
-async fn run_artist_readonly(
-    ch: &NeteaseChannel,
-    report: &mut Vec<(String, Result<String, String>)>,
-) {
+async fn run_artist_readonly(ch: &NeteaseChannel, report: &mut Vec<ProbeResult>) {
     let artist_ref = match ch.search_artists("Beyond", Page::new(0, 5)).await {
         Ok(hits) => {
             let artists = hits.items;
@@ -405,7 +405,7 @@ async fn run_artist_readonly(
             first
         }
         Err(e) => {
-            report.push(("search_artists".into(), Err(e.to_string())));
+            report.push(("search_artists".into(), Err(e.into())));
             print_last(report);
             None
         }
@@ -452,7 +452,7 @@ async fn run_artist_readonly(
 async fn run_section6_playlist_write(
     ch: &NeteaseChannel,
     has_cookie: bool,
-    report: &mut Vec<(String, Result<String, String>)>,
+    report: &mut Vec<ProbeResult>,
 ) {
     if !has_cookie || std::env::var("NETEASE_WRITE_TEST").as_deref() != Ok("1") {
         println!("(跳过:写操作需登录 cookie + NETEASE_WRITE_TEST=1 双重 opt-in)");
@@ -470,7 +470,7 @@ async fn run_section6_playlist_write(
             p
         }
         Err(e) => {
-            report.push(("create_playlist".into(), Err(e.to_string())));
+            report.push(("create_playlist".into(), Err(e.into())));
             print_last(report);
             return;
         }
@@ -519,7 +519,7 @@ async fn run_section6_playlist_write(
                 Err(mineral_channel_core::Error::Api { code: 502, .. }) => {
                     Ok("dup correctly rejected with 502".into())
                 }
-                Err(e) => color_eyre::eyre::bail!("expected Api 502, got: {e}"),
+                Err(e) => Err(e.into()),
                 Ok(()) => color_eyre::eyre::bail!("expected Api 502, got Ok"),
             }
         })
@@ -569,7 +569,7 @@ const PROBE_PUBLIC_PLAYLIST_ID: &str = "19723756";
 ///   - `report`: 汇总表
 async fn probe_limit_zero(
     ch: &NeteaseChannel,
-    report: &mut Vec<(String, std::result::Result<String, String>)>,
+    report: &mut Vec<ProbeResult>,
 ) -> color_eyre::Result<()> {
     for limit in ["0", "1000"] {
         let mut p = serde_json::Map::new();
@@ -591,7 +591,7 @@ async fn probe_limit_zero(
         if code != 200 {
             let msg = format!("code={code}");
             println!("[✗] {label:<20}  {msg}");
-            report.push((label, Err(msg)));
+            report.push((label, Err(color_eyre::eyre::eyre!("{msg}"))));
             continue;
         }
         let playlist = body.get("playlist");
@@ -626,7 +626,7 @@ async fn probe_limit_zero(
 async fn run_section4_endserenading(
     ch: &NeteaseChannel,
     has_uid: bool,
-    report: &mut Vec<(String, std::result::Result<String, String>)>,
+    report: &mut Vec<ProbeResult>,
 ) -> color_eyre::Result<()> {
     if !has_uid {
         println!("(跳过:需登录凭证——Endserenading 是私有歌单)");
@@ -652,7 +652,10 @@ async fn run_section4_endserenading(
     if code != 200 {
         let msg = format!("code={code}, body={}", truncate(&body.to_string()));
         println!("[✗] Endserenading: playlist_detail_v6  {msg}");
-        report.push(("Endserenading: playlist_detail_v6".into(), Err(msg)));
+        report.push((
+            "Endserenading: playlist_detail_v6".into(),
+            Err(color_eyre::eyre::eyre!("{msg}")),
+        ));
         return Ok(());
     }
     println!("\n--- playlist detail 原始 JSON ---");
@@ -705,7 +708,10 @@ async fn run_section4_endserenading(
     if code != 200 {
         let msg = format!("code={code}, body={}", truncate(&body.to_string()));
         println!("[✗] Endserenading: song_detail_v3  {msg}");
-        report.push(("Endserenading: song_detail_v3".into(), Err(msg)));
+        report.push((
+            "Endserenading: song_detail_v3".into(),
+            Err(color_eyre::eyre::eyre!("{msg}")),
+        ));
         return Ok(());
     }
     println!("\n--- 第一首 song detail 原始 JSON ---");
@@ -728,10 +734,10 @@ async fn run_section4_endserenading(
 async fn run(
     name: &str,
     fut: impl std::future::Future<Output = color_eyre::Result<String>>,
-) -> (String, std::result::Result<String, String>) {
+) -> ProbeResult {
     print!("[ ] {name} ... ");
     std::io::stdout().flush().ok();
-    let r = fut.await.map_err(|e| e.to_string());
+    let r = fut.await;
     match &r {
         Ok(d) => println!("\r[✓] {name:<35}  {d}"),
         Err(e) => println!("\r[✗] {name:<35}  {e}"),
@@ -740,7 +746,7 @@ async fn run(
 }
 
 /// 把 report 末尾一条结果按统一格式重打到 stdout(用于离线/失败汇总后的回放)。
-fn print_last(report: &[(String, std::result::Result<String, String>)]) {
+fn print_last(report: &[ProbeResult]) {
     if let Some((name, r)) = report.last() {
         match r {
             Ok(d) => println!("[✓] {name:<35}  {d}"),

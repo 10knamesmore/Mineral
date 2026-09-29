@@ -282,7 +282,7 @@ mod tests {
 
     /// 开一个启用态 MediaCache(缓存文件落 `dir`,索引落 `persist`)。
     async fn open_cache(persist: &ServerStore, dir: PathBuf) -> color_eyre::Result<MediaCache> {
-        MediaCache::open(persist, dir, 1_000_000).await
+        Ok(MediaCache::open(persist, dir, 1_000_000).await?)
     }
 
     /// Local identities and explicit original files bypass copies, including stored favorites.
@@ -353,10 +353,8 @@ mod tests {
     ) -> color_eyre::Result<()> {
         let src = tmp_dir.join(format!("cap-{}-{}.part", s.id.value(), quality.as_str()));
         tokio::fs::write(&src, bytes).await?;
-        cache
-            .put_played(s, quality, Some(format), &src)
-            .await
-            .map(drop)
+        cache.put_played(s, quality, Some(format), &src).await?;
+        Ok(())
     }
 
     /// 只有 cache 命中(无下载导出)→ 返回缓存文件路径。

@@ -122,11 +122,13 @@ impl App {
                 }
             }
             Completion::PlayQueue(outcome) => match outcome {
-                // Applied 只承载成功;业务失败在 client 侧已归一 `Failed`(见
-                // `Client::play_queue` 的载荷译码)。
-                Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
-                    self.notifications
-                        .flash(tinted_text_item(detail, TextTint::Error));
+                // Applied 只承载成功;业务失败在 client 侧已归一 `Failed`。
+                failure @ (Outcome::Failed { .. } | Outcome::Unknown { .. }) => {
+                    log_completion_failure(&failure, "play queue failed");
+                    self.notifications.flash(tinted_text_item(
+                        "Could not play queue".to_owned(),
+                        TextTint::Error,
+                    ));
                 }
                 Outcome::Applied(_) | Outcome::Accepted(_) => {}
             },
@@ -138,14 +140,17 @@ impl App {
                         TextTint::Error,
                     ));
                 }
-                Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
-                    self.notifications
-                        .flash(tinted_text_item(detail, TextTint::Error));
+                failure @ (Outcome::Failed { .. } | Outcome::Unknown { .. }) => {
+                    log_completion_failure(&failure, "queue edit failed");
+                    self.notifications.flash(tinted_text_item(
+                        "Could not change queue".to_owned(),
+                        TextTint::Error,
+                    ));
                 }
                 Outcome::Applied(_) | Outcome::Accepted(_) => {}
             },
             Completion::ScriptAction { name, outcome } => {
-                if let Some(message) = completion_failure(&outcome) {
+                if let Some(message) = completion_failure(&outcome, "Action failed") {
                     self.notifications.flash(tinted_text_item(
                         format!("{name}: {message}"),
                         TextTint::Error,
@@ -154,13 +159,20 @@ impl App {
             }
             Completion::CopyTemplate(outcome) => match outcome {
                 Outcome::Applied(Ok(text)) => self.copy_to_clipboard(&text),
-                Outcome::Applied(Err(message)) => {
+                Outcome::Applied(Err(error)) => {
+                    mineral_log::warn!(target: "tui", error = mineral_log::chain(&error), "copy template failed");
+                    let message = match error {
+                        mineral_protocol::CopyTextFailure::ScriptDisabled => "Scripts are disabled",
+                        mineral_protocol::CopyTextFailure::ScriptThreadExited
+                        | mineral_protocol::CopyTextFailure::CallbackFailed { .. } => "复制失败",
+                    };
                     self.notifications
-                        .flash(tinted_text_item(message, TextTint::Error));
+                        .flash(tinted_text_item(message.to_owned(), TextTint::Error));
                 }
-                Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
+                failure @ (Outcome::Failed { .. } | Outcome::Unknown { .. }) => {
+                    log_completion_failure(&failure, "copy template request failed");
                     self.notifications
-                        .flash(tinted_text_item(detail, TextTint::Error));
+                        .flash(tinted_text_item("复制失败".to_owned(), TextTint::Error));
                 }
                 Outcome::Accepted(_) => {
                     self.notifications
@@ -169,21 +181,19 @@ impl App {
             },
             Completion::Love { song_id, outcome } => {
                 // 服务端结论为准:失败提示;成功时订阅刷新会校正乐观值。
-                if let Outcome::Failed { detail, .. } | Outcome::Unknown { detail } = outcome {
-                    mineral_log::warn!(
-                        target: "tui",
-                        song_id = song_id.as_str(),
-                        detail,
-                        "喜欢切换未成功"
-                    );
-                    self.notifications
-                        .flash(tinted_text_item(detail, TextTint::Error));
+                if let failure @ (Outcome::Failed { .. } | Outcome::Unknown { .. }) = outcome {
+                    log_completion_failure(&failure, "喜欢切换未成功");
+                    mineral_log::warn!(target: "tui", song_id = song_id.as_str(), "喜欢切换未成功");
+                    self.notifications.flash(tinted_text_item(
+                        "Could not update favorite".to_owned(),
+                        TextTint::Error,
+                    ));
                 }
             }
             Completion::StopDownload(outcome) => {
-                if let Some(message) = completion_failure(&outcome) {
+                if let Some(message) = completion_failure(&outcome, "Could not stop download") {
                     self.notifications
-                        .flash(tinted_text_item(message, TextTint::Error));
+                        .flash(tinted_text_item(message.to_owned(), TextTint::Error));
                 }
             }
             Completion::ScriptBinds(binds) => self.apply_script_binds(&binds),
@@ -191,12 +201,27 @@ impl App {
     }
 }
 
-/// 完成结论 → 失败文案(`Applied` / `Accepted` 为 `None`)。
-fn completion_failure<T>(outcome: &Outcome<T>) -> Option<String> {
+/// 完成结论 → 前端失败文案(`Applied` / `Accepted` 为 `None`)。
+fn completion_failure<T>(outcome: &Outcome<T>, message: &'static str) -> Option<&'static str> {
     match outcome {
-        Outcome::Failed { detail, .. } => Some(detail.clone()),
-        Outcome::Unknown { detail } => Some(detail.clone()),
+        failure @ (Outcome::Failed { .. } | Outcome::Unknown { .. }) => {
+            log_completion_failure(failure, "operation failed");
+            Some(message)
+        }
         Outcome::Applied(_) | Outcome::Accepted(_) => None,
+    }
+}
+
+/// 记录操作类别及 daemon 诊断，不把内部文本作为 UI 文案。
+fn log_completion_failure<T>(outcome: &Outcome<T>, operation: &'static str) {
+    match outcome {
+        Outcome::Failed { kind, detail } => {
+            mineral_log::warn!(target: "tui", operation, ?kind, detail, "operation failed");
+        }
+        Outcome::Unknown { reason } => {
+            mineral_log::warn!(target: "tui", operation, error = mineral_log::chain(reason), "operation result unavailable");
+        }
+        Outcome::Applied(_) | Outcome::Accepted(_) => {}
     }
 }
 

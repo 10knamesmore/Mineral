@@ -13,6 +13,22 @@ use crate::hook_bridge::StreamAvailability;
 use crate::playback_instance::PlaybackSlot;
 use crate::player::PlayerCore;
 
+/// Failure to resolve a playable source for one song.
+#[derive(Debug, thiserror::Error)]
+enum ResolveError {
+    /// No provider is registered for this source.
+    #[error("no playback provider for {0:?}")]
+    NoProvider(mineral_model::SourceKind),
+
+    /// The active playback attempt was cancelled.
+    #[error("playback resolve cancelled")]
+    Cancelled,
+
+    /// The provider failed to resolve the playback request.
+    #[error("playback provider resolve failed")]
+    Provider(#[from] mineral_playback::Error),
+}
+
 /// Current or gapless-prefetch ownership slot.
 #[derive(Clone, Copy)]
 enum PlaybackRole {
@@ -350,7 +366,7 @@ async fn resolve(
     song: &Song,
     slot: &PlaybackSlot,
     local_hit: Option<crate::resolve::LocalMediaHit>,
-) -> color_eyre::Result<ResolvedPlan> {
+) -> Result<ResolvedPlan, ResolveError> {
     let local_hit = local_hit.or_else(|| {
         crate::resolve::resolve_local(
             player.media_cache(),
@@ -371,12 +387,12 @@ async fn resolve(
     let provider = player
         .playback()
         .get(song.source())
-        .ok_or_else(|| color_eyre::eyre::eyre!("no playback provider for {:?}", song.source()))?;
+        .ok_or(ResolveError::NoProvider(song.source()))?;
     let request = PlaybackRequest::new(song.id.clone(), player.playback_quality());
     let prepared = tokio::select! {
         biased;
         () = slot.cancellation.cancelled() => {
-            return Err(color_eyre::eyre::eyre!("playback resolve cancelled"));
+            return Err(ResolveError::Cancelled);
         }
         result = provider.resolve(request, slot.cancellation.child_token()) => result?,
     };

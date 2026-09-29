@@ -2,8 +2,6 @@
 
 use std::path::Path;
 
-use color_eyre::eyre::WrapErr;
-
 /// 为入库文件选不撞名的相对路径并把 `src` move 过去,返回 `(relpath, bytes)`。
 /// 同 key 复用 `existing`(原地覆盖);否则 `<subdir>/<file_name>`,撞盘则追加 ` (N)`。
 ///
@@ -22,27 +20,36 @@ pub(super) fn place_file(
     file_name: &str,
     src: &Path,
     existing: Option<String>,
-) -> color_eyre::Result<(String, u64)> {
+) -> crate::Result<(String, u64)> {
     let rel = match existing {
         Some(r) => r,
         None => dedup_rel(root, subdir, file_name),
     };
     let dst = root.join(&rel);
     if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("创建缓存子目录失败 dir={}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| crate::Error::File {
+            operation: "create cache directory",
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     if std::fs::rename(src, &dst).is_err() {
         // 跨分区 rename 失败 → copy + 删源(copy 暴露真实错误)。
-        std::fs::copy(src, &dst).wrap_err_with(|| {
-            format!("copy 入库失败 src={} dst={}", src.display(), dst.display())
+        std::fs::copy(src, &dst).map_err(|source| crate::Error::Copy {
+            from: src.to_path_buf(),
+            to: dst.clone(),
+            source,
         })?;
         drop(std::fs::remove_file(src));
     }
     // 刚落盘就 stat 不到 = 真实 IO 异常,冒泡而非把 0 当字节数记进索引(容量核算会失真)。
     let bytes = std::fs::metadata(&dst)
         .map(|m| m.len())
-        .wrap_err_with(|| format!("stat 入库文件失败 path={}", dst.display()))?;
+        .map_err(|source| crate::Error::File {
+            operation: "stat cached file",
+            path: dst.clone(),
+            source,
+        })?;
     Ok((rel, bytes))
 }
 
@@ -64,18 +71,24 @@ pub(super) fn write_bytes_file(
     file_name: &str,
     data: &[u8],
     existing: Option<String>,
-) -> color_eyre::Result<(String, u64)> {
+) -> crate::Result<(String, u64)> {
     let rel = match existing {
         Some(r) => r,
         None => dedup_rel(root, subdir, file_name),
     };
     let dst = root.join(&rel);
     if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("创建缓存子目录失败 dir={}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| crate::Error::File {
+            operation: "create cache directory",
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
-    std::fs::write(&dst, data)
-        .wrap_err_with(|| format!("写缓存文件失败 path={}", dst.display()))?;
+    std::fs::write(&dst, data).map_err(|source| crate::Error::File {
+        operation: "write cached file",
+        path: dst.clone(),
+        source,
+    })?;
     Ok((rel, u64::try_from(data.len())?))
 }
 

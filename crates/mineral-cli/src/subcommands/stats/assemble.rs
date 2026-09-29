@@ -23,7 +23,7 @@ pub async fn stats_report(
     store: &StatsStore,
     range: Range<i64>,
     opts: &ReportOptions,
-) -> color_eyre::Result<StatsReport> {
+) -> mineral_stats::Result<StatsReport> {
     Ok(combine(raw_report(store, range, opts).await?))
 }
 
@@ -32,7 +32,7 @@ async fn raw_report(
     store: &StatsStore,
     range: Range<i64>,
     opts: &ReportOptions,
-) -> color_eyre::Result<RawReport> {
+) -> mineral_stats::Result<RawReport> {
     Ok(RawReport {
         totals: store.totals(range.clone()).await?,
         top_songs: store.top_songs(range.clone(), TopBy::Plays, opts).await?,
@@ -113,7 +113,7 @@ pub async fn top_entries(
     range: Range<i64>,
     by: TopBy,
     opts: &ReportOptions,
-) -> color_eyre::Result<Vec<NamedEntry>> {
+) -> mineral_stats::Result<Vec<NamedEntry>> {
     let out = match category {
         TopCategory::Songs => store
             .top_songs(range, by, opts)

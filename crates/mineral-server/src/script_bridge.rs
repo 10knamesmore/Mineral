@@ -22,6 +22,26 @@ use tokio_util::sync::CancellationToken;
 
 use crate::player::PlayerCore;
 
+/// A script query cannot be served by the currently registered sources.
+#[derive(Debug, thiserror::Error)]
+enum QueryError {
+    /// Playback provider is absent for the requested source.
+    #[error("no playback provider for source {0:?}")]
+    NoProvider(mineral_model::SourceKind),
+
+    /// Catalog channel is absent for the requested source.
+    #[error("no channel for source {0:?}")]
+    NoChannel(mineral_model::SourceKind),
+
+    /// Provider resolved media without a direct URL.
+    #[error("{0} has no direct media capability")]
+    NoDirectMedia(SongId),
+
+    /// Script child-process concurrency limit was reached.
+    #[error("spawn concurrency limit reached: {0}")]
+    SpawnLimit(usize),
+}
+
 /// daemon 入口(main)装配、`serve` 层消费的脚本部件包。
 ///
 /// `vm` 为 `None` 表示无用户脚本(文件缺失 / eval 失败已降级),此时只有
@@ -323,10 +343,15 @@ impl SpawnTable {
     }
 }
 
-/// 一次查询失败的统一收口:回投 `Error`(脚本回调收 `(nil, err)`)。
-fn resolve_err(player: &PlayerCore, query: QueryId, e: &color_eyre::Report) {
+/// 把原始查询错误回投脚本线程(回调边界再渲染诊断)。
+fn resolve_err(
+    player: &PlayerCore,
+    query: QueryId,
+    error: impl std::error::Error + Send + Sync + 'static,
+) {
+    mineral_log::warn!(target: "script", error = mineral_log::chain(&error), "script query failed");
     if let Some(sender) = player.script_sender() {
-        sender.resolve(query, ResolveValue::Error(mineral_log::chain(e)));
+        sender.resolve(query, ResolveValue::Error(Box::new(error)));
     }
 }
 
@@ -340,11 +365,8 @@ fn resolve_ok(player: &PlayerCore, query: QueryId, value: ResolveValue) {
 /// Resolves `library.song_url` and returns the provider's direct media capability.
 fn apply_library_song_url(player: &PlayerCore, song: SongId, query: QueryId) {
     let Some(provider) = player.playback().get(song.namespace()) else {
-        let e = color_eyre::eyre::eyre!(
-            "no playback provider for source {}",
-            song.namespace().name()
-        );
-        resolve_err(player, query, &e);
+        let error = QueryError::NoProvider(song.namespace());
+        resolve_err(player, query, error);
         return;
     };
     let player = player.clone();
@@ -362,15 +384,12 @@ fn apply_library_song_url(player: &PlayerCore, song: SongId, query: QueryId) {
                     },
                 ),
                 None => {
-                    let e = color_eyre::eyre::eyre!(
-                        "{} has no direct media capability",
-                        song.qualified()
-                    );
-                    resolve_err(&player, query, &e);
+                    let error = QueryError::NoDirectMedia(song.clone());
+                    resolve_err(&player, query, error);
                 }
             },
             Err(e) => {
-                resolve_err(&player, query, &e);
+                resolve_err(&player, query, e);
             }
         }
     });
@@ -398,18 +417,18 @@ async fn resolve_search(
     match source {
         Some(source) => {
             let Some(channel) = player.channel_for(source).cloned() else {
-                let e = color_eyre::eyre::eyre!("no channel for source {}", source.name());
-                resolve_err(player, query, &e);
+                let error = QueryError::NoChannel(source);
+                resolve_err(player, query, error);
                 return;
             };
             match channel.search_songs(&term, page).await {
                 Ok(hits) => {
-                    record_script_search(player, &term, source, page_no, Ok(hits.items.len()));
+                    record_script_search(player, &term, source, page_no, Some(hits.items.len()));
                     resolve_ok(player, query, ResolveValue::Songs(hits.items));
                 }
                 Err(e) => {
-                    record_script_search(player, &term, source, page_no, Err(()));
-                    resolve_err(player, query, &color_eyre::eyre::eyre!("{e}"));
+                    record_script_search(player, &term, source, page_no, None);
+                    resolve_err(player, query, e);
                 }
             }
         }
@@ -423,12 +442,12 @@ async fn resolve_search(
                             &term,
                             channel.source(),
                             page_no,
-                            Ok(hits.items.len()),
+                            Some(hits.items.len()),
                         );
                         songs.extend(hits.items);
                     }
                     Err(e) => {
-                        record_script_search(player, &term, channel.source(), page_no, Err(()));
+                        record_script_search(player, &term, channel.source(), page_no, None);
                         mineral_log::warn!(
                             target: "script",
                             source = channel.source().name(),
@@ -444,21 +463,20 @@ async fn resolve_search(
 }
 
 /// 记一次脚本发起的歌曲搜索(searches;actor=script,kind=song——`mineral.search`
-/// / `library.search` 只搜曲)。`result` 为 `Ok(条数)` / `Err(())`(失败无条数)。
+/// / `library.search` 只搜曲)。`count` 有值表示成功,`None` 表示失败。
 fn record_script_search(
     player: &PlayerCore,
     term: &str,
     source: mineral_model::SourceKind,
     page: i64,
-    result: Result<usize, ()>,
+    count: Option<usize>,
 ) {
-    let (count, outcome) = match result {
-        Ok(n) => (
-            Some(i64::try_from(n).unwrap_or(i64::MAX)),
-            mineral_stats::SearchOutcome::Ok,
-        ),
-        Err(()) => (None, mineral_stats::SearchOutcome::Failed),
+    let outcome = if count.is_some() {
+        mineral_stats::SearchOutcome::Ok
+    } else {
+        mineral_stats::SearchOutcome::Failed
     };
+    let count = count.map(|n| i64::try_from(n).unwrap_or(i64::MAX));
     player.inner.stats.record_search(
         mineral_stats::Actor::Script,
         term,
@@ -608,7 +626,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 let scope = player.persist().scope(song.namespace());
                 match scope.kv_get(&song, &key).await {
                     Ok(value) => resolve_ok(&player, query, ResolveValue::Store(value)),
-                    Err(e) => resolve_err(&player, query, &e),
+                    Err(e) => resolve_err(&player, query, e),
                 }
             });
         }
@@ -647,7 +665,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                         }
                     }
                     Err(e) => match query {
-                        Some(query) => resolve_err(&player, query, &e),
+                        Some(query) => resolve_err(&player, query, e),
                         None => mineral_log::warn!(
                             target: "script",
                             song_id = song.qualified(),
@@ -674,11 +692,8 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             let player = player.clone();
             tokio::spawn(async move {
                 let Some(channel) = player.channel_for(playlist.namespace()).cloned() else {
-                    let e = color_eyre::eyre::eyre!(
-                        "no channel for source {}",
-                        playlist.namespace().name()
-                    );
-                    resolve_err(&player, query, &e);
+                    let error = QueryError::NoChannel(playlist.namespace());
+                    resolve_err(&player, query, error);
                     return;
                 };
                 match channel
@@ -693,7 +708,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                         );
                     }
                     Err(e) => {
-                        resolve_err(&player, query, &color_eyre::eyre::eyre!("{e}"));
+                        resolve_err(&player, query, e);
                     }
                 }
             });
@@ -724,11 +739,8 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                     mineral_stats::SpawnOutcome::SpawnFailed,
                     None,
                 );
-                let e = color_eyre::eyre::eyre!(
-                    "spawn 并发超限(script.spawn_max_concurrent = {})",
-                    spawns.max
-                );
-                resolve_err(player, query, &e);
+                let error = QueryError::SpawnLimit(spawns.max);
+                resolve_err(player, query, error);
             } else {
                 let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
                 spawns.running.lock().insert(id, kill_tx);
@@ -747,7 +759,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                     record_spawn(&player, program, outcome, exit_code);
                     match result {
                         Ok(done) => resolve_ok(&player, query, ResolveValue::Spawn(done)),
-                        Err(e) => resolve_err(&player, query, &e),
+                        Err(e) => resolve_err(&player, query, e),
                     }
                 });
             }

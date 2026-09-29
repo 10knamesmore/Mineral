@@ -6,7 +6,69 @@
 use std::ops::Range;
 
 use clap::{Args, ValueEnum};
-use color_eyre::eyre::{WrapErr as _, bail};
+use thiserror::Error;
+
+/// 日期参数与 UTC 时间窗口解析失败。
+#[derive(Debug, Error)]
+pub enum WindowError {
+    /// 日期字符串不是 YYYY-MM-DD 格式。
+    #[error("date must be YYYY-MM-DD: {input:?}")]
+    DateFormat {
+        /// 输入的日期字符串。
+        input: String,
+    },
+
+    /// `--from` 晚于 `--to`。
+    #[error("--from {from} is after --to {to}")]
+    Reversed {
+        /// 窗口起始日。
+        from: String,
+
+        /// 窗口终止日。
+        to: String,
+    },
+
+    /// 日历月份或日期取值无效。
+    #[error("invalid calendar date {year}-{month}-{day}")]
+    Calendar {
+        /// 日历年。
+        year: i32,
+
+        /// 日历月。
+        month: u8,
+
+        /// 日历日。
+        day: u8,
+
+        /// 原始日历分量错误。
+        #[source]
+        source: time::error::ComponentRange,
+    },
+
+    /// 当前时间无法转换为 UTC 日期。
+    #[error("invalid current Unix timestamp {timestamp_ms} ms")]
+    CurrentTime {
+        /// 当前 epoch 毫秒。
+        timestamp_ms: i64,
+
+        /// 原始时间分量错误。
+        #[source]
+        source: time::error::ComponentRange,
+    },
+
+    /// 日历时间转毫秒时越过整数上限。
+    #[error("calendar timestamp overflow for {year}-{month}-{day}")]
+    TimestampOverflow {
+        /// 日历年。
+        year: i32,
+
+        /// 日历月。
+        month: u8,
+
+        /// 日历日。
+        day: u8,
+    },
+}
 
 /// 一天的毫秒数(窗口端点折算用)。
 const DAY_MS: i64 = 86_400_000;
@@ -83,16 +145,19 @@ impl Window {
     ///
     /// # Return:
     ///   epoch ms 半开区间
-    pub fn range(&self, default: WindowDefault, now_ms: i64) -> color_eyre::Result<Range<i64>> {
+    pub fn range(&self, default: WindowDefault, now_ms: i64) -> Result<Range<i64>, WindowError> {
         if let Some(year) = self.year {
             return year_range(year);
         }
         if let (Some(from), Some(to)) = (&self.from, &self.to) {
-            let start = day_start_ms(from).wrap_err("invalid --from date")?;
-            let to_start = day_start_ms(to).wrap_err("invalid --to date")?;
+            let start = day_start_ms(from)?;
+            let to_start = day_start_ms(to)?;
             // 反向窗口(from 晚于 to)会产出空区间、报告静默全空;显式报错而非 swap。
             if start > to_start {
-                bail!("--from after --to ({from} > {to}): empty window");
+                return Err(WindowError::Reversed {
+                    from: from.clone(),
+                    to: to.clone(),
+                });
             }
             // to 含当天,故 end 取 to 次日零点(半开区间上界)。
             return Ok(start..to_start.saturating_add(DAY_MS));
@@ -114,7 +179,7 @@ impl Window {
     ///
     /// # Return:
     ///   人读窗口标签
-    pub fn label(&self, default: WindowDefault, now_ms: i64) -> color_eyre::Result<String> {
+    pub fn label(&self, default: WindowDefault, now_ms: i64) -> Result<String, WindowError> {
         if let Some(year) = self.year {
             return Ok(year.to_string());
         }
@@ -132,42 +197,58 @@ impl Window {
 }
 
 /// 某年的 `[Jan 1, 次年 Jan 1)` epoch ms(UTC)。
-fn year_range(year: i32) -> color_eyre::Result<Range<i64>> {
+fn year_range(year: i32) -> Result<Range<i64>, WindowError> {
     let start = calendar_ms(year, 1, 1)?;
     let end = calendar_ms(year.saturating_add(1), 1, 1)?;
     Ok(start..end)
 }
 
 /// 当前 epoch ms 落在哪个 UTC 年。
-fn current_year(now_ms: i64) -> color_eyre::Result<i32> {
+fn current_year(now_ms: i64) -> Result<i32, WindowError> {
     Ok(time::OffsetDateTime::from_unix_timestamp(now_ms / 1000)
-        .wrap_err("failed to convert current time")?
+        .map_err(|source| WindowError::CurrentTime {
+            timestamp_ms: now_ms,
+            source,
+        })?
         .year())
 }
 
 /// `"YYYY-MM-DD"` → 当日零点 epoch ms(UTC);格式 / 取值非法报错。供 `--from`/`--to` 与
 /// `prune --before` 共用。
-pub fn day_start_ms(ymd: &str) -> color_eyre::Result<i64> {
+pub fn day_start_ms(ymd: &str) -> Result<i64, WindowError> {
     let mut parts = ymd.split('-');
     let year = parts.next().and_then(|s| s.parse::<i32>().ok());
     let month = parts.next().and_then(|s| s.parse::<u8>().ok());
     let day = parts.next().and_then(|s| s.parse::<u8>().ok());
     match (year, month, day, parts.next()) {
         (Some(y), Some(m), Some(d), None) => calendar_ms(y, m, d),
-        _ => bail!("date must be YYYY-MM-DD: {ymd:?}"),
+        _ => Err(WindowError::DateFormat {
+            input: ymd.to_owned(),
+        }),
     }
 }
 
 /// `(year, month 1-12, day)` → 当日零点 epoch ms(UTC)。
-fn calendar_ms(year: i32, month: u8, day: u8) -> color_eyre::Result<i64> {
-    let month = time::Month::try_from(month).wrap_err_with(|| format!("invalid month: {month}"))?;
-    let date = time::Date::from_calendar_date(year, month, day)
-        .wrap_err_with(|| format!("invalid date: {year}-{month:?}-{day}"))?;
+fn calendar_ms(year: i32, month: u8, day: u8) -> Result<i64, WindowError> {
+    let calendar_month = time::Month::try_from(month).map_err(|source| WindowError::Calendar {
+        year,
+        month,
+        day,
+        source,
+    })?;
+    let date = time::Date::from_calendar_date(year, calendar_month, day).map_err(|source| {
+        WindowError::Calendar {
+            year,
+            month,
+            day,
+            source,
+        }
+    })?;
     date.midnight()
         .assume_utc()
         .unix_timestamp()
         .checked_mul(1000)
-        .ok_or_else(|| color_eyre::eyre::eyre!("timestamp overflow"))
+        .ok_or(WindowError::TimestampOverflow { year, month, day })
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use mineral_client::Client;
-use mineral_client::operation::{Outcome, Pending, SubmitError};
+use mineral_client::operation::{Outcome, Pending, SubmitError, UnknownReason};
 use mineral_client::state::{
     DownloadsDetailMirror, PlaybackMirror, PlayerMirror, WindowTitleOverride,
 };
@@ -74,7 +74,7 @@ impl ClientBackend {
             }
             Err(error) => {
                 queue.push(wrap(Outcome::Unknown {
-                    detail: format!("未提交:{error}"),
+                    reason: UnknownReason::NotSubmitted(error),
                 }));
             }
         }

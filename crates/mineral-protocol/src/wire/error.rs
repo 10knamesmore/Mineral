@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::CodecError;
+
 /// 传输失败：区分对端断开、底层 I/O 失败和消息编解码失败。
 #[derive(Debug, Error)]
 pub enum WireError {
@@ -10,7 +12,7 @@ pub enum WireError {
     Disconnected,
 
     /// 底层 I/O 失败，调用方可读取原始错误类别决定如何恢复。
-    #[error("{operation}: {source:#}")]
+    #[error("{operation}失败")]
     Io {
         /// 失败的连接、读取、写入或关闭操作。
         operation: &'static str,
@@ -19,13 +21,13 @@ pub enum WireError {
         source: std::io::Error,
     },
 
-    /// 消息无法编码或解码，保留完整诊断链。
-    #[error("{operation}: {source:#}")]
+    /// 消息无法编码、解码或帧长超限，保留具体编解码错误。
+    #[error("{operation}失败")]
     Protocol {
         /// 失败的消息编解码操作。
         operation: &'static str,
 
-        /// 编解码错误及其上下文。
-        source: color_eyre::Report,
+        /// 具体编解码或帧解析错误。
+        source: CodecError,
     },
 }

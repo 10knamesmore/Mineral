@@ -1,8 +1,7 @@
 //! 使用 `icy_sixel` 编码并放置 Sixel 图片。
 
-use color_eyre::eyre::{WrapErr as _, eyre};
 use icy_sixel::{
-    DiffusionMethod, MethodForLargest, MethodForRep, PixelFormat, Quality, sixel_string,
+    DiffusionMethod, MethodForLargest, MethodForRep, PixelFormat, Quality, SixelError, sixel_string,
 };
 use image::DynamicImage;
 use ratatui::buffer::Buffer;
@@ -12,6 +11,26 @@ use super::cell_image::CellImage;
 use crate::image::graphics::TerminalRelay;
 use crate::image::key::PixelSize;
 use crate::image::resize::scale_to_pixels;
+
+/// Sixel 编码失败。
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    /// 编码器整数尺寸超出范围。
+    #[error("convert Sixel dimensions")]
+    Dimensions(#[from] std::num::TryFromIntError),
+
+    /// Sixel 编码器返回错误。
+    #[error("encode Sixel image")]
+    Encode(#[source] SixelError),
+
+    /// 编码器返回了其公开错误类型以外的错误。
+    #[error("Sixel encoder returned an unrecognized error type")]
+    UnexpectedEncoderFailure,
+
+    /// 编码器返回的内容不是 Sixel 控制序列。
+    #[error("Sixel encoder returned a sequence without ESC prefix")]
+    InvalidSequence,
+}
 
 /// 一张已经编码好的 Sixel 终端图片。
 pub(crate) struct SixelImage {
@@ -36,10 +55,10 @@ impl SixelImage {
         source: &DynamicImage,
         pixels: PixelSize,
         relay: TerminalRelay,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self, Error> {
         let image = DynamicImage::ImageRgba8(scale_to_pixels(source, pixels)).to_rgb8();
-        let width = i32::try_from(image.width()).wrap_err("convert Sixel width")?;
-        let height = i32::try_from(image.height()).wrap_err("convert Sixel height")?;
+        let width = i32::try_from(image.width())?;
+        let height = i32::try_from(image.height())?;
         let data = sixel_string(
             image.as_raw(),
             width,
@@ -50,9 +69,15 @@ impl SixelImage {
             MethodForRep::Auto,
             Quality::HIGH,
         )
-        .map_err(|error| eyre!("encode Sixel image: {error}"))?;
+        .map_err(|error| match error.downcast::<SixelError>() {
+            Ok(source) => Error::Encode(*source),
+            Err(source) => {
+                mineral_log::warn!(target: "cover", error = mineral_log::chain(source.as_ref()), "Sixel encoder returned an unexpected error type");
+                Error::UnexpectedEncoderFailure
+            }
+        })?;
         if !data.starts_with('\x1b') {
-            color_eyre::eyre::bail!("Sixel encoder returned a sequence without ESC prefix");
+            return Err(Error::InvalidSequence);
         }
         Ok(Self {
             image: CellImage::new(relay.wrap(data)),

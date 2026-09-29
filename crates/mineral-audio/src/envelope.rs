@@ -13,7 +13,6 @@
 
 use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 
-use color_eyre::eyre::{WrapErr, eyre};
 use mineral_model::Envelope;
 use rodio::Source;
 
@@ -340,16 +339,22 @@ pub fn envelope_from_samples(
 pub fn envelope_from_file(
     path: &std::path::Path,
     params: &EnvelopeParams,
-) -> color_eyre::Result<Envelope> {
-    let file = std::fs::File::open(path)
-        .wrap_err_with(|| format!("打开本地音频失败: {}", path.display()))?;
+) -> crate::Result<Envelope> {
+    let file = std::fs::File::open(path).map_err(|source| crate::Error::OpenFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let byte_len = file.metadata().ok().map(|metadata| metadata.len());
     let reader = std::io::BufReader::new(file);
     let decoder = crate::engine::build_decoder(reader, byte_len)?;
     let channels = decoder.channels();
     let sample_rate = decoder.sample_rate();
-    let points = envelope_from_samples(decoder, channels, sample_rate, params)
-        .ok_or_else(|| eyre!("解不出任何完整帧: {}", path.display()))?;
+    let points =
+        envelope_from_samples(decoder, channels, sample_rate, params).ok_or_else(|| {
+            crate::Error::NoFrames {
+                path: path.to_path_buf(),
+            }
+        })?;
     Ok(Envelope {
         points,
         version: ENVELOPE_VERSION,

@@ -2,12 +2,30 @@
 
 use std::path::Path;
 
-use color_eyre::eyre::bail;
 use lofty::{
     file::{TaggedFile, TaggedFileExt},
     tag::{ItemKey, Tag},
 };
 use mineral_model::{Lyrics, has_timed, has_words, parse_lrc};
+
+/// Rejects malformed sidecar bytes without replacing lyric characters.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LyricsEncodingError {
+    /// UTF-8 bytes contain an invalid sequence.
+    #[error("invalid UTF-8 lyrics")]
+    Utf8(#[from] std::str::Utf8Error),
+
+    /// UTF-16 code units contain an unpaired surrogate.
+    #[error("invalid UTF-16 lyrics")]
+    Utf16(#[from] std::string::FromUtf16Error),
+
+    /// A BOM-declared UTF-16 payload ends in half a code unit.
+    #[error("odd UTF-16 lyric byte length: {bytes}")]
+    OddUtf16Length {
+        /// Payload length after removing the BOM.
+        bytes: usize,
+    },
+}
 
 /// Prefers word timing, then line timing, then text; keeps equal-quality candidates in primary-tag order.
 pub(super) fn read(tagged: &TaggedFile, path: &Path) -> Option<Lyrics> {
@@ -53,7 +71,7 @@ fn select(selected: &mut Option<Lyrics>, lyrics: Lyrics) {
 }
 
 /// Decodes UTF-8 or BOM-declared UTF-16 without guessing undeclared legacy encodings.
-pub(crate) fn decode_sidecar(bytes: &[u8]) -> color_eyre::Result<String> {
+pub(crate) fn decode_sidecar(bytes: &[u8]) -> Result<String, LyricsEncodingError> {
     match bytes {
         [0xff, 0xfe, rest @ ..] => decode_utf16(rest, true),
         [0xfe, 0xff, rest @ ..] => decode_utf16(rest, false),
@@ -63,10 +81,10 @@ pub(crate) fn decode_sidecar(bytes: &[u8]) -> color_eyre::Result<String> {
 }
 
 /// Rejects truncated code units and invalid surrogate pairs instead of changing lyric text.
-fn decode_utf16(bytes: &[u8], little_endian: bool) -> color_eyre::Result<String> {
+fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, LyricsEncodingError> {
     let (pairs, remainder) = bytes.as_chunks::<2>();
     if !remainder.is_empty() {
-        bail!("odd UTF-16 lyric byte length");
+        return Err(LyricsEncodingError::OddUtf16Length { bytes: bytes.len() });
     }
     let units = pairs
         .iter()

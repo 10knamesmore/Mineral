@@ -29,7 +29,7 @@ async fn created_folders_page(
     transport: &Transport,
     mid: &str,
     page: u32,
-) -> color_eyre::Result<FavFolderList> {
+) -> crate::Result<FavFolderList> {
     let data = transport
         .get_data(&format!(
             "{FOLDER_CREATED_LIST_URL}?up_mid={mid}&pn={page}&ps=40"
@@ -46,10 +46,7 @@ async fn created_folders_page(
 ///
 /// # Return:
 ///   合并所有页的收藏夹列表 DTO(每项带 cover / intro)。
-pub async fn created_folders(
-    transport: &Transport,
-    mid: &str,
-) -> color_eyre::Result<FavFolderList> {
+pub async fn created_folders(transport: &Transport, mid: &str) -> crate::Result<FavFolderList> {
     collect_folder_pages(|page| created_folders_page(transport, mid, page)).await
 }
 
@@ -61,10 +58,10 @@ pub async fn created_folders(
 ///
 /// # Return:
 ///   合并后的列表(`list` 为全部收藏夹,`has_more` 归 `false`)。
-async fn collect_folder_pages<F, Fut>(mut fetch: F) -> color_eyre::Result<FavFolderList>
+async fn collect_folder_pages<F, Fut>(mut fetch: F) -> crate::Result<FavFolderList>
 where
     F: FnMut(u32) -> Fut,
-    Fut: Future<Output = color_eyre::Result<FavFolderList>>,
+    Fut: Future<Output = crate::Result<FavFolderList>>,
 {
     let mut all = Vec::<FavFolder>::new();
     let mut page = 1;
@@ -107,7 +104,7 @@ pub async fn resource_list(
     transport: &Transport,
     fid: &str,
     page: u32,
-) -> color_eyre::Result<FavResourceList> {
+) -> crate::Result<FavResourceList> {
     let data = transport
         .get_data(&format!(
             "{RESOURCE_LIST_URL}?media_id={fid}&pn={page}&ps=20"
@@ -124,10 +121,10 @@ pub async fn resource_list(
 ///
 /// # Return:
 ///   合并后的内容(`medias` 为全部条目,`has_more` 归 `false`)。
-async fn collect_pages<F, Fut>(mut fetch: F) -> color_eyre::Result<FavResourceList>
+async fn collect_pages<F, Fut>(mut fetch: F) -> crate::Result<FavResourceList>
 where
     F: FnMut(u32) -> Fut,
-    Fut: Future<Output = color_eyre::Result<FavResourceList>>,
+    Fut: Future<Output = crate::Result<FavResourceList>>,
 {
     let mut info: Option<FavInfo> = None;
     let mut all = Vec::<FavMedia>::new();
@@ -170,10 +167,7 @@ where
 ///
 /// # Return:
 ///   合并所有页的收藏夹内容 DTO。
-pub async fn all_resources(
-    transport: &Transport,
-    fid: &str,
-) -> color_eyre::Result<FavResourceList> {
+pub async fn all_resources(transport: &Transport, fid: &str) -> crate::Result<FavResourceList> {
     collect_pages(|page| resource_list(transport, fid, page)).await
 }
 
@@ -204,7 +198,11 @@ mod tests {
         let merged = collect_pages(|p| {
             let idx = usize::try_from(p).unwrap_or(0).saturating_sub(1);
             let resp = pages.get(idx).cloned();
-            async move { resp.ok_or_else(|| color_eyre::eyre::eyre!("越界请求页 {p}")) }
+            async move {
+                resp.ok_or(crate::Error::InvalidData {
+                    field: "unexpected favorite page",
+                })
+            }
         })
         .await?;
         let medias = merged.medias.unwrap_or_default();
@@ -224,7 +222,11 @@ mod tests {
         let merged = collect_pages(|p| {
             let idx = usize::try_from(p).unwrap_or(0).saturating_sub(1);
             let resp = only.get(idx).cloned();
-            async move { resp.ok_or_else(|| color_eyre::eyre::eyre!("不应请求页 {p}")) }
+            async move {
+                resp.ok_or(crate::Error::InvalidData {
+                    field: "unexpected favorite page",
+                })
+            }
         })
         .await?;
         assert_eq!(merged.medias.unwrap_or_default().len(), 1);
@@ -257,7 +259,11 @@ mod tests {
         let merged = collect_folder_pages(|p| {
             let idx = usize::try_from(p).unwrap_or(0).saturating_sub(1);
             let resp = pages.get(idx).cloned();
-            async move { resp.ok_or_else(|| color_eyre::eyre::eyre!("越界请求页 {p}")) }
+            async move {
+                resp.ok_or(crate::Error::InvalidData {
+                    field: "unexpected favorite page",
+                })
+            }
         })
         .await?;
         let list = merged.list.unwrap_or_default();

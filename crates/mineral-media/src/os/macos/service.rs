@@ -5,11 +5,9 @@
 //! [`MediaService`] 只持 channel 发送端,保持 `Send` + `Clone`。
 
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, SendError, Sender, channel};
 use std::thread;
 use std::time::Duration;
-
-use color_eyre::eyre::eyre;
 
 use super::command::register_commands;
 use super::convert::secs;
@@ -17,6 +15,7 @@ use super::now_playing::MacNowPlaying;
 use crate::command::{LoopMode, MediaCommand};
 use crate::config::MediaConfig;
 use crate::state::{NowPlaying, PlaybackState};
+use crate::{Error, Result};
 
 /// 主线程 / tokio → 专属线程的状态更新消息。
 enum Update {
@@ -58,57 +57,53 @@ impl MediaService {
     pub fn spawn(
         config: &MediaConfig,
         on_command: Arc<dyn Fn(MediaCommand) + Send + Sync>,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self> {
         let _ = config;
         let (tx, rx) = channel::<Update>();
         thread::Builder::new()
             .name("mineral-nowplaying".to_owned())
             .spawn(move || run_thread(&rx, &on_command))
-            .map_err(|e| eyre!("spawn now-playing thread: {e}"))?;
+            .map_err(|source| Error::SpawnThread { source })?;
         Ok(Self { tx })
     }
 
     /// 上报当前曲目元数据。
-    pub fn set_now_playing(&self, now_playing: &NowPlaying) -> color_eyre::Result<()> {
+    pub fn set_now_playing(&self, now_playing: &NowPlaying) -> Result<()> {
         self.send(Update::Metadata(now_playing.clone()))
     }
 
     /// 上报播放状态与进度。
-    pub fn set_playback(
-        &self,
-        state: PlaybackState,
-        position: Option<Duration>,
-    ) -> color_eyre::Result<()> {
+    pub fn set_playback(&self, state: PlaybackState, position: Option<Duration>) -> Result<()> {
         self.send(Update::Playback { state, position })
     }
 
     /// 通知非线性位置跳变(seek),重设系统进度条基准。
-    pub fn notify_seek(&self, position: Duration) -> color_eyre::Result<()> {
+    pub fn notify_seek(&self, position: Duration) -> Result<()> {
         self.send(Update::Seeked(position))
     }
 
     /// 上报随机播放开关。macOS 系统媒体中心无随机态展示面,本平台 no-op。
-    pub fn set_shuffle(&self, shuffle: bool) -> color_eyre::Result<()> {
+    pub fn set_shuffle(&self, shuffle: bool) -> Result<()> {
         let _ = shuffle;
         Ok(())
     }
 
     /// 上报循环模式。macOS 系统媒体中心无循环态展示面,本平台 no-op。
-    pub fn set_loop(&self, mode: LoopMode) -> color_eyre::Result<()> {
+    pub fn set_loop(&self, mode: LoopMode) -> Result<()> {
         let _ = mode;
         Ok(())
     }
 
     /// 设置当前曲目封面(已编码的图片字节,由上层拉取后传入)。
-    pub fn set_artwork(&self, image_bytes: &[u8]) -> color_eyre::Result<()> {
+    pub fn set_artwork(&self, image_bytes: &[u8]) -> Result<()> {
         self.send(Update::Artwork(image_bytes.to_vec()))
     }
 
     /// 投递一条更新;专属线程已退出则返回 `Err`。
-    fn send(&self, update: Update) -> color_eyre::Result<()> {
+    fn send(&self, update: Update) -> Result<()> {
         self.tx
             .send(update)
-            .map_err(|e| eyre!("now-playing thread gone: {e}"))
+            .map_err(|SendError(_update)| Error::ServiceStopped)
     }
 }
 

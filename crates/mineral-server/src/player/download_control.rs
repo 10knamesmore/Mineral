@@ -26,7 +26,7 @@ impl PlayerCore {
     }
 
     /// Stops one queued or active Song download.
-    pub(crate) fn stop_download(&self, id: &DownloadId) -> color_eyre::Result<()> {
+    pub(crate) fn stop_download(&self, id: &DownloadId) -> Result<(), crate::download::StopError> {
         self.inner.downloads.stop(id)
     }
 

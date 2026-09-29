@@ -7,7 +7,7 @@ use mineral_model::BitRate;
 use crate::loader::ConfigWarning;
 use crate::schema::{BackendKind, Config};
 
-/// 渲染配置诊断:有效配置摘要 + warnings(各带 file:line / 字段路径)。纯函数,供快照。
+/// 渲染配置诊断:有效配置摘要 + warnings(按类别及字段路径展示,不包含底层错误)。纯函数,供快照。
 ///
 /// # Params:
 ///   - `config`: 已加载(可能回落默认)的配置

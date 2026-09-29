@@ -341,7 +341,7 @@ fn pick_session(sessions: &[i64], i: i64) -> Option<i64> {
 ///   - `store`: 目标 stats.db 句柄
 ///   - `plays`: 播放行数
 ///   - `events`: 事件条数
-pub async fn seed(store: &StatsStore, plays: i64, events: i64) -> color_eyre::Result<()> {
+pub async fn seed(store: &StatsStore, plays: i64, events: i64) -> crate::Result<()> {
     let mut sessions = Vec::<i64>::new();
     let play_step = (YEAR_MS / plays.max(1)).max(1);
     for i in 0..plays {
@@ -373,6 +373,6 @@ pub async fn seed(store: &StatsStore, plays: i64, events: i64) -> color_eyre::Re
 ///
 /// # Params:
 ///   - `store`: 目标 stats.db 句柄
-pub async fn seed_year(store: &StatsStore) -> color_eyre::Result<()> {
+pub async fn seed_year(store: &StatsStore) -> crate::Result<()> {
     seed(store, 10_000, 100_000).await
 }

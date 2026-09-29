@@ -10,6 +10,26 @@ use tokio::sync::broadcast;
 
 use crate::player::PlayerCore;
 
+/// Failure of a script command issued through the server.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ScriptError {
+    /// No script is attached to the player.
+    #[error("script is disabled")]
+    Disabled,
+
+    /// The requested action is not registered.
+    #[error("script action {0:?} is not registered")]
+    ActionNotFound(String),
+
+    /// The script callback failed; retain its original cause.
+    #[error("script callback failed")]
+    Callback(#[source] mineral_script::Error),
+
+    /// The script thread exited before replying.
+    #[error("script thread exited")]
+    ThreadExited,
+}
+
 /// 双路事件出口。wire 路无订阅者 send 失败即丢(advisory);脚本路未启用
 /// (无用户脚本)为 `None`,fire-and-forget。
 #[derive(Clone)]
@@ -111,7 +131,12 @@ impl Notifier {
         let _ = self.events.send(Event::Task(Box::new(ev)));
     }
 
-    /// 推一条匿名 toast 给订阅 client(下载不可用 / 失败等 daemon 侧提示)。
+    /// 发送后台失败类别，由 client 根据结构化状态生成提示。
+    pub(crate) fn failure(&self, failure: mineral_protocol::FailureNotice) {
+        let _ = self.events.send(Event::Failure(failure));
+    }
+
+    /// 推送脚本主动提供的提示文本。
     ///
     /// # Params:
     ///   - `kind`: 视觉级别
@@ -236,24 +261,26 @@ impl PlayerCore {
     ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面为 `None`)
     ///
     /// # Return:
-    ///   回调执行完成为 `Ok`;脚本未启用 / 未注册 / 执行失败为 `Err`(人读信息)。
+    ///   回调执行完成为 `Ok`;脚本未启用 / 未注册 / 执行失败为 [`ScriptError`]。
     pub(crate) async fn invoke_script_action(
         &self,
         name: &str,
         ctx: Option<mineral_protocol::KeyContext>,
         args: Vec<String>,
-    ) -> color_eyre::Result<()> {
-        use color_eyre::eyre::bail;
+    ) -> Result<(), ScriptError> {
         let Some(script) = &self.inner.notify.script else {
-            bail!("脚本未启用(无 config.lua 或脚本加载失败)");
+            return Err(ScriptError::Disabled);
         };
+        if !script.is_attached() {
+            return Err(ScriptError::Disabled);
+        }
         match script.invoke_action(name.to_owned(), ctx, args).await {
             Ok(mineral_script::ActionOutcome::Done) => Ok(()),
             Ok(mineral_script::ActionOutcome::NotFound) => {
-                bail!("动作 {name:?} 未注册(检查 config.lua 的 mineral.action)")
+                Err(ScriptError::ActionNotFound(name.to_owned()))
             }
-            Ok(mineral_script::ActionOutcome::Failed(e)) => bail!("动作 {name:?} 执行失败:{e}"),
-            Err(_recv) => bail!("脚本线程已退出"),
+            Ok(mineral_script::ActionOutcome::Failed(e)) => Err(ScriptError::Callback(e)),
+            Err(_recv) => Err(ScriptError::ThreadExited),
         }
     }
 
@@ -264,19 +291,23 @@ impl PlayerCore {
     ///   - `ctx`: 模板作用的实体
     ///
     /// # Return:
-    ///   `Ok(text)` = 剪贴板文本;`Err(msg)` = 人读错误(无脚本 / 越界 / 回调失败)。
+    ///   `Ok(text)` = 剪贴板文本;`Err` = 脚本不可用或回调失败。
     pub(crate) async fn render_copy_template(
         &self,
         index: usize,
         ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> Result<String, String> {
+    ) -> Result<String, ScriptError> {
         let Some(script) = &self.inner.notify.script else {
-            return Err("脚本未启用(无 config.lua 或脚本加载失败)".to_owned());
+            return Err(ScriptError::Disabled);
         };
-        match script.render_copy_template(index, ctx).await {
-            Ok(result) => result,
-            Err(_recv) => Err("脚本线程已退出".to_owned()),
+        if !script.is_attached() {
+            return Err(ScriptError::Disabled);
         }
+        script
+            .render_copy_template(index, ctx)
+            .await
+            .map_err(|_recv| ScriptError::ThreadExited)?
+            .map_err(ScriptError::Callback)
     }
 
     /// 跑一个具名队列变换,拿回新的队列顺序(脚本未启用 / 线程已退出即错误)。
@@ -288,24 +319,25 @@ impl PlayerCore {
     ///   - `selected`: 光标下标(0-based),无则 `None`
     ///
     /// # Return:
-    ///   `Ok(ids)` = 新顺序;`Err(msg)` = 人读错误。
+    ///   `Ok(ids)` = 新顺序;`Err` = 脚本不可用或回调失败。
     pub(crate) async fn queue_transform(
         &self,
         index: usize,
         queue: Vec<mineral_model::Song>,
         current: usize,
         selected: Option<usize>,
-    ) -> Result<Vec<mineral_model::SongId>, String> {
+    ) -> Result<Vec<mineral_model::SongId>, ScriptError> {
         let Some(script) = &self.inner.notify.script else {
-            return Err("脚本未启用(无 config.lua 或脚本加载失败)".to_owned());
+            return Err(ScriptError::Disabled);
         };
-        match script
+        if !script.is_attached() {
+            return Err(ScriptError::Disabled);
+        }
+        script
             .queue_transform(index, queue, current, selected)
             .await
-        {
-            Ok(result) => result,
-            Err(_recv) => Err("脚本线程已退出".to_owned()),
-        }
+            .map_err(|_recv| ScriptError::ThreadExited)?
+            .map_err(ScriptError::Callback)
     }
 }
 

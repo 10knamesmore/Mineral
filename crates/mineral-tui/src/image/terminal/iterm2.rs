@@ -39,7 +39,7 @@ impl Iterm2Image {
         pixels: PixelSize,
         cells: (u16, u16),
         relay: TerminalRelay,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self, image::ImageError> {
         let scaled = DynamicImage::ImageRgba8(scale_to_pixels(source, pixels));
         let mut cursor = Cursor::new(Vec::<u8>::new());
         scaled.write_to(&mut cursor, image::ImageFormat::Png)?;

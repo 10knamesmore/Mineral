@@ -259,7 +259,7 @@ impl DownloadsDetailMirror {
         bytes_done: u64,
         bytes_total: Option<u64>,
         speed_bps: u64,
-        failure: Option<String>,
+        failure: Option<mineral_protocol::DownloadFailure>,
     ) {
         if let Some(row) = self.rows.get_mut(id) {
             row.status = status;
@@ -601,7 +601,8 @@ impl Mirror {
                     Event::WindowTitleOverride { text } => {
                         state.window_title = WindowTitleOverride::Set(text.clone());
                     }
-                    Event::Toast { .. }
+                    Event::Failure(_)
+                    | Event::Toast { .. }
                     | Event::Card { .. }
                     | Event::PropertyChanged { .. }
                     | Event::TrackFinished { .. }

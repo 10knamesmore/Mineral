@@ -1,7 +1,6 @@
 //! songs 维表维护:播放路径 write-through 的歌曲展示元数据。
 
 use crate::entity::{song_artists, songs};
-use color_eyre::eyre::WrapErr as _;
 use mineral_model::Song;
 use sea_orm::sea_query::{self, Expr, Func, Iden, OnConflict};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
@@ -23,16 +22,17 @@ impl StatsStore {
     ///
     /// # Params:
     ///   - `song`: 起播时刻在手的完整歌曲元数据
-    pub async fn upsert_song(&self, song: &Song) -> color_eyre::Result<()> {
+    pub async fn upsert_song(&self, song: &Song) -> crate::Result<()> {
         let Some(db) = self.pool() else {
             return Ok(());
         };
         let ns = song.id.namespace().name();
         let value = song.id.value();
-        let tx = db
-            .begin()
-            .await
-            .wrap_err_with(|| format!("upsert_song 开事务失败 song={value}"))?;
+        let tx = db.begin().await.map_err(|source| crate::Error::Song {
+            operation: "upsert_song 开事务",
+            song: value.to_owned(),
+            source,
+        })?;
         let mut merge = OnConflict::columns([songs::Column::Ns, songs::Column::SongValue]);
         merge.update_column(songs::Column::Name);
         for column in [
@@ -61,14 +61,22 @@ impl StatsStore {
         .on_conflict(merge)
         .exec_without_returning(&tx)
         .await
-        .wrap_err_with(|| format!("upsert_song 落库失败 song={value}"))?;
+        .map_err(|source| crate::Error::Song {
+            operation: "upsert_song",
+            song: value.to_owned(),
+            source,
+        })?;
         if !song.artists.is_empty() {
             song_artists::Entity::delete_many()
                 .filter(song_artists::Column::Ns.eq(ns))
                 .filter(song_artists::Column::SongValue.eq(value))
                 .exec(&tx)
                 .await
-                .wrap_err_with(|| format!("upsert_song 清艺人行失败 song={value}"))?;
+                .map_err(|source| crate::Error::Song {
+                    operation: "upsert_song 清艺人行",
+                    song: value.to_owned(),
+                    source,
+                })?;
             for (position, artist) in song.artists.iter().enumerate() {
                 song_artists::Entity::insert(song_artists::ActiveModel {
                     ns: Set(ns.to_owned()),
@@ -79,12 +87,18 @@ impl StatsStore {
                 })
                 .exec_without_returning(&tx)
                 .await
-                .wrap_err_with(|| format!("upsert_song 写艺人行失败 song={value}"))?;
+                .map_err(|source| crate::Error::Song {
+                    operation: "upsert_song 写艺人行",
+                    song: value.to_owned(),
+                    source,
+                })?;
             }
         }
-        tx.commit()
-            .await
-            .wrap_err_with(|| format!("upsert_song 提交事务失败 song={value}"))?;
+        tx.commit().await.map_err(|source| crate::Error::Song {
+            operation: "upsert_song 提交事务",
+            song: value.to_owned(),
+            source,
+        })?;
         Ok(())
     }
 }

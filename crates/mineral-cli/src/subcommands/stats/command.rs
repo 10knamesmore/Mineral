@@ -4,8 +4,8 @@
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use crate::error::{Error, Result};
 use clap::Subcommand;
-use color_eyre::eyre::WrapErr as _;
 use mineral_stats::{ReportOptions, StatsStore};
 
 use super::assemble::{self, TopCategory};
@@ -105,7 +105,7 @@ pub enum StatsCommand {
 ///
 /// # Return:
 ///   命令执行结果
-pub async fn run(command: StatsCommand) -> color_eyre::Result<()> {
+pub async fn run(command: StatsCommand) -> Result<()> {
     match command {
         StatsCommand::Status { format } => status(format).await,
         StatsCommand::History {
@@ -132,17 +132,20 @@ pub async fn run(command: StatsCommand) -> color_eyre::Result<()> {
 }
 
 /// stats.db 路径(随 XDG data)。
-fn stats_db_path() -> color_eyre::Result<PathBuf> {
+fn stats_db_path() -> Result<PathBuf> {
     Ok(mineral_paths::data_dir()?.join("stats.db"))
 }
 
 /// 当前 Unix epoch 毫秒(窗口 / prune 截止用)。
-fn now_ms() -> color_eyre::Result<i64> {
+fn now_ms() -> Result<i64> {
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .wrap_err("system time before UNIX epoch")?
+        .map_err(Error::Clock)?
         .as_millis();
-    i64::try_from(ms).wrap_err("timestamp overflow")
+    i64::try_from(ms).map_err(|source| Error::NumberOverflow {
+        field: "current timestamp",
+        source,
+    })
 }
 
 /// 离线读配置的 `stats.report` 段,折算成查询期口径 [`ReportOptions`]。
@@ -155,16 +158,22 @@ fn now_ms() -> color_eyre::Result<i64> {
 ///
 /// # Return:
 ///   装配好的查询期口径
-fn report_options(top_override: Option<u32>) -> color_eyre::Result<ReportOptions> {
+fn report_options(top_override: Option<u32>) -> Result<ReportOptions> {
     let (config, _warnings) =
         mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
     let report = config.stats().report();
     let min_listen_ms = i64::try_from(*report.min_listen_secs())
-        .wrap_err("stats.report.min_listen_secs overflow")?
+        .map_err(|source| Error::NumberOverflow {
+            field: "stats.report.min_listen_secs",
+            source,
+        })?
         .saturating_mul(1000);
     let top_limit = match top_override {
         Some(n) => i64::from(n),
-        None => i64::try_from(*report.top_limit()).wrap_err("stats.report.top_limit overflow")?,
+        None => i64::try_from(*report.top_limit()).map_err(|source| Error::NumberOverflow {
+            field: "stats.report.top_limit",
+            source,
+        })?,
     };
     Ok(ReportOptions::builder()
         .min_listen_ms(min_listen_ms)
@@ -173,7 +182,7 @@ fn report_options(top_override: Option<u32>) -> color_eyre::Result<ReportOptions
 }
 
 /// `stats report`:装配完整报告与展示名,按 `--format` 输出 text、json 或 markdown。
-async fn report(window: &Window, top: Option<u32>, format: Format) -> color_eyre::Result<()> {
+async fn report(window: &Window, top: Option<u32>, format: Format) -> Result<()> {
     let db_path = stats_db_path()?;
     if !db_path.exists() {
         println!("{}", render::render_absent());
@@ -188,9 +197,10 @@ async fn report(window: &Window, top: Option<u32>, format: Format) -> color_eyre
     let color = std::io::stdout().is_terminal();
     let out = match format {
         Format::Text => render::render_report(&sr, &label, color),
-        Format::Json => {
-            serde_json::to_string_pretty(&sr).wrap_err("failed to serialize report to json")?
-        }
+        Format::Json => serde_json::to_string_pretty(&sr).map_err(|source| Error::Json {
+            output: "report",
+            source,
+        })?,
         Format::Md => render::report_md(&sr, &label),
     };
     println!("{out}");
@@ -204,7 +214,7 @@ async fn top(
     by: By,
     limit: Option<u32>,
     format: Format,
-) -> color_eyre::Result<()> {
+) -> Result<()> {
     let db_path = stats_db_path()?;
     if !db_path.exists() {
         println!("{}", render::render_absent());
@@ -217,9 +227,10 @@ async fn top(
     let color = std::io::stdout().is_terminal();
     let out = match format {
         Format::Text => render::render_top(&entries, category.text_title(), color),
-        Format::Json => {
-            serde_json::to_string_pretty(&entries).wrap_err("failed to serialize top to json")?
-        }
+        Format::Json => serde_json::to_string_pretty(&entries).map_err(|source| Error::Json {
+            output: "top",
+            source,
+        })?,
         Format::Md => render::top_md(&entries, category.md_title()),
     };
     println!("{out}");
@@ -227,12 +238,7 @@ async fn top(
 }
 
 /// `stats history`:最近播放流水 tail,缺省全量窗、可按来源过滤。
-async fn history(
-    window: &Window,
-    limit: u32,
-    source: Option<&str>,
-    format: Format,
-) -> color_eyre::Result<()> {
+async fn history(window: &Window, limit: u32, source: Option<&str>, format: Format) -> Result<()> {
     let db_path = stats_db_path()?;
     if !db_path.exists() {
         println!("{}", render::render_absent());
@@ -244,9 +250,10 @@ async fn history(
     let color = std::io::stdout().is_terminal();
     let out = match format {
         Format::Text => render::render_history(&plays, color),
-        Format::Json => {
-            serde_json::to_string_pretty(&plays).wrap_err("failed to serialize history to json")?
-        }
+        Format::Json => serde_json::to_string_pretty(&plays).map_err(|source| Error::Json {
+            output: "history",
+            source,
+        })?,
         Format::Md => render::history_md(&plays),
     };
     println!("{out}");
@@ -254,7 +261,7 @@ async fn history(
 }
 
 /// `stats status`:直读 stats.db + 离线读配置取 level;不存在则友好提示,不报错栈。
-async fn status(format: Format) -> color_eyre::Result<()> {
+async fn status(format: Format) -> Result<()> {
     let db_path = stats_db_path()?;
     if !db_path.exists() {
         println!("{}", render::render_absent());
@@ -270,7 +277,13 @@ async fn status(format: Format) -> color_eyre::Result<()> {
     };
     let store = StatsStore::open(&db_path).await?;
     let report = store.status().await?;
-    let size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    let size = std::fs::metadata(&db_path)
+        .map_err(|source| Error::Io {
+            operation: "read stats database metadata",
+            path: db_path.clone(),
+            source,
+        })?
+        .len();
     let color = std::io::stdout().is_terminal();
     let out = match format {
         Format::Text => render::render_status(&db_path, size, level, &report, color),
@@ -284,7 +297,10 @@ async fn status(format: Format) -> color_eyre::Result<()> {
             "first_play_at": report.first_play_at,
             "last_play_at": report.last_play_at,
         }))
-        .wrap_err("failed to serialize status to json")?,
+        .map_err(|source| Error::Json {
+            output: "status",
+            source,
+        })?,
         Format::Md => render::status_md(&db_path, size, level, &report),
     };
     println!("{out}");
@@ -292,13 +308,13 @@ async fn status(format: Format) -> color_eyre::Result<()> {
 }
 
 /// `stats prune --before <date>`:删该日零点(UTC)之前的流水;无 `--yes` 只打印将删行数。
-async fn prune(before: &str, yes: bool) -> color_eyre::Result<()> {
+async fn prune(before: &str, yes: bool) -> Result<()> {
     let db_path = stats_db_path()?;
     if !db_path.exists() {
         println!("{}", render::render_absent());
         return Ok(());
     }
-    let cutoff = window::day_start_ms(before).wrap_err("invalid --before date")?;
+    let cutoff = window::day_start_ms(before)?;
     let store = StatsStore::open(&db_path).await?;
     if !yes {
         let n = store.count_before(cutoff).await?;
@@ -314,7 +330,7 @@ async fn prune(before: &str, yes: bool) -> color_eyre::Result<()> {
 
 /// `stats reset`:清空 stats.db + `-wal`/`-shm` 伴生文件(沿用 `cache reset` 惯例:无
 /// `--yes` 只打印计划)。
-fn reset(yes: bool) -> color_eyre::Result<()> {
+fn reset(yes: bool) -> Result<()> {
     let db = mineral_paths::data_dir()?.join("stats.db");
     let siblings = [
         db.clone(),
@@ -344,10 +360,14 @@ fn reset(yes: bool) -> color_eyre::Result<()> {
 }
 
 /// 删单个文件(不存在视为已删,不报错)。
-fn remove(path: &Path) -> color_eyre::Result<()> {
+fn remove(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).wrap_err_with(|| format!("failed to delete {}", path.display())),
+        Err(e) => Err(Error::Io {
+            operation: "delete stats database",
+            path: path.to_path_buf(),
+            source: e,
+        }),
     }
 }

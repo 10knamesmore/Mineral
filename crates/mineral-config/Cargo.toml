@@ -9,7 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-color-eyre          = { workspace = true }
+thiserror           = { workspace = true }
 mlua                = { workspace = true }
 rustc-hash          = { workspace = true }
 serde               = { workspace = true }
@@ -24,6 +24,7 @@ mineral-model       = { workspace = true }
 mineral-log         = { workspace = true }
 
 [dev-dependencies]
+color-eyre  = { workspace = true }
 mineral-test = { workspace = true }
 insta        = { workspace = true }
 proptest     = { workspace = true }

@@ -10,8 +10,23 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use color_eyre::eyre::WrapErr;
 use tokio::signal::unix::{SignalKind, signal};
+
+/// 安装退出信号监听失败。
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// SIGTERM 监听安装失败。
+    #[error("install SIGTERM handler")]
+    Terminate(#[source] std::io::Error),
+
+    /// SIGINT 监听安装失败。
+    #[error("install SIGINT handler")]
+    Interrupt(#[source] std::io::Error),
+
+    /// SIGHUP 监听安装失败。
+    #[error("install SIGHUP handler")]
+    Hangup(#[source] std::io::Error),
+}
 
 /// 起后台 task 监听退出信号,返回 shutdown 标志(收到信号后变 `true`)。
 ///
@@ -20,10 +35,10 @@ use tokio::signal::unix::{SignalKind, signal};
 ///
 /// # Return:
 ///   主循环轮询用的标志:`false` = 未触发,`true` = 收到过退出信号。
-pub(crate) fn spawn_watcher() -> color_eyre::Result<Arc<AtomicBool>> {
-    let mut term = signal(SignalKind::terminate()).wrap_err("install SIGTERM handler")?;
-    let mut interrupt = signal(SignalKind::interrupt()).wrap_err("install SIGINT handler")?;
-    let mut hangup = signal(SignalKind::hangup()).wrap_err("install SIGHUP handler")?;
+pub(crate) fn spawn_watcher() -> Result<Arc<AtomicBool>, Error> {
+    let mut term = signal(SignalKind::terminate()).map_err(Error::Terminate)?;
+    let mut interrupt = signal(SignalKind::interrupt()).map_err(Error::Interrupt)?;
+    let mut hangup = signal(SignalKind::hangup()).map_err(Error::Hangup)?;
 
     let flag = Arc::new(AtomicBool::new(false));
     let watch = Arc::clone(&flag);

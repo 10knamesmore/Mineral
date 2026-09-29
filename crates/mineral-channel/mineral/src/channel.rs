@@ -53,12 +53,25 @@ impl MineralChannel {
     ///   聚合收藏歌单。
     async fn build_favorites(&self, with_songs: bool) -> Result<Playlist> {
         let (track_count, songs) = if with_songs {
-            let songs = self.store.loved_songs().await.map_err(Error::Other)?;
-            let count =
-                u64::try_from(songs.len()).map_err(|e| Error::Other(color_eyre::Report::new(e)))?;
+            let songs = self
+                .store
+                .loved_songs()
+                .await
+                .map_err(|source| Error::Storage {
+                    source: Box::new(source),
+                })?;
+            let count = u64::try_from(songs.len()).map_err(|source| Error::Parse {
+                source: Box::new(source),
+            })?;
             (count, songs)
         } else {
-            let count = self.store.loved_count().await.map_err(Error::Other)?;
+            let count = self
+                .store
+                .loved_count()
+                .await
+                .map_err(|source| Error::Storage {
+                    source: Box::new(source),
+                })?;
             (count, Vec::new())
         };
         Ok(Playlist::builder()

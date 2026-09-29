@@ -7,6 +7,8 @@
 //! 报错路径剔除并警告,有效树永远是校验通过的那份。新 client 握手时经
 //! [`PlayerCore::effective_config`] 重放当前有效配置。
 
+use std::sync::Arc;
+
 use mineral_protocol::BusValue;
 use mineral_script::ConfigOverrideOp;
 use parking_lot::Mutex;
@@ -39,8 +41,8 @@ struct EvictedOverride {
     /// 覆盖的配置路径。
     path: String,
 
-    /// 落型报错详情。
-    detail: String,
+    /// 导致该覆盖被剔除的落型告警；一次失败可对应多条覆盖。
+    warning: Arc<mineral_config::ConfigWarning>,
 }
 
 impl ConfigHost {
@@ -92,24 +94,23 @@ fn recompute(
             // 时兜底——有效树退回底树,不无限重试。
             mineral_log::error!(
                 target: "config",
-                warning = %warning,
+                error = mineral_log::chain(&warning),
                 "配置底树落型失败(不该发生),有效树退回底树"
             );
             return (base.clone(), evicted);
         }
-        let (err_path, detail) = match &warning {
-            mineral_config::ConfigWarning::Deserialize { path, detail } => {
-                (path.clone(), detail.clone())
-            }
-            other => (String::new(), other.to_string()),
+        let warning = Arc::new(warning);
+        let err_path = match warning.as_ref() {
+            mineral_config::ConfigWarning::Deserialize { path, .. } => path.as_deref(),
+            _ => None,
         };
         let before = overlay.len();
         overlay.retain(|(path, _value)| {
-            let hit = err_path.is_empty() || covers(path, &err_path);
+            let hit = err_path.is_none_or(|err_path| covers(path, err_path));
             if hit {
                 evicted.push(EvictedOverride {
                     path: path.clone(),
-                    detail: detail.clone(),
+                    warning: Arc::clone(&warning),
                 });
             }
             !hit
@@ -118,7 +119,7 @@ fn recompute(
             // 报错路径与所有覆盖都对不上(不该发生):整表清空兜底,防死循环。
             evicted.extend(overlay.drain(..).map(|(path, _value)| EvictedOverride {
                 path,
-                detail: detail.clone(),
+                warning: Arc::clone(&warning),
             }));
         }
     }
@@ -279,13 +280,13 @@ impl PlayerCore {
             mineral_log::warn!(
                 target: "config",
                 path = e.path,
-                detail = e.detail,
+                error = mineral_log::chain(e.warning.as_ref()),
                 "配置覆盖无效,已撤销"
             );
-            self.notify().toast(
-                mineral_protocol::ToastKind::Warn,
-                format!("配置覆盖无效已撤销:{}({})", e.path, e.detail),
-            );
+            self.notify()
+                .failure(mineral_protocol::FailureNotice::ConfigOverrideRejected {
+                    path: e.path.clone(),
+                });
         }
     }
 }

@@ -14,7 +14,7 @@ mineral-model = { workspace = true }
 
 async-trait     = { workspace = true }
 bytes           = { workspace = true }
-color-eyre      = { workspace = true }
+thiserror       = { workspace = true }
 futures-util    = { workspace = true }
 reqwest         = { workspace = true }
 rustc-hash      = { workspace = true }
@@ -22,6 +22,9 @@ stream-download = { workspace = true }
 tokio           = { workspace = true }
 tokio-util      = { workspace = true }
 url             = { workspace = true }
+
+[dev-dependencies]
+color-eyre = { workspace = true }
 
 [lints]
 workspace = true

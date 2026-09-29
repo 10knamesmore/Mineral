@@ -147,10 +147,11 @@ mod tests {
         let err = from_value::<CreatePlaylistResult>(serde_json::json!({ "code": 200 }))
             .err()
             .ok_or_else(|| color_eyre::eyre::eyre!("应解析失败"))?;
-        assert!(
-            format!("{err}").contains("playlist"),
-            "错误应点名缺失的 `playlist`,实得:{err}"
-        );
+        assert!(matches!(
+            err,
+            crate::Error::Parse { source, .. }
+                if source.downcast_ref::<serde_json::Error>().is_some_and(serde_json::Error::is_data)
+        ));
         Ok(())
     }
 }

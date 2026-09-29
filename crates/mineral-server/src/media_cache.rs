@@ -38,7 +38,7 @@ impl MediaCache {
         persist: &ServerStore,
         dir: PathBuf,
         capacity: u64,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self, mineral_persist::Error> {
         // 清掉上次进程遗留的半截 capture(崩溃 / 被 kill 时没下完、也没 harvest 的 .part)。
         let tmp = dir.join("tmp");
         if tmp.is_dir() {
@@ -107,7 +107,7 @@ impl MediaCache {
         quality: BitRate,
         format: Option<&AudioFormat>,
         src: &std::path::Path,
-    ) -> color_eyre::Result<Vec<mineral_persist::Evicted>> {
+    ) -> Result<Vec<mineral_persist::Evicted>, mineral_persist::Error> {
         let key = cache_key(&song.id, quality);
         let (subdir, file_name) = library_relpath(song, quality, format);
         self.index.record_file(&key, src, &subdir, &file_name).await
@@ -268,7 +268,7 @@ mod tests {
     ) -> color_eyre::Result<MediaCache> {
         let persist = ServerStore::open(db).await?;
         let capacity = *mineral_config::Config::defaults()?.cache().audio_capacity();
-        MediaCache::open(&persist, dir, capacity).await
+        Ok(MediaCache::open(&persist, dir, capacity).await?)
     }
 
     fn song(id: &str, name: &str, album: Option<&str>) -> Song {

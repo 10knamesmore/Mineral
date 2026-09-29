@@ -1,20 +1,17 @@
 //! 执行已注册的动作、事件与异步查询回调。
 //!
 //! 单个回调失败不影响同事件的其余回调；完整错误链写入日志，
-//! 错误提示使用固定顶替键，连续失败不堆叠提示。
+//! 错误提示只发送失败类别，通知顶替键由 client 生成。
 
 use std::sync::Arc;
 
-use mineral_protocol::{Event, TextSpan, ToastKind};
+use mineral_protocol::{Event, FailureNotice};
 use mlua::Lua;
 
 use super::projection::{briefs_table, direct_media_table, playlist_entry_table, song_table};
 use crate::host::ScriptHost;
 use crate::message::ScriptEvent;
 use crate::watchdog::{WatchdogConfig, call_guarded};
-
-/// 脚本错误 toast 的顶替键:连续失败替换内容续命,不在 client 端堆叠刷屏。
-const SCRIPT_ERROR_TOAST_ID: &str = "script.error";
 
 /// 调用一个具名动作:查注册表(锁内取 Arc、锁外调)。回调收单一 ctx table
 /// (无上下文触发面 = 空表;字段 nil 与缺字段在 Lua 侧无差别,加字段零破坏)。
@@ -46,14 +43,10 @@ pub(super) fn invoke_action(
                 error = mineral_log::chain(&e),
                 "script action failed"
             );
-            // 回执只给首行(toast / CLI stderr 的人读信息);
-            // mlua 错误的 traceback 多行,完整链已进上面的日志。
-            let first_line = mineral_log::chain(&e)
-                .lines()
-                .next()
-                .unwrap_or("脚本错误(详见日志)")
-                .to_owned();
-            ActionOutcome::Failed(first_line)
+            ActionOutcome::Failed(crate::Error::Lua {
+                operation: "执行脚本动作",
+                source: e,
+            })
         }
     }
 }
@@ -113,9 +106,9 @@ pub(super) fn resolve_query(
                 entry.set("killed", result.killed)?;
                 (mlua::Value::Table(entry), mlua::Value::Nil)
             }
-            ResolveValue::Error(msg) => (
+            ResolveValue::Error(error) => (
                 mlua::Value::Nil,
-                mlua::Value::String(lua.create_string(msg)?),
+                mlua::Value::String(lua.create_string(mineral_log::chain(error.as_ref()))?),
             ),
         };
         let func = lua.registry_value::<mlua::Function>(&key)?;
@@ -198,7 +191,7 @@ pub(super) fn dispatch_event(
 ///
 /// # Params:
 ///   - `callbacks`: 锁外快照的回调键列表
-///   - `event_name`: 事件名(日志 / toast 文案用)
+///   - `event_name`: 事件名(日志 / 失败类别用)
 ///   - `make_args`: 构造本次调用实参(失败按回调失败同等处理)
 fn invoke_all<A: mlua::IntoLuaMulti>(
     lua: &Lua,
@@ -219,7 +212,7 @@ fn invoke_all<A: mlua::IntoLuaMulti>(
     }
 }
 
-/// 回调失败的统一出口:完整链进日志,提示进 client toast。
+/// 回调失败的统一出口:完整链进日志,只发送失败类别给 client。
 /// (`emit` 自环调订阅者也走这里,故 `pub(crate)`。)
 pub(crate) fn report_callback_failure(host: &ScriptHost, event_name: &str, e: &mlua::Error) {
     mineral_log::error!(
@@ -228,14 +221,11 @@ pub(crate) fn report_callback_failure(host: &ScriptHost, event_name: &str, e: &m
         error = mineral_log::chain(e),
         "script callback failed"
     );
-    let _ = host.push.send(Event::Toast {
-        kind: ToastKind::Error,
-        content: vec![TextSpan::plain(format!(
-            "脚本 {event_name} 回调出错,详见日志"
-        ))],
-        id: Some(SCRIPT_ERROR_TOAST_ID.to_owned()),
-        ttl_secs: None,
-    });
+    let _ = host
+        .push
+        .send(Event::Failure(FailureNotice::ScriptCallbackFailed {
+            callback: event_name.to_owned(),
+        }));
 }
 
 /// 按键上下文在 Lua 侧的投影:蛇形字段名,缺席字段不设(Lua 读出 nil)。

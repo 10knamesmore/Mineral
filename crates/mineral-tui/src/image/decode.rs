@@ -2,12 +2,39 @@
 
 use std::io::Cursor;
 
-use color_eyre::eyre::{WrapErr, bail, eyre};
 use image::{DynamicImage, GrayImage, ImageFormat, RgbImage};
 use jpeg_decoder::{CodingProcess, Decoder, ImageInfo, PixelFormat};
 
 use super::key::PixelSize;
 use super::resize::thumbnail_exact;
+
+/// 封面像素解码失败。
+#[derive(Debug, thiserror::Error)]
+pub(super) enum Error {
+    /// 图片格式或通用解码器失败。
+    #[error("decode cover image")]
+    Image(#[from] image::ImageError),
+
+    /// JPEG 头或像素解码失败。
+    #[error("decode JPEG cover")]
+    Jpeg(#[from] jpeg_decoder::Error),
+
+    /// 图片尺寸无法转换为目标整数类型。
+    #[error("convert cover dimensions")]
+    Dimensions(#[from] std::num::TryFromIntError),
+
+    /// JPEG 解码器没有给出头信息。
+    #[error("JPEG header missing after read_info")]
+    MissingJpegHeader,
+
+    /// JPEG 像素数据与解码后的尺寸不一致。
+    #[error("JPEG pixels do not match decoded dimensions")]
+    InvalidJpegPixels,
+
+    /// 缩小解码不支持该 JPEG 像素格式。
+    #[error("scaled JPEG requires RGB or grayscale")]
+    UnsupportedJpegPixels,
+}
 
 /// 按配置准备显示像素，保持比例且不放大；无缩小解码能力的格式先完整解码再缩小。
 ///
@@ -20,7 +47,7 @@ use super::resize::thumbnail_exact;
 pub(super) fn display(
     bytes: &[u8],
     target: &mineral_config::CoverDecodePixelsConfig,
-) -> color_eyre::Result<DynamicImage> {
+) -> Result<DynamicImage, Error> {
     let required = PixelSize::new(target.width().get(), target.height().get());
     if image::guess_format(bytes)? == ImageFormat::Jpeg {
         let (decoder, info) = open_jpeg(bytes)?;
@@ -28,7 +55,7 @@ pub(super) fn display(
             return decode_jpeg(decoder, info, required);
         }
     }
-    let image = image::load_from_memory(bytes).wrap_err("decode cover")?;
+    let image = image::load_from_memory(bytes)?;
     let (width, height) = (image.width(), image.height());
     if width <= required.width() || height <= required.height() {
         return Ok(image);
@@ -61,13 +88,13 @@ pub(super) fn display(
 ///
 /// # Return:
 ///   可继续区域采样的图片；无效图片返回解码错误
-pub(super) fn preview(bytes: &[u8], cells: (u16, u16)) -> color_eyre::Result<DynamicImage> {
+pub(super) fn preview(bytes: &[u8], cells: (u16, u16)) -> Result<DynamicImage, Error> {
     if image::guess_format(bytes)? != ImageFormat::Jpeg {
-        return image::load_from_memory(bytes).wrap_err("decode preview");
+        return image::load_from_memory(bytes).map_err(Error::from);
     }
     let (decoder, info) = open_jpeg(bytes)?;
     if !supports_scaling(info) {
-        return image::load_from_memory(bytes).wrap_err("decode unscaled JPEG preview");
+        return image::load_from_memory(bytes).map_err(Error::from);
     }
     decode_jpeg(
         decoder,
@@ -76,11 +103,14 @@ pub(super) fn preview(bytes: &[u8], cells: (u16, u16)) -> color_eyre::Result<Dyn
     )
 }
 
+/// 读取内存图片字节的 JPEG 解码器。
+type JpegDecoder<'bytes> = Decoder<Cursor<&'bytes [u8]>>;
+
 /// 读取 JPEG 头，不分配完整像素。
-fn open_jpeg(bytes: &[u8]) -> color_eyre::Result<(Decoder<Cursor<&[u8]>>, ImageInfo)> {
-    let mut decoder = Decoder::new(Cursor::new(bytes));
-    decoder.read_info().wrap_err("read JPEG header")?;
-    let info = decoder.info().ok_or_else(|| eyre!("missing JPEG header"))?;
+fn open_jpeg(bytes: &[u8]) -> Result<(JpegDecoder<'_>, ImageInfo), Error> {
+    let mut decoder = JpegDecoder::new(Cursor::new(bytes));
+    decoder.read_info()?;
+    let info = decoder.info().ok_or(Error::MissingJpegHeader)?;
     Ok((decoder, info))
 }
 
@@ -92,17 +122,15 @@ fn supports_scaling(info: ImageInfo) -> bool {
 
 /// 保留满足两轴像素需求的最小 JPEG IDCT 档位，不再生成精确尺寸的滤波缓冲。
 fn decode_jpeg(
-    mut decoder: Decoder<Cursor<&[u8]>>,
+    mut decoder: JpegDecoder<'_>,
     info: ImageInfo,
     required: PixelSize,
-) -> color_eyre::Result<DynamicImage> {
+) -> Result<DynamicImage, Error> {
     let scaled = scaled_dimensions((info.width, info.height), required);
     // scale 在任意一轴满足请求时停止；短轴为 1 时多个倍率取整相同，至少请求 2 让另一轴决定倍率。
     let requested = (scaled.0.max(2), scaled.1.max(2));
-    let (width, height) = decoder
-        .scale(requested.0, requested.1)
-        .wrap_err("scale JPEG cover")?;
-    let pixels = decoder.decode().wrap_err("decode scaled JPEG cover")?;
+    let (width, height) = decoder.scale(requested.0, requested.1)?;
+    let pixels = decoder.decode()?;
     mineral_log::debug!(target: "cover", source_width = info.width, source_height = info.height,
         decoded_width = width, decoded_height = height, decoded_bytes = pixels.len(),
         "JPEG cover decoded");
@@ -113,9 +141,9 @@ fn decode_jpeg(
         PixelFormat::RGB24 => {
             RgbImage::from_raw(width, height, pixels).map(DynamicImage::ImageRgb8)
         }
-        PixelFormat::L16 | PixelFormat::CMYK32 => bail!("scaled JPEG requires RGB or grayscale"),
+        PixelFormat::L16 | PixelFormat::CMYK32 => return Err(Error::UnsupportedJpegPixels),
     }
-    .ok_or_else(|| eyre!("JPEG pixels do not match decoded dimensions"))
+    .ok_or(Error::InvalidJpegPixels)
 }
 
 /// 选择两轴均满足采样网格的最大 JPEG 缩小倍率；原图较小时保留原尺寸。

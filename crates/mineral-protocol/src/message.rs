@@ -1,22 +1,25 @@
 //! IPC 消息类型 — [`Request`] 与 [`Response`]。
 //!
 //! `Response` 的 variant 由调用方根据自己发出的 [`Request`] 决定预期;
-//! server 处理失败统一返回 [`Response::Error`]。
+//! server 业务失败统一返回 [`crate::OperationResult::Failed`]。
 
 use mineral_model::{AlbumId, ArtistId, PlaylistId, Song, SongId};
 use mineral_task::{Priority, TaskKind};
 use serde::{Deserialize, Serialize};
 use strum_macros::IntoStaticStr;
+use thiserror::Error;
 
 use crate::{DownloadId, DownloadTarget, PlayMode, QueueEditOutcome, QueueOp};
 
 /// Atomic PlayQueue request 的 validation error。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Error)]
 pub enum PlayQueueError {
     /// 提交了空 queue，无法选择 target occurrence。
+    #[error("queue 不能为空")]
     Empty,
 
     /// Queue 超过 server 的 hard cap；请求整体拒绝，不 truncate。
+    #[error("queue 长度 {len} 超过上限 {cap}")]
     CapacityExceeded {
         /// 请求提交的 Song 数。
         len: usize,
@@ -26,6 +29,7 @@ pub enum PlayQueueError {
     },
 
     /// Target 不是本次提交 Song Vec 中的有效 queue index。
+    #[error("target {target} 越界，queue 长度为 {len}")]
     TargetOutOfBounds {
         /// 请求提交的 0-based target index。
         target: usize,
@@ -35,28 +39,31 @@ pub enum PlayQueueError {
     },
 
     /// IPC transport 或响应 contract 不可用，queue 未确认起播。
+    #[error("队列起播未确认: {message}")]
     Unavailable {
-        /// 可供 UI 展示和日志定位的人读原因。
+        /// 仅用于日志诊断；前端据 `Unavailable` 类别生成提示。
         message: String,
     },
 }
 
-impl std::fmt::Display for PlayQueueError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => f.write_str("queue 不能为空"),
-            Self::CapacityExceeded { len, cap } => {
-                write!(f, "queue 长度 {len} 超过上限 {cap}")
-            }
-            Self::TargetOutOfBounds { target, len } => {
-                write!(f, "target {target} 越界，queue 长度为 {len}")
-            }
-            Self::Unavailable { message } => f.write_str(message),
-        }
-    }
-}
+/// 复制模板失败类别；展示层据变体生成提示，诊断详情只用于日志。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Error)]
+pub enum CopyTextFailure {
+    /// 没有启用脚本运行时。
+    #[error("脚本未启用")]
+    ScriptDisabled,
 
-impl std::error::Error for PlayQueueError {}
+    /// 脚本线程在返回渲染结果前退出。
+    #[error("脚本线程已退出")]
+    ScriptThreadExited,
+
+    /// 模板回调拒绝渲染；诊断详情不是 UI 文案。
+    #[error("模板回调失败: {detail}")]
+    CallbackFailed {
+        /// 脚本给出的诊断信息。
+        detail: String,
+    },
+}
 
 /// 队列语境的 wire 形态:client 告知一个队列「来自哪」,server 映射进埋点 `QueueContext`
 /// 后随该队列每个 plays 行继承(单一 origin 有归属漏洞:从歌单点第一首后连播 20 首,
@@ -247,12 +254,12 @@ pub enum Request {
     /// 提交单曲或歌单下载。返回 [`Response::Ok`]；下载状态由汇总和列表查询提供。
     Download(DownloadTarget),
 
-    /// Stop 一个 Song download。已知 identity 返回 [`Response::Ok`]，未知 identity 返回 [`Response::Error`]。
+    /// Stop 一个 Song download。已知 identity 返回 [`Response::Ok`]，未知 identity 返回结构化失败。
     StopDownload(DownloadId),
 
     // ---- 脚本 ----
     /// 触发脚本具名动作(`mineral.action` 注册)。成功返回 [`Response::Ok`];
-    /// 未注册 / 脚本未启用 / 回调失败返回 [`Response::Error`]。
+    /// 未注册 / 脚本未启用 / 回调失败返回结构化失败。
     InvokeAction {
         /// 动作注册名(config.lua 里 `mineral.action` 的第一个参数)。
         name: String,
@@ -371,11 +378,11 @@ pub enum Response {
     ScriptBinds(Vec<crate::ScriptBind>),
 
     /// 对应 [`Request::RenderCopyTemplate`]:`Ok` = 回调返回的剪贴板文本,
-    /// `Err` = 人读错误短文(无脚本运行时 / 下标越界 / 回调失败 / 超时被中断)。
-    CopyText(Result<String, String>),
+    /// `Err` = 结构化渲染失败。
+    CopyText(Result<String, CopyTextFailure>),
 
-    /// 服务端处理失败 / 当前不接受新 client / 协议异常。文本人读即可。
-    Error(String),
+    /// 服务端处理失败；诊断详情不用于 UI 展示。
+    Error(crate::OperationFailure),
 }
 
 /// 复制模板回调作用的实体:client 侧光标所指,整体随请求传输

@@ -177,14 +177,14 @@ fn build_channel() -> Result<BilibiliChannel> {
         .proxy(None)
         .timeout_secs(100)
         .build();
-    match load_stored()? {
+    Ok(match load_stored()? {
         Some(auth) => {
             eprintln!("(用已存登录态 mid={})", auth.dede_user_id);
-            BilibiliChannel::with_credential(&cfg, &auth)
+            BilibiliChannel::with_credential(&cfg, &auth)?
         }
         None => {
             eprintln!("(未登录:guest 访问,音质封顶 / 私密夹不可见;登录走 channel bilibili login)");
-            BilibiliChannel::new(&cfg)
+            BilibiliChannel::new(&cfg)?
         }
-    }
+    })
 }

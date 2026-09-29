@@ -38,7 +38,7 @@ impl PlaylistLoader {
         persist: &ServerStore,
         id: &PlaylistId,
         intent: PlaylistLoad,
-    ) -> color_eyre::Result<PlaylistDetail> {
+    ) -> crate::Result<PlaylistDetail> {
         let lock = {
             let mut active = self.active.lock().await;
             active.retain(|_, entry| entry.strong_count() > 0);
@@ -62,7 +62,7 @@ async fn fetch(
     config: &PlaylistFetchConfig,
     id: &PlaylistId,
     intent: PlaylistLoad,
-) -> color_eyre::Result<PlaylistDetail> {
+) -> crate::Result<PlaylistDetail> {
     let meta = match api::playlist::detail(transport, id, 0).await {
         Ok(result) => result.playlist,
         Err(error) => {

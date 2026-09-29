@@ -5,7 +5,6 @@ use std::sync::PoisonError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use color_eyre::eyre::{WrapErr, eyre};
 use isahc::cookies::{Cookie, CookieJar};
 use isahc::http::Uri;
 use isahc::{AsyncReadResponseExt, HttpClient, Request, config::Configurable};
@@ -18,8 +17,7 @@ use crate::sign::wbi::{extract_key, sign_with_wts};
 use crate::transport::headers::{REFERER, UA};
 use crate::wire::nav::NavData;
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::{Error, Result};
 
 /// nav 端点:取 WBI keys(guest 返回 -101 但仍带 `wbi_img`,故走 lax)。
 const NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
@@ -78,9 +76,15 @@ impl Transport {
             .max_connections(*config.max_connections())
             .cookies();
         if let Some(p) = config.proxy().as_deref() {
-            builder = builder.proxy(Some(p.parse().context("invalid proxy url")?));
+            builder = builder.proxy(Some(p.parse().map_err(|source| Error::Network {
+                operation: "parse proxy URL",
+                source: Box::new(source),
+            })?));
         }
-        let client = builder.build().context("build isahc client failed")?;
+        let client = builder.build().map_err(|source| Error::Network {
+            operation: "build HTTP client",
+            source: Box::new(source),
+        })?;
         Ok(Self {
             client,
             wbi: Mutex::new(None),
@@ -99,9 +103,10 @@ impl Transport {
     ///   带登录态的传输层;cookie / 客户端构建失败时 `Err`。
     pub fn from_credential(config: &BilibiliConfig, auth: &StoredBilibiliAuth) -> Result<Self> {
         let jar = CookieJar::new();
-        let url: Uri = HOME_URL
-            .parse()
-            .map_err(|e| eyre!("parse bilibili uri: {e}"))?;
+        let url: Uri = HOME_URL.parse().map_err(|source| Error::Network {
+            operation: "parse Bilibili URI",
+            source: Box::new(source),
+        })?;
         for (name, value) in [
             ("SESSDATA", auth.sessdata.as_str()),
             ("bili_jct", auth.bili_jct.as_str()),
@@ -114,9 +119,16 @@ impl Transport {
                 .domain("bilibili.com")
                 .path("/")
                 .build()
-                .map_err(|e| eyre!("build cookie {name}: {e}"))?;
-            jar.set(cookie, &url)
-                .map_err(|e| eyre!("set cookie {name}: {e}"))?;
+                .map_err(|source| Error::Cookie {
+                    operation: "build",
+                    name,
+                    source: Box::new(source),
+                })?;
+            jar.set(cookie, &url).map_err(|source| Error::Cookie {
+                operation: "set",
+                name,
+                source: Box::new(source),
+            })?;
         }
         let mut builder = HttpClient::builder()
             .timeout(Duration::from_secs(*config.timeout_secs()))
@@ -124,9 +136,15 @@ impl Transport {
             .cookies()
             .cookie_jar(jar);
         if let Some(p) = config.proxy().as_deref() {
-            builder = builder.proxy(Some(p.parse().context("invalid proxy url")?));
+            builder = builder.proxy(Some(p.parse().map_err(|source| Error::Network {
+                operation: "parse proxy URL",
+                source: Box::new(source),
+            })?));
         }
-        let client = builder.build().context("build isahc client failed")?;
+        let client = builder.build().map_err(|source| Error::Network {
+            operation: "build HTTP client",
+            source: Box::new(source),
+        })?;
         Ok(Self {
             client,
             wbi: Mutex::new(None),
@@ -147,18 +165,30 @@ impl Transport {
             .header("User-Agent", UA)
             .header("Referer", REFERER)
             .body(())
-            .map_err(|e| eyre!("build request: {e}"))?;
+            .map_err(|source| Error::Network {
+                operation: "build request",
+                source: Box::new(source),
+            })?;
         let mut resp = self
             .client
             .send_async(req)
             .await
-            .map_err(|e| eyre!("send: {e}"))?;
-        let bytes = resp.bytes().await.map_err(|e| eyre!("read body: {e}"))?;
-        serde_json::from_slice(&bytes).context("parse json envelope")
+            .map_err(|source| Error::Network {
+                operation: "send request",
+                source: Box::new(source),
+            })?;
+        let bytes = resp.bytes().await.map_err(|source| Error::Network {
+            operation: "read response body",
+            source: Box::new(source),
+        })?;
+        serde_json::from_slice(&bytes).map_err(|source| Error::Parse {
+            context: "response envelope".to_owned(),
+            source: Box::new(source),
+        })
     }
 
     /// 发一个 GET,解 `{code, message, data}` 信封:`code == 0` 返回 `data`,否则结构化
-    /// [`ApiCodeError`](channel 边界 downcast 映射)。
+    /// [`ApiCodeError`](channel 边界按 code 匹配)。
     ///
     /// # Params:
     ///   - `url`: 完整请求 URL(含已签名 query)
@@ -191,7 +221,7 @@ impl Transport {
     /// 单次签名请求(不重试)。
     async fn signed_once(&self, base_url: &str, params: Vec<(&str, String)>) -> Result<Value> {
         let keys = self.wbi_keys().await?;
-        let query = sign_with_wts(params, &keys.img_key, &keys.sub_key, now_secs());
+        let query = sign_with_wts(params, &keys.img_key, &keys.sub_key, now_secs()?);
         self.get_data(&format!("{base_url}?{query}")).await
     }
 
@@ -223,13 +253,34 @@ impl Transport {
 
     /// 从 nav 拉 `img_key`/`sub_key`(走 lax,guest 的 `-101` 不当错误)。
     async fn fetch_nav_keys(&self) -> Result<WbiKeys> {
-        let value = self.get_value(NAV_URL).await?;
+        let value = self
+            .get_value(NAV_URL)
+            .await
+            .map_err(|source| Error::SigningKeys {
+                source: Box::new(source),
+            })?;
         let data = value.get("data").cloned().unwrap_or(Value::Null);
-        let nav: NavData = crate::wire::de::from_value(data).context("解析 nav.wbi_img")?;
-        let img_key =
-            extract_key(&nav.wbi_img.img_url).ok_or_else(|| eyre!("nav img_key 提取失败"))?;
-        let sub_key =
-            extract_key(&nav.wbi_img.sub_url).ok_or_else(|| eyre!("nav sub_key 提取失败"))?;
+        let nav: NavData =
+            crate::wire::de::from_value(data).map_err(|source| Error::SigningKeys {
+                source: Box::new(Error::Parse {
+                    context: "nav.wbi_img".to_owned(),
+                    source: Box::new(source),
+                }),
+            })?;
+        let img_key = extract_key(&nav.wbi_img.img_url)
+            .ok_or(Error::InvalidData {
+                field: "nav.wbi_img.img_url",
+            })
+            .map_err(|source| Error::SigningKeys {
+                source: Box::new(source),
+            })?;
+        let sub_key = extract_key(&nav.wbi_img.sub_url)
+            .ok_or(Error::InvalidData {
+                field: "nav.wbi_img.sub_url",
+            })
+            .map_err(|source| Error::SigningKeys {
+                source: Box::new(source),
+            })?;
         Ok(WbiKeys { img_key, sub_key })
     }
 
@@ -242,12 +293,18 @@ impl Transport {
             .header("User-Agent", UA)
             .header("Referer", REFERER)
             .body(())
-            .map_err(|e| eyre!("build request: {e}"))?;
+            .map_err(|source| Error::Network {
+                operation: "build request",
+                source: Box::new(source),
+            })?;
         let mut resp = self
             .client
             .send_async(req)
             .await
-            .map_err(|e| eyre!("send: {e}"))?;
+            .map_err(|source| Error::Network {
+                operation: "send request",
+                source: Box::new(source),
+            })?;
         // 只为拿 set-cookie;body 排空即可。
         let _ = resp.bytes().await;
         self.buvid3_ready.store(true, Ordering::Release);
@@ -257,36 +314,36 @@ impl Transport {
 
 /// 解 `{code, message, data}` 信封:`code == 0` 返回 `data`,否则结构化 [`ApiCodeError`]。
 fn decode_envelope(v: &Value) -> Result<Value> {
-    let code = v.get("code").and_then(Value::as_i64).unwrap_or(-1);
+    let code = v
+        .get("code")
+        .and_then(Value::as_i64)
+        .ok_or(Error::InvalidData {
+            field: "response.code",
+        })?;
     if code != 0 {
-        let message = v
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        return Err(color_eyre::Report::new(ApiCodeError { code, message }));
+        let message = v.get("message").and_then(Value::as_str).map(str::to_owned);
+        return Err(ApiCodeError { code, message }.into());
     }
     Ok(v.get("data").cloned().unwrap_or(Value::Null))
 }
 
 /// 该错误是否是 WBI 签名失效(`-352`)。
-fn is_wbi_expired(e: &color_eyre::Report) -> bool {
-    e.downcast_ref::<ApiCodeError>()
-        .is_some_and(|a| a.code == CODE_WBI_EXPIRED)
+fn is_wbi_expired(e: &Error) -> bool {
+    matches!(e, Error::Api(api) if api.code == CODE_WBI_EXPIRED)
 }
 
-/// 当前 unix 秒(取不到时钟时退 0,签名仍能发出、由服务端判过期)。
-fn now_secs() -> u64 {
+/// 当前 Unix 秒；无法生成合法签名时间戳时保留时钟错误。
+fn now_secs() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map(|duration| duration.as_secs())
+        .map_err(Error::SigningClock)
 }
 
 #[cfg(test)]
 mod tests {
     use super::decode_envelope;
-    use crate::error::ApiCodeError;
+    use crate::error::Error;
 
     /// from_credential 把三件套 cookie 塞进 jar,且能被 `www` **和** `api` 两个子域取回。
     ///
@@ -335,18 +392,33 @@ mod tests {
         Ok(())
     }
 
-    /// `code != 0` 时结构化成 [`ApiCodeError`](含 code/message),供 channel 边界 downcast。
+    /// 缺失业务码不能冒充成功或风控状态。
+    #[test]
+    fn envelope_without_code_is_invalid_data() {
+        assert!(matches!(
+            decode_envelope(&serde_json::json!({ "data": {} })),
+            Err(Error::InvalidData {
+                field: "response.code"
+            })
+        ));
+    }
+
+    /// `code != 0` 时保留 `ApiCodeError` 的 code/message，供 channel 边界匹配。
     #[test]
     fn envelope_nonzero_is_structured_error() -> color_eyre::Result<()> {
         let v = serde_json::json!({ "code": -352, "message": "风控校验失败" });
         let Err(err) = decode_envelope(&v) else {
             return Err(color_eyre::eyre::eyre!("非 0 code 应报错"));
         };
-        let api = err
-            .downcast_ref::<ApiCodeError>()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应能 downcast 回 ApiCodeError"))?;
+        let Error::Api(api) = err else {
+            return Err(color_eyre::eyre::eyre!("expected structured ApiCodeError"));
+        };
         assert_eq!(api.code, -352);
-        assert_eq!(api.message, "风控校验失败");
+        assert_eq!(api.message.as_deref(), Some("风控校验失败"));
+        assert!(matches!(
+            decode_envelope(&serde_json::json!({ "code": -352 })),
+            Err(Error::Api(crate::error::ApiCodeError { message: None, .. }))
+        ));
         Ok(())
     }
 }

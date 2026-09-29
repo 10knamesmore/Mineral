@@ -7,12 +7,13 @@ use super::projection::{album_table, artist_table, briefs_table, playlist_table,
 use super::return_value::lua_field;
 use crate::host::ScriptHost;
 use crate::watchdog::{WatchdogConfig, call_guarded};
+use crate::{Error, Result};
 
 /// 跑一级 curate transform:registry 取函数(缺席 = 常态透传),投影入参,
 /// 看门狗保护执行,返回值解释成采纳条目。函数失败 / 返回非法形态一律
 /// [`CurateOutcome::Identity`](crate::message::CurateOutcome::Identity)
-/// (fail-open,歌单不因脚本 bug 消失)+ 记日志
-/// + error toast。
+/// (fail-open,歌单不因脚本 bug 消失)+ 完整错误链进日志
+/// + 结构化失败类别推送给 client。
 pub(super) fn run_curate(
     lua: &Lua,
     host: &ScriptHost,
@@ -96,29 +97,38 @@ fn interpret_curate_return(value: &mlua::Value) -> mlua::Result<Vec<crate::messa
 }
 
 /// 渲染一个复制模板:registry 函数表按下标取函数,实体投影成表喂入,看门狗
-/// 保护执行,返回剪贴板文本。错误侧是人读首行短文(回执给 client toast),
-/// 完整链在这里进日志。
+/// 保护执行,返回剪贴板文本。失败返回带 source 的脚本错误,完整链记日志。
 pub(super) fn render_copy_template(
     lua: &Lua,
     watchdog: &WatchdogConfig,
     index: usize,
     ctx: &mineral_protocol::CopyTemplateCtx,
-) -> Result<String, String> {
+) -> Result<String> {
     use mineral_protocol::CopyTemplateCtx;
     let fns: mlua::Table = lua
         .named_registry_value(mineral_config::COPY_TEMPLATE_FNS)
-        .map_err(|e| format!("模板函数表缺失:{e}"))?;
+        .map_err(|source| Error::Lua {
+            operation: "读取模板函数表",
+            source,
+        })?;
     // protocol 下标 0-based,Lua 数组 1-based。
-    let func: mlua::Function = fns
-        .get(index.saturating_add(1))
-        .map_err(|_not_a_function| format!("模板 #{index} 没有可调用的 template 函数"))?;
+    let func: mlua::Function =
+        fns.get(index.saturating_add(1))
+            .map_err(|source| Error::MissingFunction {
+                kind: "模板",
+                index,
+                source,
+            })?;
     let arg = match ctx {
         CopyTemplateCtx::Song(song) => song_table(lua, song),
         CopyTemplateCtx::Playlist(playlist) => playlist_table(lua, playlist),
         CopyTemplateCtx::Album(album) => album_table(lua, album),
         CopyTemplateCtx::Artist(artist) => artist_table(lua, artist),
     }
-    .map_err(|e| format!("实体投影失败:{e}"))?;
+    .map_err(|source| Error::Lua {
+        operation: "实体投影",
+        source,
+    })?;
     call_guarded::<_, String>(lua, watchdog, &func, arg).map_err(|e| {
         mineral_log::error!(
             target: "script",
@@ -126,12 +136,10 @@ pub(super) fn render_copy_template(
             error = mineral_log::chain(&e),
             "copy template failed"
         );
-        // 回执只给首行(toast 的人读信息);mlua 错误的 traceback 多行。
-        mineral_log::chain(&e)
-            .lines()
-            .next()
-            .unwrap_or("脚本错误(详见日志)")
-            .to_owned()
+        Error::Lua {
+            operation: "执行复制模板",
+            source: e,
+        }
     })
 }
 
@@ -149,7 +157,7 @@ pub(super) fn render_copy_template(
 ///   - `selected`: 光标下标(0-based),无则 `None`
 ///
 /// # Return:
-///   新顺序的 id 序列;函数缺失 / 报错 / 返回值不是歌表数组时返回错误串(调用方 fail-open)。
+///   新顺序的 id 序列;函数缺失 / 报错 / 返回值不是歌表数组时返回结构化错误(调用方 fail-open)。
 pub(super) fn run_queue_transform(
     lua: &Lua,
     watchdog: &WatchdogConfig,
@@ -157,30 +165,47 @@ pub(super) fn run_queue_transform(
     queue: &[mineral_model::Song],
     current: usize,
     selected: Option<usize>,
-) -> Result<Vec<mineral_model::SongId>, String> {
+) -> Result<Vec<mineral_model::SongId>> {
     let fns: mlua::Table = lua
         .named_registry_value(mineral_config::QUEUE_TRANSFORM_FNS)
-        .map_err(|e| format!("变换函数表缺失:{e}"))?;
+        .map_err(|source| Error::Lua {
+            operation: "读取队列变换函数表",
+            source,
+        })?;
     // protocol 下标 0-based,Lua 数组 1-based。
-    let func: mlua::Function = fns
-        .get(index.saturating_add(1))
-        .map_err(|_not_a_function| format!("变换 #{index} 没有可调用的 transform 函数"))?;
+    let func: mlua::Function =
+        fns.get(index.saturating_add(1))
+            .map_err(|source| Error::MissingFunction {
+                kind: "变换",
+                index,
+                source,
+            })?;
     let songs = lua
         .create_sequence_from(
             queue
                 .iter()
                 .map(|s| song_table(lua, s))
                 .collect::<mlua::Result<Vec<_>>>()
-                .map_err(|e| format!("队列投影失败:{e}"))?,
+                .map_err(|source| Error::Lua {
+                    operation: "队列投影",
+                    source,
+                })?,
         )
-        .map_err(|e| format!("队列投影失败:{e}"))?;
-    let ctx = lua
-        .create_table()
-        .map_err(|e| format!("上下文投影失败:{e}"))?;
+        .map_err(|source| Error::Lua {
+            operation: "队列投影",
+            source,
+        })?;
+    let ctx = lua.create_table().map_err(|source| Error::Lua {
+        operation: "上下文投影",
+        source,
+    })?;
     // Lua 侧一律 1-based,与 songs 数组下标同口径。
     ctx.set("current", current.saturating_add(1))
         .and_then(|()| ctx.set("selected", selected.map(|at| at.saturating_add(1))))
-        .map_err(|e| format!("上下文投影失败:{e}"))?;
+        .map_err(|source| Error::Lua {
+            operation: "上下文投影",
+            source,
+        })?;
     let returned: mlua::Table = call_guarded(lua, watchdog, &func, (songs, ctx)).map_err(|e| {
         mineral_log::error!(
             target: "script",
@@ -188,23 +213,26 @@ pub(super) fn run_queue_transform(
             error = mineral_log::chain(&e),
             "queue transform failed"
         );
-        mineral_log::chain(&e)
-            .lines()
-            .next()
-            .unwrap_or("脚本错误(详见日志)")
-            .to_owned()
+        Error::Lua {
+            operation: "执行队列变换",
+            source: e,
+        }
     })?;
     let mut ids = Vec::with_capacity(returned.raw_len());
     for at in 1..=returned.raw_len() {
-        let entry: mlua::Table = returned
-            .get(at)
-            .map_err(|_not_a_table| format!("返回的第 {at} 项不是歌表"))?;
-        let qualified: String = entry
-            .get("id")
-            .map_err(|_missing| format!("返回的第 {at} 项缺 id 字段"))?;
+        let entry: mlua::Table = returned.get(at).map_err(|source| Error::InvalidSongEntry {
+            index: at,
+            field: "歌表",
+            source,
+        })?;
+        let qualified: String = entry.get("id").map_err(|source| Error::InvalidSongEntry {
+            index: at,
+            field: "id",
+            source,
+        })?;
         ids.push(
             crate::api::value::parse_song_id(&qualified)
-                .map_err(|e| format!("返回的第 {at} 项 id 无法解析:{e}"))?,
+                .map_err(|source| Error::InvalidSongId { index: at, source })?,
         );
     }
     Ok(ids)

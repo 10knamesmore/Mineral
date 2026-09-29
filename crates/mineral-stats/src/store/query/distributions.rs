@@ -4,7 +4,6 @@ use std::ops::Range;
 
 use super::shared::{ReportColumn, plays_in};
 use crate::entity::plays;
-use color_eyre::eyre::WrapErr as _;
 use sea_orm::sea_query::{self, Expr, ExprTrait, Func, Iden};
 use sea_orm::{ColumnTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 
@@ -32,7 +31,7 @@ impl StatsStore {
         &self,
         range: Range<i64>,
         by: BucketBy,
-    ) -> color_eyre::Result<Vec<Bucket>> {
+    ) -> crate::Result<Vec<Bucket>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -60,11 +59,14 @@ impl StatsStore {
             .into_model::<Bucket>()
             .all(db)
             .await
-            .wrap_err("listen_buckets 查询失败")
+            .map_err(|source| crate::Error::Database {
+                operation: "listen_buckets 查询",
+                source,
+            })
     }
 
     /// 各维度分布(来源 / 发起方式 / 模式 / 格式 / 音质 / 来源位置)+ 无损播放数。
-    pub async fn distributions(&self, range: Range<i64>) -> color_eyre::Result<Distributions> {
+    pub async fn distributions(&self, range: Range<i64>) -> crate::Result<Distributions> {
         let Some(pool) = self.pool() else {
             return Ok(Distributions::default());
         };
@@ -73,7 +75,10 @@ impl StatsStore {
                 .filter(plays::Column::IsLossless.eq(1))
                 .count(pool)
                 .await
-                .wrap_err("distributions(lossless) 查询失败")?,
+                .map_err(|source| crate::Error::Database {
+                    operation: "distributions(lossless) 查询",
+                    source,
+                })?,
         )?;
         Ok(Distributions {
             by_source: self
@@ -104,7 +109,7 @@ impl StatsStore {
         &self,
         range: Range<i64>,
         column: plays::Column,
-    ) -> color_eyre::Result<Vec<Slice>> {
+    ) -> crate::Result<Vec<Slice>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -119,7 +124,10 @@ impl StatsStore {
             .into_tuple::<(String, i64)>()
             .all(db)
             .await
-            .wrap_err_with(|| format!("distribution_by {column:?} 查询失败"))?;
+            .map_err(|source| crate::Error::Distribution {
+                column: format!("{column:?}"),
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|(value, plays)| Slice { value, plays })

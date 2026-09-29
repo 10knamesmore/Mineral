@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use crate::entity::{track_pos, ui_prefs};
 use crate::migration::ClientMigrator;
-use color_eyre::eyre::WrapErr;
 use mineral_model::{PlaylistId, SongId, SourceKind};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{DatabaseConnection, EntityTrait, Set, TransactionTrait};
@@ -51,17 +50,20 @@ impl ClientStore {
     ///
     /// # Return:
     ///   就绪句柄;连接 / 迁移失败返回 `Err`(调用方应降级,如封面不缓存、偏好不存)。
-    pub async fn open(db_path: &Path) -> color_eyre::Result<Self> {
+    pub async fn open(db_path: &Path) -> crate::Result<Self> {
         let pool = crate::pool::connect(db_path).await?;
         Self::with_pool(pool).await
     }
 
     /// 用现成连接池组装句柄并跑 client 库迁移(测试用内存池入口)。
     ///
-    async fn with_pool(pool: DatabaseConnection) -> color_eyre::Result<Self> {
-        ClientMigrator::up(&pool, /*steps*/ None).await.wrap_err(
-            "client 库 schema 迁移失败;若此库建于迁移机制引入之前,请运行 mineral cache reset --yes 重建",
-        )?;
+    async fn with_pool(pool: DatabaseConnection) -> crate::Result<Self> {
+        ClientMigrator::up(&pool, /*steps*/ None)
+            .await
+            .map_err(|source| crate::Error::Migration {
+                database: "client",
+                source,
+            })?;
         Ok(Self { pool })
     }
 
@@ -73,11 +75,7 @@ impl ClientStore {
     ///
     /// # Return:
     ///   就绪索引;建表 / 载入失败返回 `Err`。
-    pub async fn cover_cache(
-        &self,
-        root: PathBuf,
-        capacity: u64,
-    ) -> color_eyre::Result<CacheIndex> {
+    pub async fn cover_cache(&self, root: PathBuf, capacity: u64) -> crate::Result<CacheIndex> {
         CacheIndex::open(
             self.pool.clone(),
             crate::cache_index::CacheTable::Cover,
@@ -94,11 +92,15 @@ impl ClientStore {
     ///
     /// # Return:
     ///   键存在为 `Some(值)`,不存在为 `None`。
-    pub async fn get_pref(&self, key: &str) -> color_eyre::Result<Option<String>> {
+    pub async fn get_pref(&self, key: &str) -> crate::Result<Option<String>> {
         Ok(ui_prefs::Entity::find_by_id(key)
             .one(&self.pool)
             .await
-            .wrap_err_with(|| format!("读 ui_prefs 失败 key={key}"))?
+            .map_err(|source| crate::Error::Record {
+                operation: "读 ui_prefs",
+                record: key.to_owned(),
+                source,
+            })?
             .map(|row| row.value))
     }
 
@@ -107,7 +109,7 @@ impl ClientStore {
     /// # Params:
     ///   - `key`: 偏好键
     ///   - `value`: 偏好值(调用方自行定义稳定字符串编码)
-    pub async fn set_pref(&self, key: &str, value: &str) -> color_eyre::Result<()> {
+    pub async fn set_pref(&self, key: &str, value: &str) -> crate::Result<()> {
         ui_prefs::Entity::insert(ui_prefs::ActiveModel {
             key: Set(key.to_owned()),
             value: Set(value.to_owned()),
@@ -119,7 +121,11 @@ impl ClientStore {
         )
         .exec_without_returning(&self.pool)
         .await
-        .wrap_err_with(|| format!("写 ui_prefs 失败 key={key}"))?;
+        .map_err(|source| crate::Error::Record {
+            operation: "写 ui_prefs",
+            record: key.to_owned(),
+            source,
+        })?;
         Ok(())
     }
 
@@ -127,11 +133,14 @@ impl ClientStore {
     ///
     /// # Return:
     ///   全部行(顺序不保证;客户端按歌单 id 入 map);行下标为负(库损坏)时报错。
-    pub async fn load_track_positions(&self) -> color_eyre::Result<Vec<TrackPosRow>> {
+    pub async fn load_track_positions(&self) -> crate::Result<Vec<TrackPosRow>> {
         let rows = track_pos::Entity::find()
             .all(&self.pool)
             .await
-            .wrap_err("读 track_pos 失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "读 track_pos",
+                source,
+            })?;
         rows.into_iter()
             .map(|row| {
                 Ok(TrackPosRow {
@@ -151,16 +160,22 @@ impl ClientStore {
     ///
     /// # Params:
     ///   - `rows`: 当前全量记忆(表规模 ~ 歌单数)
-    pub async fn replace_track_positions(&self, rows: &[TrackPosRow]) -> color_eyre::Result<()> {
+    pub async fn replace_track_positions(&self, rows: &[TrackPosRow]) -> crate::Result<()> {
         let tx = self
             .pool
             .begin()
             .await
-            .wrap_err("开启 track_pos 事务失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "开启 track_pos 事务",
+                source,
+            })?;
         track_pos::Entity::delete_many()
             .exec(&tx)
             .await
-            .wrap_err("清 track_pos 失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "清 track_pos",
+                source,
+            })?;
         for row in rows {
             track_pos::Entity::insert(track_pos::ActiveModel {
                 playlist_namespace: Set(row.playlist.namespace().name().to_owned()),
@@ -172,9 +187,16 @@ impl ClientStore {
             })
             .exec_without_returning(&tx)
             .await
-            .wrap_err_with(|| format!("写 track_pos 失败 playlist={}", row.playlist.value()))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "写 track_pos",
+                record: row.playlist.value().to_owned(),
+                source,
+            })?;
         }
-        tx.commit().await.wrap_err("提交 track_pos 事务失败")?;
+        tx.commit().await.map_err(|source| crate::Error::Database {
+            operation: "提交 track_pos 事务",
+            source,
+        })?;
         Ok(())
     }
 }
@@ -185,12 +207,24 @@ mod tests {
 
     use super::ClientStore;
 
+    /// Opening a database below a missing directory reports its attempted file path.
+    #[tokio::test]
+    async fn open_missing_parent_reports_database_path() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("missing").join("tui.db");
+        assert!(matches!(
+            super::ClientStore::open(&path).await,
+            Err(crate::Error::Connect { path: failed_path, .. }) if failed_path == path
+        ));
+        Ok(())
+    }
+
     /// 开一个内存 sqlite 的 [`ClientStore`](每个测试独立)。
     async fn mem_store() -> color_eyre::Result<ClientStore> {
         let mut options = ConnectOptions::new("sqlite::memory:");
         options.max_connections(/*value*/ 1);
         let pool = Database::connect(options).await?;
-        ClientStore::with_pool(pool).await
+        Ok(ClientStore::with_pool(pool).await?)
     }
 
     /// 不同键互不串扰;未写键为 `None`。

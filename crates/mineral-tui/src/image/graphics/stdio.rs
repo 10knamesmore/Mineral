@@ -4,8 +4,31 @@ use std::io::{Read as _, Write as _};
 use std::os::fd::AsFd as _;
 use std::time::{Duration, Instant};
 
-use color_eyre::eyre::WrapErr as _;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+
+/// 终端图形能力查询的 I/O 失败。
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    /// 查询命令未能写出。
+    #[error("write terminal graphics query")]
+    Write(#[source] std::io::Error),
+
+    /// 查询命令未能刷新到终端。
+    #[error("flush terminal graphics query")]
+    Flush(#[source] std::io::Error),
+
+    /// 超时时间超出 poll 支持范围。
+    #[error("terminal query timeout exceeds poll range")]
+    Timeout(#[source] std::io::Error),
+
+    /// 等待查询结果失败。
+    #[error("poll terminal graphics response")]
+    Poll(#[source] nix::errno::Errno),
+
+    /// 读取查询结果失败。
+    #[error("read terminal graphics response")]
+    Read(#[source] std::io::Error),
+}
 
 /// 写出控制序列并读取响应，直到完成条件命中或截止时间到达。
 ///
@@ -26,13 +49,11 @@ pub(crate) fn exchange(
     command: &str,
     timeout: Duration,
     complete: impl Fn(&[u8]) -> bool,
-) -> color_eyre::Result<Vec<u8>> {
+) -> Result<Vec<u8>, Error> {
     {
         let mut output = std::io::stdout().lock();
-        output
-            .write_all(command.as_bytes())
-            .wrap_err("write terminal graphics query")?;
-        output.flush().wrap_err("flush terminal graphics query")?;
+        output.write_all(command.as_bytes()).map_err(Error::Write)?;
+        output.flush().map_err(Error::Flush)?;
     }
     let deadline = Instant::now() + timeout;
     let input = std::io::stdin();
@@ -46,19 +67,17 @@ pub(crate) fn exchange(
         if remaining.is_zero() {
             return Ok(response);
         }
-        let timeout =
-            PollTimeout::try_from(remaining).wrap_err("convert terminal query timeout")?;
+        let timeout = PollTimeout::try_from(remaining)
+            .map_err(|source| Error::Timeout(std::io::Error::other(source)))?;
         let ready = {
             let mut descriptors = [PollFd::new(input.as_fd(), PollFlags::POLLIN)];
-            poll(&mut descriptors, timeout).wrap_err("poll terminal graphics response")?
+            poll(&mut descriptors, timeout).map_err(Error::Poll)?
         };
         if ready == 0 {
             return Ok(response);
         }
         let mut chunk = [0_u8; 1024];
-        let read = input
-            .read(&mut chunk)
-            .wrap_err("read terminal graphics response")?;
+        let read = input.read(&mut chunk).map_err(Error::Read)?;
         if read == 0 {
             return Ok(response);
         }

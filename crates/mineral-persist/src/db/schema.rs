@@ -1,6 +1,5 @@
 //! 服务状态数据库的结构初始化。
 
-use color_eyre::eyre::WrapErr;
 use mineral_log::debug;
 use sea_orm::DatabaseConnection;
 use sea_orm_migration::MigratorTrait;
@@ -14,12 +13,14 @@ use crate::migration::ServerMigrator;
 ///
 /// # Return:
 ///   迁移到最新版本返回 `Ok(())`;建于迁移机制之前的老库(表已存在、无记账)会在
-///   baseline 撞「表已存在」报错,错误指引用户重建。
-pub(crate) async fn ensure_schema(pool: &DatabaseConnection) -> color_eyre::Result<()> {
-    ServerMigrator::up(pool, /*steps*/ None).await.wrap_err(
-        "schema 迁移失败;若此库建于迁移机制引入之前,请停掉 daemon 后运行 \
-         `mineral cache reset --yes` 删库重建(会丢失播放统计 / 喜欢 / 历史)",
-    )?;
+///   baseline 撞「表已存在」报出迁移错误。
+pub(crate) async fn ensure_schema(pool: &DatabaseConnection) -> crate::Result<()> {
+    ServerMigrator::up(pool, /*steps*/ None)
+        .await
+        .map_err(|source| crate::Error::Migration {
+            database: "server",
+            source,
+        })?;
     debug!(target: "persist", "schema 迁移完成");
     Ok(())
 }
@@ -132,9 +133,9 @@ mod tests {
         Ok(())
     }
 
-    /// 无迁移记录的已有结构响亮失败，并提供重建指引。
+    /// 无迁移记录的已有结构以迁移错误失败。
     #[tokio::test]
-    async fn pre_migration_db_fails_loud_with_reset_hint() -> color_eyre::Result<()> {
+    async fn pre_migration_db_returns_migration_error() -> color_eyre::Result<()> {
         let db = memory_database().await?;
         db.execute(
             Table::create()
@@ -161,11 +162,13 @@ mod tests {
             Ok(()) => return Err(color_eyre::eyre::eyre!("老库应报错而非静默通过")),
             Err(error) => error,
         };
-        let chain = format!("{err:#}");
-        assert!(
-            chain.contains("mineral cache reset"),
-            "错误应带重建指引,实际:{chain}"
-        );
+        assert!(matches!(
+            err,
+            crate::Error::Migration {
+                database: "server",
+                source: _
+            }
+        ));
         Ok(())
     }
 }

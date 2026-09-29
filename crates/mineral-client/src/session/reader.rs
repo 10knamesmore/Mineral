@@ -86,7 +86,7 @@ fn handle_update(
         }
         Ok(None) => {}
         Err(error) => {
-            mineral_log::warn!(target: "ipc", subscription = subscription.value(), error = %error, "订阅分片组装失败");
+            mineral_log::warn!(target: "ipc", subscription = subscription.value(), error = mineral_log::chain(&error), "订阅分片组装失败");
             shared.dropped.fetch_add(1, Ordering::Relaxed);
             shared.mirror.reset_subscription(subscription);
             request_resync(resync_tx, subscription);

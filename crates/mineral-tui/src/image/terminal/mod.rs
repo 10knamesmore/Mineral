@@ -6,6 +6,6 @@ mod image;
 mod iterm2;
 mod sixel;
 
-pub(crate) use image::TerminalImage;
+pub(crate) use image::{Error as EncodeError, TerminalImage};
 
 pub(super) use halfblocks::{render_pixels, sample_pixels};

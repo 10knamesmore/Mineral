@@ -8,11 +8,12 @@ use mineral_model::{
     DirectMedia, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId, Song, SongId, SourceKind,
 };
 use mineral_playback::{
-    DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
+    DirectPreparedPlayback, Error as PlaybackError, PlaybackProvider, PlaybackRequest,
+    PreparedPlayback,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::LocalLibrary;
+use crate::{LocalLibrary, error::Error as LocalError};
 
 #[async_trait]
 impl MusicChannel for LocalLibrary {
@@ -69,7 +70,12 @@ impl MusicChannel for LocalLibrary {
         let sidecar = record.path.with_extension("lrc");
         let lyrics = match tokio::fs::read(&sidecar).await {
             Ok(bytes) => {
-                let text = crate::metadata::decode_sidecar(&bytes).map_err(Error::Other)?;
+                let text = crate::metadata::decode_sidecar(&bytes).map_err(|source| {
+                    LocalError::LyricsEncoding {
+                        path: sidecar.clone(),
+                        source,
+                    }
+                })?;
                 let lyrics = Lyrics {
                     lines: mineral_model::parse_lrc(&text),
                 };
@@ -79,7 +85,14 @@ impl MusicChannel for LocalLibrary {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 record.metadata.embedded_lyrics.clone().unwrap_or_default()
             }
-            Err(error) => return Err(Error::Other(error.into())),
+            Err(source) => {
+                return Err(LocalError::File {
+                    operation: "read lyric sidecar",
+                    path: sidecar,
+                    source,
+                }
+                .into());
+            }
         };
         Ok(lyrics)
     }
@@ -95,17 +108,19 @@ impl PlaybackProvider for LocalLibrary {
         &self,
         request: PlaybackRequest,
         cancellation: CancellationToken,
-    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+    ) -> mineral_playback::Result<Box<dyn PreparedPlayback>> {
         if cancellation.is_cancelled() {
-            color_eyre::eyre::bail!("local playback cancelled");
+            return Err(PlaybackError::Cancelled);
         }
         let catalog = self.catalog().await?;
         if cancellation.is_cancelled() {
-            color_eyre::eyre::bail!("local playback cancelled");
+            return Err(PlaybackError::Cancelled);
         }
-        let file = catalog.file(request.song_id()).ok_or_else(|| {
-            color_eyre::eyre::eyre!("unknown local song {}", request.song_id().qualified())
-        })?;
+        let file = catalog
+            .file(request.song_id())
+            .ok_or_else(|| LocalError::SongNotFound {
+                id: request.song_id().clone(),
+            })?;
         let info = PlaybackMediaInfo {
             song_id: file.song.id.clone(),
             bitrate_bps: file.metadata.bitrate_bps.map(Into::into),

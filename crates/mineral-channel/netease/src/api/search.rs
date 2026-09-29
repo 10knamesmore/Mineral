@@ -1,11 +1,9 @@
 //! 搜索端点(纯协议:参数 → 类型化 wire DTO,DTO → model 映射归 `convert`)。
 
-use color_eyre::eyre::eyre;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
-/// 本模块内部统一的 result 别名,屏蔽 color-eyre 全名。
-type Result<T> = color_eyre::Result<T>;
+use crate::{Error, Result};
 
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
@@ -57,9 +55,9 @@ async fn search_typed<T: DeserializeOwned>(
     limit: u32,
 ) -> Result<T> {
     let raw = search_raw(transport, path, keyword, stype, offset, limit).await?;
-    let result = raw
-        .get("result")
-        .ok_or_else(|| eyre!("search response missing `result`"))?;
+    let result = raw.get("result").ok_or_else(|| Error::InvalidData {
+        field: "search.result",
+    })?;
     crate::wire::de::from_value(result.clone())
 }
 

@@ -6,14 +6,13 @@
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, Subcommand};
-use color_eyre::eyre::{WrapErr, eyre};
 use isahc::http::Uri;
 use qrcode::QrCode;
 use qrcode::render::unicode;
 
 use crate::api::login::{generate, poll};
 use crate::credential::{StoredBilibiliAuth, save};
-use crate::{BilibiliChannel, BilibiliConfig};
+use crate::{BilibiliChannel, BilibiliConfig, Error};
 
 /// B站根 URL,用于在 cookie jar 中按域名定位凭证 cookie。
 const BASE_URL: &str = "https://www.bilibili.com";
@@ -50,14 +49,14 @@ pub enum BilibiliCommand {
 /// # Params:
 ///   - `cli`: 已解析的子命令
 ///   - `config`: B站构造参数(代理 / 超时对登录同样生效)
-pub async fn run(cli: BilibiliCli, config: &BilibiliConfig) -> color_eyre::Result<()> {
+pub async fn run(cli: BilibiliCli, config: &BilibiliConfig) -> crate::Result<()> {
     match cli.command {
         BilibiliCommand::Login => run_login(config).await,
     }
 }
 
 /// `mineral channel bilibili login` 主流程:申请二维码、终端渲染、轮询、成功后写凭证。
-async fn run_login(config: &BilibiliConfig) -> color_eyre::Result<()> {
+async fn run_login(config: &BilibiliConfig) -> crate::Result<()> {
     let channel = BilibiliChannel::new(config)?;
     let qr = generate(channel.transport()).await?;
     render_qr(&qr.url)?;
@@ -79,19 +78,19 @@ async fn run_login(config: &BilibiliConfig) -> color_eyre::Result<()> {
             }
             STATUS_NOT_SCANNED | STATUS_NOT_CONFIRMED => {
                 tokio::select! {
-                    _ = tokio::signal::ctrl_c() => return Err(eyre!("QR login cancelled")),
+                    _ = tokio::signal::ctrl_c() => return Err(Error::LoginCancelled),
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {}
                 }
             }
-            STATUS_EXPIRED => return Err(eyre!("QR code expired; run login again")),
-            other => return Err(eyre!("unknown QR login status code: {other}")),
+            STATUS_EXPIRED => return Err(Error::LoginExpired),
+            other => return Err(Error::LoginStatus { code: other }),
         }
     }
 }
 
 /// 把 url 编成二维码并按 unicode dense 1x2 字符块输出到 stdout。
-fn render_qr(url: &str) -> color_eyre::Result<()> {
-    let code = QrCode::new(url.as_bytes()).context("failed to generate QR code")?;
+fn render_qr(url: &str) -> crate::Result<()> {
+    let code = QrCode::new(url.as_bytes())?;
     let rendered = code.render::<unicode::Dense1x2>().quiet_zone(true).build();
     println!("{rendered}");
     Ok(())
@@ -107,18 +106,22 @@ fn print_status_hint(code: i64) {
 }
 
 /// 从 channel 的 cookie jar 里取出登录凭证三件套。
-fn extract_auth(channel: &BilibiliChannel) -> color_eyre::Result<StoredBilibiliAuth> {
-    let jar = channel
-        .transport()
-        .cookie_jar()
-        .ok_or_else(|| eyre!("no cookie jar after QR login"))?;
-    let uri: Uri = BASE_URL.parse().context("parse bilibili base uri failed")?;
+fn extract_auth(channel: &BilibiliChannel) -> crate::Result<StoredBilibiliAuth> {
+    let jar = channel.transport().cookie_jar().ok_or(Error::InvalidData {
+        field: "QR login cookie jar",
+    })?;
+    let uri: Uri = BASE_URL.parse().map_err(|source| Error::Network {
+        operation: "parse Bilibili base URI",
+        source: Box::new(source),
+    })?;
     let get = |name: &str| jar.get_by_name(&uri, name).map(|c| c.value().to_owned());
-    let sessdata =
-        get("SESSDATA").ok_or_else(|| eyre!("SESSDATA not found in cookie jar after login"))?;
+    let sessdata = get("SESSDATA").ok_or(Error::InvalidData {
+        field: "SESSDATA cookie after QR login",
+    })?;
     let bili_jct = get("bili_jct").unwrap_or_default();
-    let dede_user_id =
-        get("DedeUserID").ok_or_else(|| eyre!("DedeUserID not found in cookie jar after login"))?;
+    let dede_user_id = get("DedeUserID").ok_or(Error::InvalidData {
+        field: "DedeUserID cookie after QR login",
+    })?;
     Ok(StoredBilibiliAuth {
         sessdata,
         bili_jct,

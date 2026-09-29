@@ -3,14 +3,13 @@
 use std::io::BufReader;
 
 use async_trait::async_trait;
-use color_eyre::eyre::{WrapErr, eyre};
 use mineral_model::StreamLayout;
 
 use super::reader::{CancellationReader, ForwardOnlyReader};
 use super::remote::open_remote;
 use crate::{
-    DirectLocator, DirectMedia, MediaReader, OpenOptions, OpenedMedia, PreparedPlayback,
-    SeekSupport,
+    DirectLocator, DirectMedia, Error, MediaReader, OpenOptions, OpenedMedia, PreparedPlayback,
+    Result, SeekSupport,
 };
 
 /// Built-in prepared playback for a direct locator.
@@ -40,17 +39,19 @@ impl DirectPreparedPlayback {
     /// # Params:
     ///   - `self`: Consumed direct plan.
     ///   - `options`: Open-time execution controls.
-    fn open_local(self, options: &OpenOptions) -> color_eyre::Result<OpenedMedia> {
+    fn open_local(self, options: &OpenOptions) -> Result<OpenedMedia> {
         if options.cancellation().is_cancelled() {
-            return Err(eyre!("playback instance cancelled before local open"));
+            return Err(Error::Cancelled);
         }
         let path = self
             .media
             .locator()
             .local_path()
-            .ok_or_else(|| eyre!("direct media is not local"))?;
-        let file = std::fs::File::open(path)
-            .wrap_err_with(|| format!("open local media {}", path.display()))?;
+            .ok_or(Error::InvalidLocator { expected: "local" })?;
+        let file = std::fs::File::open(path).map_err(|source| Error::OpenLocal {
+            path: path.to_path_buf(),
+            source,
+        })?;
         let byte_len = file.metadata().ok().map(|metadata| metadata.len());
         let reader: Box<dyn MediaReader> = Box::new(BufReader::new(file));
         let cancellation = options.cancellation().clone();
@@ -69,19 +70,19 @@ impl DirectPreparedPlayback {
     /// # Params:
     ///   - `self`: Consumed direct plan.
     ///   - `options`: Open-time execution controls.
-    async fn open_remote(self, options: OpenOptions) -> color_eyre::Result<OpenedMedia> {
+    async fn open_remote(self, options: OpenOptions) -> Result<OpenedMedia> {
         let remote = self
             .media
             .locator()
             .remote()
             .cloned()
-            .ok_or_else(|| eyre!("direct media is not remote"))?;
+            .ok_or(Error::InvalidLocator { expected: "remote" })?;
         let cancellation = options.cancellation().clone();
         let capture_target = options.capture_target().cloned();
         let opened = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
-                return Err(eyre!("playback instance cancelled during remote open"));
+                return Err(Error::Cancelled);
             }
             result = open_remote(
                 remote,
@@ -124,7 +125,7 @@ impl PreparedPlayback for DirectPreparedPlayback {
         Some(&self.media)
     }
 
-    async fn open(self: Box<Self>, options: OpenOptions) -> color_eyre::Result<OpenedMedia> {
+    async fn open(self: Box<Self>, options: OpenOptions) -> Result<OpenedMedia> {
         let is_remote = matches!(self.media.locator(), DirectLocator::Remote(_));
         if is_remote {
             self.open_remote(options).await

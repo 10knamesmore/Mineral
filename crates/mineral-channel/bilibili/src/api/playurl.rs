@@ -16,11 +16,7 @@ const PLAYURL_URL: &str = "https://api.bilibili.com/x/player/wbi/playurl";
 ///
 /// # Return:
 ///   playurl DTO(含 `dash.audio[]`)。
-pub async fn playurl(
-    transport: &Transport,
-    bvid: &str,
-    cid: i64,
-) -> color_eyre::Result<PlayUrlResult> {
+pub async fn playurl(transport: &Transport, bvid: &str, cid: i64) -> crate::Result<PlayUrlResult> {
     let data = transport
         .get_signed(
             PLAYURL_URL,

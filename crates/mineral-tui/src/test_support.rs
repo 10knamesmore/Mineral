@@ -502,7 +502,9 @@ impl Backend for TestClient {
         }
         self.completions
             .push(Completion::CopyTemplate(Outcome::Applied(Err(
-                "test stub".to_owned()
+                mineral_protocol::CopyTextFailure::CallbackFailed {
+                    detail: "test stub".to_owned(),
+                },
             ))));
     }
 

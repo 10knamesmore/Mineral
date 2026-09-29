@@ -2,8 +2,9 @@
 
 use std::path::Path;
 
-use color_eyre::eyre::eyre;
 use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
+
+use crate::{Error, Result};
 
 use crate::loader::lua_util::table_at;
 use crate::loader::merge::deep_merge;
@@ -26,7 +27,7 @@ use crate::schema::{
 ///
 /// # Return:
 ///   `(Config, warnings)`:warnings 非空 = 用了默认兜底,调用方据此 toast。
-pub fn load(user_path: &Path) -> color_eyre::Result<(Config, Vec<ConfigWarning>)> {
+pub fn load(user_path: &Path) -> Result<(Config, Vec<ConfigWarning>)> {
     let lua = new_vm()?;
     let (config, warnings, _user_evaled, _tree) = load_on(&lua, user_path)?;
     Ok((config, warnings))
@@ -64,10 +65,13 @@ pub struct DaemonLoad {
 ///   [`DaemonLoad`]:`vm` 为 `Some` 仅当用户脚本 eval 且配置落型全部成功。
 pub fn load_with_vm(
     user_path: &Path,
-    install: impl FnOnce(&Lua) -> color_eyre::Result<()>,
-) -> color_eyre::Result<DaemonLoad> {
+    install: impl FnOnce(&Lua) -> mlua::Result<()>,
+) -> Result<DaemonLoad> {
     let lua = Lua::new();
-    install(&lua)?;
+    install(&lua).map_err(|source| Error::Lua {
+        operation: "安装脚本 API",
+        source,
+    })?;
     let (config, warnings, user_evaled, tree) = load_on(&lua, user_path)?;
     let vm = user_evaled.then_some(lua);
     Ok(DaemonLoad {
@@ -92,7 +96,7 @@ pub fn load_with_vm(
 fn load_on(
     lua: &Lua,
     user_path: &Path,
-) -> color_eyre::Result<(Config, Vec<ConfigWarning>, bool, serde_json::Value)> {
+) -> Result<(Config, Vec<ConfigWarning>, bool, serde_json::Value)> {
     let default_table = eval_default(lua)?;
     let mut warnings = Vec::<ConfigWarning>::new();
 
@@ -127,7 +131,7 @@ fn load_on(
 /// 各提取器共同语义:非 function 的值不摘——留在表里让落型报 unknown field
 /// (带路径),比静默吞掉好定位。配置整体落型失败回落默认时 registry 里可能
 /// 残留已摘函数,但默认配置不声明这些字段,无键触达,无害。
-fn prepare_lua_table(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+fn prepare_lua_table(lua: &Lua, merged: &Table) -> mlua::Result<()> {
     if let Some(local) = table_at!(merged, sources.local)
         && let Ok(roots) = local.get::<Table>("roots")
     {
@@ -142,7 +146,7 @@ fn prepare_lua_table(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
 /// 把 `queue.transforms[i].transform` 从配置表里摘出,按数组序存进 VM named registry
 /// (键 [`QUEUE_TRANSFORM_FNS`]);表上的 `transform` 字段移除,`key`/`label` 留下进常规
 /// 落型。对位方式与 `tui.copy.templates` 相同(见 [`extract_copy_templates`])。
-fn extract_queue_transforms(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+fn extract_queue_transforms(lua: &Lua, merged: &Table) -> mlua::Result<()> {
     let fns = lua.create_table()?;
     if let Some(transforms) = table_at!(merged, queue.transforms) {
         transforms.set_metatable(Some(lua.array_metatable()));
@@ -166,7 +170,7 @@ fn extract_queue_transforms(lua: &Lua, merged: &Table) -> color_eyre::Result<()>
 /// 执行靠**数组下标对位**(两边 eval 的是同一份 config)。顺手给 `templates`
 /// 表挂 array metatable——空 Lua 表经 serde 默认序列化成 map `{}`,落不进
 /// `Vec`,挂上才走 `[]`(默认表的空 `templates` 同样需要 metatable 修正)。
-fn extract_copy_templates(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+fn extract_copy_templates(lua: &Lua, merged: &Table) -> mlua::Result<()> {
     let fns = lua.create_table()?;
     if let Some(templates) = table_at!(merged, tui.copy.templates) {
         templates.set_metatable(Some(lua.array_metatable()));
@@ -193,7 +197,7 @@ fn extract_copy_templates(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
 /// 一并移除——不要求源有 schema 段,`deny_unknown_fields` 不会拒它。拼错的
 /// 源名在此无从校验(config crate 不知运行期 channel 集),由 daemon 启动时
 /// 对无对应 channel 的键打 warn。
-fn extract_playlist_transforms(lua: &Lua, merged: &Table) -> color_eyre::Result<()> {
+fn extract_playlist_transforms(lua: &Lua, merged: &Table) -> mlua::Result<()> {
     let fns = lua.create_table()?;
     let mut merged_fn = Value::Nil;
     if let Some(sources) = table_at!(merged, sources) {
@@ -230,12 +234,12 @@ impl Config {
     ///
     /// # Return:
     ///   内置默认;若 `default.lua` 自身坏(不该发生,有守卫测试)返回 `Err`。
-    pub fn defaults() -> color_eyre::Result<Self> {
+    pub fn defaults() -> Result<Self> {
         let lua = new_vm()?;
         let table = eval_default(&lua)?;
         prepare_lua_table(&lua, &table)?;
         let (config, _tree) =
-            from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))?;
+            from_lua_table(table).map_err(|warning| Error::DefaultConfig { warning })?;
         Ok(config)
     }
 }
@@ -246,12 +250,12 @@ impl Config {
 ///
 /// # Return:
 ///   默认树;`default.lua` 自身坏(不该发生,有守卫测试)返回 `Err`。
-pub fn default_tree() -> color_eyre::Result<serde_json::Value> {
+pub fn default_tree() -> Result<serde_json::Value> {
     let lua = new_vm()?;
     let table = eval_default(&lua)?;
     prepare_lua_table(&lua, &table)?;
     let (_config, tree) =
-        from_lua_table(table).map_err(|w| eyre!("default.lua 无法落成 Config:{w}"))?;
+        from_lua_table(table).map_err(|warning| Error::DefaultConfig { warning })?;
     Ok(tree)
 }
 
@@ -268,10 +272,10 @@ fn finalize_default(
     lua: &Lua,
     default_table: Table,
     warnings: Vec<ConfigWarning>,
-) -> color_eyre::Result<(Config, serde_json::Value, Vec<ConfigWarning>)> {
+) -> Result<(Config, serde_json::Value, Vec<ConfigWarning>)> {
     prepare_lua_table(lua, &default_table)?;
-    let (config, tree) = from_lua_table(default_table)
-        .map_err(|w| eyre!("default.lua 无法落成 Config(应被守卫测试拦截):{w}"))?;
+    let (config, tree) =
+        from_lua_table(default_table).map_err(|warning| Error::DefaultConfig { warning })?;
     Ok((config, tree, warnings))
 }
 
@@ -279,7 +283,7 @@ fn finalize_default(
 ///
 /// # Return:
 ///   就绪的 VM
-fn new_vm() -> color_eyre::Result<Lua> {
+fn new_vm() -> Result<Lua> {
     let lua = Lua::new();
     inject_noop_host(&lua)?;
     Ok(lua)
@@ -292,39 +296,46 @@ fn new_vm() -> color_eyre::Result<Lua> {
 ///
 /// # Return:
 ///   默认配置表
-fn eval_default(lua: &Lua) -> color_eyre::Result<Table> {
+fn eval_default(lua: &Lua) -> Result<Table> {
     let table: Table = lua
         .load(include_str!("../lua/default.lua"))
         .set_name("default.lua")
-        .eval()?;
+        .eval()
+        .map_err(|source| Error::Lua {
+            operation: "解析 default.lua",
+            source,
+        })?;
     Ok(table)
 }
 
-/// eval 用户文件(若存在)。文件不存在 → `Ok(None)`;eval / 读取失败 → `ConfigWarning::Eval`。
+/// eval 用户文件(若存在)。文件不存在 → `Ok(None)`;读取失败 → `ConfigWarning::Read`,
+/// 求值失败 → `ConfigWarning::Eval`。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
 ///   - `path`: 用户配置路径
 ///
 /// # Return:
-///   `Ok(Some(table))` 用户表 / `Ok(None)` 文件缺失 / `Err(warning)` eval 失败
-fn eval_user(lua: &Lua, path: &Path) -> Result<Option<Table>, ConfigWarning> {
+///   `Ok(Some(table))` 用户表 / `Ok(None)` 文件缺失 / `Err(warning)` 读取或求值失败
+fn eval_user(lua: &Lua, path: &Path) -> std::result::Result<Option<Table>, ConfigWarning> {
     let src = match std::fs::read_to_string(path) {
         Ok(src) => src,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(ConfigWarning::Eval {
-                detail: format!("读取 {} 失败:{e}", path.display()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(ConfigWarning::Read {
+                path: path.to_path_buf(),
+                source,
             });
         }
     };
-    let table: Table =
-        lua.load(&src)
-            .set_name("config.lua")
-            .eval()
-            .map_err(|e| ConfigWarning::Eval {
-                detail: format!("{e}"),
-            })?;
+    let table: Table = lua
+        .load(&src)
+        .set_name("config.lua")
+        .eval()
+        .map_err(|source| ConfigWarning::Eval {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok(Some(table))
 }
 
@@ -335,13 +346,11 @@ fn eval_user(lua: &Lua, path: &Path) -> Result<Option<Table>, ConfigWarning> {
 ///   - `table`: 合并后的配置表(函数字段须已摘)
 ///
 /// # Return:
-///   `(Config, 合成树)`,失败带字段路径
-fn from_lua_table(table: Table) -> Result<(Config, serde_json::Value), ConfigWarning> {
+///   `(Config, 合成树)`,转树或落型失败时返回对应告警
+fn from_lua_table(table: Table) -> std::result::Result<(Config, serde_json::Value), ConfigWarning> {
     let value = Value::Table(table);
-    let json = serde_json::to_value(&value).map_err(|e| ConfigWarning::Deserialize {
-        path: String::new(),
-        detail: format!("Lua→JSON 转换失败:{e}"),
-    })?;
+    let json =
+        serde_json::to_value(&value).map_err(|source| ConfigWarning::Serialize { source })?;
     let config = crate::loader::tree::from_tree(&json)?;
     Ok((config, json))
 }
@@ -567,6 +576,28 @@ mod tests {
         Ok(())
     }
 
+    /// 用户路径存在但不可读取时回落默认,并保留文件系统错误。
+    #[test]
+    fn unreadable_user_path_falls_back_with_io_source() -> color_eyre::Result<()> {
+        use std::error::Error as _;
+
+        let directory = std::env::temp_dir();
+        let (cfg, warnings) = load(&directory)?;
+        assert_eq!(*cfg.audio().volume(), 100, "回落默认");
+        match warnings.as_slice() {
+            [warning @ ConfigWarning::Read { path, .. }] => {
+                assert_eq!(path, &directory);
+                assert!(
+                    warning
+                        .source()
+                        .is_some_and(<dyn std::error::Error>::is::<std::io::Error>)
+                );
+            }
+            other => return Err(eyre!("应有一条 Read warning:{other:?}")),
+        }
+        Ok(())
+    }
+
     #[test]
     fn user_override_deep_merges() -> color_eyre::Result<()> {
         let path = temp_config("override", "return { audio = { volume = 50 } }")?;
@@ -633,7 +664,11 @@ mod tests {
         );
         match warnings.as_slice() {
             [ConfigWarning::Deserialize { path, .. }] => {
-                assert_eq!(path, "tui.search.channel.kinds[1]", "字段路径应精确到下标");
+                assert_eq!(
+                    path.as_deref(),
+                    Some("tui.search.channel.kinds[1]"),
+                    "字段路径应精确到下标"
+                );
             }
             other => {
                 return Err(eyre!("应有一条 Deserialize warning:{other:?}"));
@@ -644,26 +679,46 @@ mod tests {
 
     #[test]
     fn bad_lua_falls_back_with_eval_warning() -> color_eyre::Result<()> {
+        use std::error::Error as _;
+
         let path = temp_config("badlua", "this is not lua {{{")?;
         let (cfg, warnings) = load(&path)?;
         std::fs::remove_file(&path)?;
         assert_eq!(*cfg.audio().volume(), 100, "回落默认");
-        assert!(
-            matches!(warnings.as_slice(), [ConfigWarning::Eval { .. }]),
-            "应有一条 Eval warning,实得 {warnings:?}"
-        );
+        match warnings.as_slice() {
+            [
+                warning @ ConfigWarning::Eval {
+                    path: failed_path, ..
+                },
+            ] => {
+                assert_eq!(failed_path, &path);
+                assert!(
+                    warning
+                        .source()
+                        .is_some_and(<dyn std::error::Error>::is::<mlua::Error>)
+                );
+            }
+            other => return Err(eyre!("应有一条 Eval warning:{other:?}")),
+        }
         Ok(())
     }
 
     #[test]
     fn type_error_falls_back_with_field_path() -> color_eyre::Result<()> {
+        use std::error::Error as _;
+
         let path = temp_config("typeerr", r#"return { audio = { volume = "loud" } }"#)?;
         let (cfg, warnings) = load(&path)?;
         std::fs::remove_file(&path)?;
         assert_eq!(*cfg.audio().volume(), 100, "回落默认");
         match warnings.as_slice() {
-            [ConfigWarning::Deserialize { path, .. }] => {
-                assert_eq!(path, "audio.volume", "字段路径应精确");
+            [warning @ ConfigWarning::Deserialize { path, .. }] => {
+                assert_eq!(path.as_deref(), Some("audio.volume"), "字段路径应精确");
+                assert!(
+                    warning
+                        .source()
+                        .is_some_and(<dyn std::error::Error>::is::<serde_json::Error>)
+                );
             }
             other => {
                 return Err(color_eyre::eyre::eyre!(
@@ -716,6 +771,26 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1, "活 API 必须真被调用");
         assert!(loaded.vm.is_some(), "eval 成功必须交还 VM");
         Ok(())
+    }
+
+    /// 活 API 安装失败属于致命错误,且保留 Lua 原始错误。
+    #[test]
+    fn install_error_keeps_lua_source() {
+        use std::error::Error as _;
+
+        let absent = std::env::temp_dir().join("mineral-config-install-error.lua");
+        let result =
+            super::load_with_vm(&absent, |_lua| Err(mlua::Error::runtime("install failed")));
+        assert!(matches!(
+            &result,
+            Err(crate::Error::Lua {
+                operation: "安装脚本 API",
+                ..
+            })
+        ));
+        if let Err(error) = result {
+            assert!(error.source().is_some());
+        }
     }
 
     #[test]

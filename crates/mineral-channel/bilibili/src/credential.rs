@@ -7,8 +7,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{WrapErr, eyre};
 use serde::{Deserialize, Serialize};
+
+use crate::Error;
 
 /// 凭证文件名,放在 `mineral_paths::data_dir()` 下。
 pub const CREDENTIAL_FILE: &str = "bilibili.json";
@@ -30,7 +31,7 @@ pub struct StoredBilibiliAuth {
 ///
 /// # Return:
 ///   `<data_dir>/bilibili.json` 的绝对路径。本函数不创建目录、不做存在性检查。
-pub fn credential_path() -> color_eyre::Result<PathBuf> {
+pub fn credential_path() -> crate::Result<PathBuf> {
     Ok(mineral_paths::data_dir()?.join(CREDENTIAL_FILE))
 }
 
@@ -41,7 +42,7 @@ pub fn credential_path() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   写入的路径;失败时 `Err`。
-pub fn save(auth: &StoredBilibiliAuth) -> color_eyre::Result<PathBuf> {
+pub fn save(auth: &StoredBilibiliAuth) -> crate::Result<PathBuf> {
     let path = credential_path()?;
     write_to(&path, auth)?;
     mineral_log::info!(target: "credential", path = %path.display(), mid = auth.dede_user_id, "bilibili credential saved");
@@ -54,34 +55,47 @@ pub fn save(auth: &StoredBilibiliAuth) -> color_eyre::Result<PathBuf> {
 ///   - `Ok(Some(auth))`: 文件存在且解析成功
 ///   - `Ok(None)`: 文件不存在(尚未登录,正常)
 ///   - `Err(_)`: 文件存在但读/解析失败
-pub fn load_stored() -> color_eyre::Result<Option<StoredBilibiliAuth>> {
+pub fn load_stored() -> crate::Result<Option<StoredBilibiliAuth>> {
     let path = credential_path()?;
     read_from(&path)
 }
 
 /// 把 `auth` 序列化成 JSON 写到 `path`,父目录不存在时自动创建。
-fn write_to(path: &Path, auth: &StoredBilibiliAuth) -> color_eyre::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| eyre!("bilibili 凭证路径缺少父目录: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create credential dir failed: {}", parent.display()))?;
-    let json = serde_json::to_string_pretty(auth).context("serialize bilibili auth failed")?;
-    fs::write(path, json)
-        .with_context(|| format!("write bilibili auth failed: {}", path.display()))?;
+fn write_to(path: &Path, auth: &StoredBilibiliAuth) -> crate::Result<()> {
+    let parent = path.parent().ok_or_else(|| Error::InvalidCredentialPath {
+        path: path.to_path_buf(),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| Error::File {
+        operation: "create credential directory",
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    let json = serde_json::to_string_pretty(auth)?;
+    fs::write(path, json).map_err(|source| Error::File {
+        operation: "write credential",
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(())
 }
 
 /// 从 `path` 读凭证;文件不存在 → `Ok(None)`,其他 IO/解析失败 → `Err`。
-fn read_from(path: &Path) -> color_eyre::Result<Option<StoredBilibiliAuth>> {
+fn read_from(path: &Path) -> crate::Result<Option<StoredBilibiliAuth>> {
     match fs::read_to_string(path) {
         Ok(text) => {
-            let auth: StoredBilibiliAuth = serde_json::from_str(&text)
-                .with_context(|| format!("parse bilibili auth failed: {}", path.display()))?;
+            let auth: StoredBilibiliAuth =
+                serde_json::from_str(&text).map_err(|source| Error::Parse {
+                    context: path.display().to_string(),
+                    source: Box::new(source),
+                })?;
             Ok(Some(auth))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("read bilibili auth failed: {}", path.display())),
+        Err(source) => Err(Error::File {
+            operation: "read credential",
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 

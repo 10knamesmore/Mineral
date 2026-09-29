@@ -4,8 +4,9 @@ use std::io::IsTerminal;
 use std::time::SystemTime;
 
 use clap::Subcommand;
-use color_eyre::eyre::WrapErr;
 use mineral_persist::{CacheStats, ClientStore, ServerStore};
+
+use crate::error::{Error, Result};
 
 use super::render::{self, AudioEntry, AudioInput, CoverInput};
 
@@ -37,7 +38,7 @@ pub enum CacheCommand {
 ///
 /// # Return:
 ///   命令执行结果。
-pub async fn run(command: CacheCommand) -> color_eyre::Result<()> {
+pub async fn run(command: CacheCommand) -> Result<()> {
     match command {
         CacheCommand::Status { detail } => status(detail).await,
         CacheCommand::Clean => clean().await,
@@ -52,14 +53,17 @@ pub async fn run(command: CacheCommand) -> color_eyre::Result<()> {
 ///
 /// # Return:
 ///   渲染并打印成功返回 `Ok(())`。
-async fn status(detail: bool) -> color_eyre::Result<()> {
+async fn status(detail: bool) -> Result<()> {
     // CLI 离线自 eval 配置取容量(与 daemon 同一真相源);用户配置坏已在 loader 降级默认。
     let (config, _warnings) =
         mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
     // sqlite `mode=rwc` 只建文件不建父目录,fresh env 下需先确保 data_dir 存在。
     let data_dir = mineral_paths::data_dir()?;
-    std::fs::create_dir_all(&data_dir)
-        .wrap_err_with(|| format!("create data dir {}", data_dir.display()))?;
+    std::fs::create_dir_all(&data_dir).map_err(|source| Error::Io {
+        operation: "create data directory",
+        path: data_dir.clone(),
+        source,
+    })?;
 
     let persist = ServerStore::open(&data_dir.join("mineral.db")).await?;
     let audio_stats = persist
@@ -98,10 +102,13 @@ async fn status(detail: bool) -> color_eyre::Result<()> {
 ///
 /// # Return:
 ///   全部清理成功返回 `Ok(())`。某子项不存在(目录 / 库未创建)视为已清空,不报错。
-async fn clean() -> color_eyre::Result<()> {
+async fn clean() -> Result<()> {
     let data_dir = mineral_paths::data_dir()?;
-    std::fs::create_dir_all(&data_dir)
-        .wrap_err_with(|| format!("create data dir {}", data_dir.display()))?;
+    std::fs::create_dir_all(&data_dir).map_err(|source| Error::Io {
+        operation: "create data directory",
+        path: data_dir.clone(),
+        source,
+    })?;
 
     let persist = ServerStore::open(&data_dir.join("mineral.db")).await?;
     let playlist = persist.clear_playlist_caches().await?;
@@ -131,7 +138,7 @@ async fn clean() -> color_eyre::Result<()> {
 ///
 /// # Return:
 ///   打印计划 / 回执后返回 `Ok(())`;删除失败(如 daemon 仍占用库文件)冒泡报错。
-fn reset(yes: bool) -> color_eyre::Result<()> {
+fn reset(yes: bool) -> Result<()> {
     let server_db = mineral_paths::data_dir()?.join("mineral.db");
     let client_db = mineral_paths::tui_db()?;
     let mut rows = Vec::<render::ResetRow>::new();
@@ -158,7 +165,7 @@ fn reset(yes: bool) -> color_eyre::Result<()> {
 }
 
 /// 删除(或计划删除)单个库文件,产出渲染行。不存在 → 「不存在」。
-fn reset_file(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::ResetRow> {
+fn reset_file(path: &std::path::Path, yes: bool) -> Result<render::ResetRow> {
     let outcome = if !yes {
         "will delete"
     } else {
@@ -166,7 +173,11 @@ fn reset_file(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::R
             Ok(()) => "deleted",
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
             Err(e) => {
-                return Err(e).wrap_err_with(|| format!("failed to delete {}", path.display()));
+                return Err(Error::Io {
+                    operation: "delete cache file",
+                    path: path.to_path_buf(),
+                    source: e,
+                });
             }
         }
     };
@@ -178,7 +189,7 @@ fn reset_file(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::R
 }
 
 /// 删除(或计划删除)单个缓存目录,产出渲染行。不存在 → 「不存在」。
-fn reset_dir(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::ResetRow> {
+fn reset_dir(path: &std::path::Path, yes: bool) -> Result<render::ResetRow> {
     let outcome = if !yes {
         "will delete"
     } else {
@@ -186,7 +197,11 @@ fn reset_dir(path: &std::path::Path, yes: bool) -> color_eyre::Result<render::Re
             Ok(()) => "deleted",
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
             Err(e) => {
-                return Err(e).wrap_err_with(|| format!("failed to delete {}", path.display()));
+                return Err(Error::Io {
+                    operation: "delete cache directory",
+                    path: path.to_path_buf(),
+                    source: e,
+                });
             }
         }
     };

@@ -1,6 +1,75 @@
 //! 按订阅和版本有界组装分片，合并播放队列与下载明细载荷。
 
 use mineral_protocol::{SubscriptionId, UpdateEnvelope, UpdatePayload, assembly_limits};
+use thiserror::Error;
+
+/// 订阅分片无法安全合并的原因；调用方应请求完整重同步。
+#[derive(Debug, Error)]
+pub(super) enum AssemblyError {
+    /// 新版本替代了尚未收齐的旧版本。
+    #[error("旧版本分片组未完成")]
+    Superseded,
+
+    /// 本次声明的分片数超过限制。
+    #[error("分片数 {parts} 超过上限 {max}")]
+    TooManyParts {
+        /// 收到的分片数。
+        parts: u32,
+
+        /// 允许的最大分片数。
+        max: u32,
+    },
+
+    /// 分片序号不在声明范围内。
+    #[error("分片序号 {index} 超出总片数 {parts}")]
+    IndexOutOfBounds {
+        /// 收到的序号。
+        index: u32,
+
+        /// 声明的分片数。
+        parts: u32,
+    },
+
+    /// 同一序号重复到达。
+    #[error("分片 {index} 重复到达")]
+    Duplicate {
+        /// 重复的分片序号。
+        index: u32,
+    },
+
+    /// 累计分片大小超过限制。
+    #[error("组装字节 {bytes} 超过上限 {max}")]
+    TooLarge {
+        /// 累计估算字节数。
+        bytes: usize,
+
+        /// 最大组装字节数。
+        max: usize,
+    },
+
+    /// 已登记的组装组意外丢失。
+    #[error("组装组下标 {index} 不存在")]
+    MissingGroup {
+        /// 预期的组装组位置。
+        index: usize,
+    },
+
+    /// 合并时缺少某个分片。
+    #[error("已收齐分片但存在空位")]
+    MissingPart,
+
+    /// 组装后的载荷为空。
+    #[error("组装后的载荷为空")]
+    EmptyPayload,
+
+    /// 播放头段没有声明队列分片。
+    #[error("播放头段未声明队列分片")]
+    MissingQueueParts,
+
+    /// 分片载荷类别与头段不匹配。
+    #[error("分片载荷类别不符")]
+    UnexpectedPayload,
+}
 
 /// 分片组装器:按 `(subscription, version)` 收齐 `parts` 后合并成一条逻辑更新。
 #[derive(Default)]
@@ -39,7 +108,7 @@ impl Assembler {
     pub(super) fn accept(
         &mut self,
         envelope: UpdateEnvelope,
-    ) -> Result<Option<(SubscriptionId, u64, UpdatePayload)>, String> {
+    ) -> Result<Option<(SubscriptionId, u64, UpdatePayload)>, AssemblyError> {
         // 新版本到来 = 旧版本的未完成组再也不会补齐;丢掉并显式报告中断。
         let superseded = self.drop_superseded(envelope.subscription, envelope.version);
         if envelope.parts == 1 {
@@ -50,16 +119,19 @@ impl Assembler {
             )));
         }
         if superseded {
-            return Err("更早版本的未完成分片组已被取代".to_owned());
+            return Err(AssemblyError::Superseded);
         }
         if envelope.parts > assembly_limits::MAX_PARTS {
-            return Err(format!("分片数 {} 超限", envelope.parts));
+            return Err(AssemblyError::TooManyParts {
+                parts: envelope.parts,
+                max: assembly_limits::MAX_PARTS,
+            });
         }
         if envelope.index >= envelope.parts {
-            return Err(format!(
-                "分片序号 {} 超出总片数 {}",
-                envelope.index, envelope.parts
-            ));
+            return Err(AssemblyError::IndexOutOfBounds {
+                index: envelope.index,
+                parts: envelope.parts,
+            });
         }
         let key = (envelope.subscription, envelope.version);
         let position = self
@@ -95,10 +167,12 @@ impl Assembler {
         let index = usize::try_from(envelope.index).unwrap_or(usize::MAX);
         let too_large = {
             let Some((_id, _version, group)) = self.groups.get_mut(position) else {
-                return Err("组装组下标越界".to_owned());
+                return Err(AssemblyError::MissingGroup { index: position });
             };
             if group.parts.get(index).is_some_and(Option::is_some) {
-                return Err(format!("分片 {} 重复到达", envelope.index));
+                return Err(AssemblyError::Duplicate {
+                    index: envelope.index,
+                });
             }
             group.bytes = group
                 .bytes
@@ -109,7 +183,10 @@ impl Assembler {
                 if let Some(slot) = group.parts.get_mut(index) {
                     *slot = Some(envelope.payload);
                 } else {
-                    return Err(format!("分片 {} 无处存放", envelope.index));
+                    return Err(AssemblyError::IndexOutOfBounds {
+                        index: envelope.index,
+                        parts: envelope.parts,
+                    });
                 }
                 group.received = group.received.saturating_add(1);
                 false
@@ -121,7 +198,10 @@ impl Assembler {
                 .get(position)
                 .map_or(0, |(_, _, group)| group.bytes);
             self.groups.remove(position);
-            return Err(format!("组装字节 {bytes} 超限"));
+            return Err(AssemblyError::TooLarge {
+                bytes,
+                max: assembly_limits::MAX_GROUP_BYTES,
+            });
         }
         let complete = self
             .groups
@@ -137,13 +217,13 @@ impl Assembler {
 }
 
 /// 合并一组分片载荷。
-fn merge_parts(parts: Vec<Option<UpdatePayload>>) -> Result<UpdatePayload, String> {
+fn merge_parts(parts: Vec<Option<UpdatePayload>>) -> Result<UpdatePayload, AssemblyError> {
     let mut parts = parts
         .into_iter()
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| "组装完成但存在缺片".to_owned())?;
+        .ok_or(AssemblyError::MissingPart)?;
     if parts.len() == 1 {
-        return parts.pop().ok_or_else(|| "组装完成但载荷为空".to_owned());
+        return parts.pop().ok_or(AssemblyError::EmptyPayload);
     }
     let first = parts.first().cloned();
     match first {
@@ -152,7 +232,7 @@ fn merge_parts(parts: Vec<Option<UpdatePayload>>) -> Result<UpdatePayload, Strin
             queue_parts,
         }) => {
             if queue_parts == 0 {
-                return Err("播放头段声明无队列分片却出现多片".to_owned());
+                return Err(AssemblyError::MissingQueueParts);
             }
             let mut queue: Vec<mineral_model::Song> = Vec::new();
             let mut original_queue = None;
@@ -173,9 +253,7 @@ fn merge_parts(parts: Vec<Option<UpdatePayload>>) -> Result<UpdatePayload, Strin
                         }
                         chunks.push((offset, queue, None));
                     }
-                    other => {
-                        return Err(format!("播放分片组出现意外载荷 {other:?}"));
-                    }
+                    _ => return Err(AssemblyError::UnexpectedPayload),
                 }
             }
             chunks.sort_by_key(|(offset, _, _)| *offset);
@@ -196,9 +274,7 @@ fn merge_parts(parts: Vec<Option<UpdatePayload>>) -> Result<UpdatePayload, Strin
                     UpdatePayload::DownloadsDetailPart { offset, rows: part } => {
                         chunks.push((offset, part));
                     }
-                    other => {
-                        return Err(format!("下载明细分片组出现意外载荷 {other:?}"));
-                    }
+                    _ => return Err(AssemblyError::UnexpectedPayload),
                 }
             }
             chunks.sort_by_key(|(offset, _)| *offset);
@@ -207,8 +283,8 @@ fn merge_parts(parts: Vec<Option<UpdatePayload>>) -> Result<UpdatePayload, Strin
             }
             Ok(UpdatePayload::DownloadsDetailSnapshot(rows))
         }
-        Some(other) => Err(format!("不支持的组装载荷 {other:?}")),
-        None => Err("组装完成但载荷为空".to_owned()),
+        Some(_) => Err(AssemblyError::UnexpectedPayload),
+        None => Err(AssemblyError::EmptyPayload),
     }
 }
 

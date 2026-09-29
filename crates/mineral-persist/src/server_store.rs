@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use color_eyre::eyre::WrapErr;
 use mineral_log::{info, warn};
 use mineral_model::{Song, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -54,7 +53,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   成功返回启用的句柄;失败返回 `Err`(调用方可改用 [`Self::disabled`] 降级)。
-    pub async fn open(db_path: &std::path::Path) -> color_eyre::Result<Self> {
+    pub async fn open(db_path: &std::path::Path) -> crate::Result<Self> {
         info!(target: "persist", path = %db_path.display(), "打开 server 数据库");
         let pool = crate::pool::connect(db_path).await?;
         ensure_schema(&pool).await?;
@@ -116,7 +115,7 @@ impl ServerStore {
         &self,
         root: std::path::PathBuf,
         capacity: u64,
-    ) -> color_eyre::Result<CacheIndex> {
+    ) -> crate::Result<CacheIndex> {
         match self.pool() {
             Some(pool) => {
                 CacheIndex::open(
@@ -140,7 +139,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   跨 namespace 的收藏 `Vec<Song>`。
-    pub async fn loved_songs(&self) -> color_eyre::Result<Vec<Song>> {
+    pub async fn loved_songs(&self) -> crate::Result<Vec<Song>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -160,7 +159,10 @@ impl ServerStore {
             .order_by_asc(song_favorites::Column::SongValue)
             .all(db)
             .await
-            .wrap_err("查跨源 loved 元数据失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "查跨源 loved 元数据",
+                source,
+            })?;
         let artist_rows = song_artists::Entity::find()
             .join(
                 JoinType::InnerJoin,
@@ -178,7 +180,10 @@ impl ServerStore {
             .order_by_asc(song_artists::Column::Position)
             .all(db)
             .await
-            .wrap_err("查跨源 loved 艺人失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "查跨源 loved 艺人",
+                source,
+            })?;
         let mut artists = FxHashMap::<(String, String), Vec<SongArtistRow>>::default();
         for row in artist_rows {
             artists
@@ -203,7 +208,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   有 meta 的跨源收藏数。
-    pub async fn loved_count(&self) -> color_eyre::Result<u64> {
+    pub async fn loved_count(&self) -> crate::Result<u64> {
         let Some(db) = self.pool() else {
             return Ok(0);
         };
@@ -220,7 +225,10 @@ impl ServerStore {
             )
             .count(db)
             .await
-            .wrap_err("统计跨源 loved 计数失败")
+            .map_err(|source| crate::Error::Database {
+                operation: "统计跨源 loved 计数",
+                source,
+            })
     }
 
     /// 全部源里 loved 但**缺 meta** 的歌 id(sync 导入的远端红心先只有 id、无 meta)。
@@ -229,7 +237,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   跨 namespace 的缺 meta 收藏 id(namespace 从行内 `SourceKind::from_name` 还原)。
-    pub async fn missing_meta_loved_ids(&self) -> color_eyre::Result<Vec<SongId>> {
+    pub async fn missing_meta_loved_ids(&self) -> crate::Result<Vec<SongId>> {
         let Some(db) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -247,7 +255,10 @@ impl ServerStore {
             .filter(song_meta::Column::SongValue.is_null())
             .all(db)
             .await
-            .wrap_err("查缺 meta 的 loved 行失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "查缺 meta 的 loved 行",
+                source,
+            })?;
         Ok(rows
             .into_iter()
             .map(|row| SongId::new(SourceKind::from_name(&row.namespace), row.song_value))
@@ -264,10 +275,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   本次实际新插入的 SongId；降级句柄返回空。
-    pub async fn import_favorites(
-        &self,
-        ids: &FxHashSet<SongId>,
-    ) -> color_eyre::Result<Vec<SongId>> {
+    pub async fn import_favorites(&self, ids: &FxHashSet<SongId>) -> crate::Result<Vec<SongId>> {
         let Some(pool) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -281,14 +289,20 @@ impl ServerStore {
         let tx = pool
             .begin()
             .await
-            .wrap_err("开启 Favorites import 事务失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "开启 Favorites import 事务",
+                source,
+            })?;
         let latest = song_favorites::Entity::find()
             .select_only()
             .expr(song_favorites::Column::EnteredAt.max())
             .into_tuple::<Option<i64>>()
             .one(&tx)
             .await
-            .wrap_err("读取 Favorites 最新进入时间失败")?
+            .map_err(|source| crate::Error::Database {
+                operation: "读取 Favorites 最新进入时间",
+                source,
+            })?
             .flatten();
         let now = crate::db::time::now_ms();
         let entered_at = latest
@@ -311,14 +325,19 @@ impl ServerStore {
             )
             .exec_without_returning(&tx)
             .await
-            .wrap_err_with(|| format!("导入 favorite 失败 song={}", id.qualified()))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "导入 favorite",
+                record: id.qualified(),
+                source,
+            })?;
             if result > 0 {
                 inserted.push(id);
             }
         }
-        tx.commit()
-            .await
-            .wrap_err("提交 Favorites import 事务失败")?;
+        tx.commit().await.map_err(|source| crate::Error::Database {
+            operation: "提交 Favorites import 事务",
+            source,
+        })?;
         Ok(inserted)
     }
 
@@ -326,7 +345,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   启用态返回 `playlist_cache` / `playlist_entries` 行数;降级句柄返回全 0。
-    pub async fn playlist_cache_stats(&self) -> color_eyre::Result<PlaylistCacheStats> {
+    pub async fn playlist_cache_stats(&self) -> crate::Result<PlaylistCacheStats> {
         let Some(db) = self.pool() else {
             return Ok(PlaylistCacheStats {
                 playlists: 0,
@@ -336,11 +355,17 @@ impl ServerStore {
         let playlists = playlist_cache::Entity::find()
             .count(db)
             .await
-            .wrap_err("统计 playlist_cache 行数失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "统计 playlist_cache 行数",
+                source,
+            })?;
         let tracks = playlist_entries::Entity::find()
             .count(db)
             .await
-            .wrap_err("统计 playlist_entries 行数失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "统计 playlist_entries 行数",
+                source,
+            })?;
         Ok(PlaylistCacheStats { playlists, tracks })
     }
 
@@ -351,7 +376,7 @@ impl ServerStore {
     ///
     /// # Return:
     ///   清理成功返回被清掉的计数(清理前 `playlist_cache` / `playlist_entries` 行数);降级返回全 0。
-    pub async fn clear_playlist_caches(&self) -> color_eyre::Result<PlaylistCacheStats> {
+    pub async fn clear_playlist_caches(&self) -> crate::Result<PlaylistCacheStats> {
         let Some(db) = self.pool() else {
             return Ok(PlaylistCacheStats {
                 playlists: 0,
@@ -359,29 +384,42 @@ impl ServerStore {
             });
         };
         info!(target: "persist", "清理歌单缓存");
-        let tx = db
-            .begin()
-            .await
-            .wrap_err("开启 clear_playlist_caches 事务失败")?;
+        let tx = db.begin().await.map_err(|source| crate::Error::Database {
+            operation: "开启 clear_playlist_caches 事务",
+            source,
+        })?;
         let playlists = playlist_cache::Entity::find()
             .count(&tx)
             .await
-            .wrap_err("统计 playlist_cache 行数失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "统计 playlist_cache 行数",
+                source,
+            })?;
         let tracks = playlist_entries::Entity::find()
             .count(&tx)
             .await
-            .wrap_err("统计 playlist_entries 行数失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "统计 playlist_entries 行数",
+                source,
+            })?;
         playlist_entries::Entity::delete_many()
             .exec(&tx)
             .await
-            .wrap_err("清空 playlist_entries 失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "清空 playlist_entries",
+                source,
+            })?;
         playlist_cache::Entity::delete_many()
             .exec(&tx)
             .await
-            .wrap_err("清空 playlist_cache 失败")?;
-        tx.commit()
-            .await
-            .wrap_err("提交 clear_playlist_caches 事务失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "清空 playlist_cache",
+                source,
+            })?;
+        tx.commit().await.map_err(|source| crate::Error::Database {
+            operation: "提交 clear_playlist_caches 事务",
+            source,
+        })?;
         Ok(PlaylistCacheStats { playlists, tracks })
     }
 }

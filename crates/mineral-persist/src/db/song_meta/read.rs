@@ -1,6 +1,5 @@
 //! 按歌曲身份批量读取元数据与有序艺人。
 
-use color_eyre::eyre::WrapErr;
 use mineral_model::{Song, SongId};
 use rustc_hash::FxHashMap;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Select};
@@ -21,10 +20,7 @@ impl NamespaceStore {
     /// # Return:
     ///   按 SongId 索引的歌曲。缺失或无法重建的记录跳过，坏记录记日志；
     ///   查询失败返回错误。关系顺序与重复条目由调用方用原始 relation 重建。
-    pub async fn get_meta_batch(
-        &self,
-        ids: &[SongId],
-    ) -> color_eyre::Result<FxHashMap<SongId, Song>> {
+    pub async fn get_meta_batch(&self, ids: &[SongId]) -> crate::Result<FxHashMap<SongId, Song>> {
         let mut songs = FxHashMap::default();
         let Some(pool) = self.pool().filter(|_| !ids.is_empty()) else {
             return Ok(songs);
@@ -36,12 +32,20 @@ impl NamespaceStore {
                 .filter(song_meta::Column::SongValue.is_in(batch.iter().map(SongId::value)))
                 .all(pool)
                 .await
-                .wrap_err_with(|| format!("批量读取 song_meta 失败 source={ns}"))?;
+                .map_err(|source| crate::Error::Record {
+                    operation: "批量读取 song_meta",
+                    record: ns.to_owned(),
+                    source,
+                })?;
             let artists = artists_query(ns)
                 .filter(song_artists::Column::SongValue.is_in(batch.iter().map(SongId::value)))
                 .all(pool)
                 .await
-                .wrap_err_with(|| format!("批量读取 song_artists 失败 source={ns}"))?;
+                .map_err(|source| crate::Error::Record {
+                    operation: "批量读取 song_artists",
+                    record: ns.to_owned(),
+                    source,
+                })?;
             let mut by_song = FxHashMap::<String, Vec<SongArtistRow>>::default();
             for artist in artists {
                 by_song
@@ -79,7 +83,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   命中返回 `Ok(Some(song))`,否则 `Ok(None)`。
-    pub async fn get_meta(&self, id: &SongId) -> color_eyre::Result<Option<Song>> {
+    pub async fn get_meta(&self, id: &SongId) -> crate::Result<Option<Song>> {
         let Some(pool) = self.pool() else {
             return Ok(None);
         };
@@ -90,7 +94,11 @@ impl NamespaceStore {
             .filter(song_meta::Column::SongValue.eq(song_value))
             .one(pool)
             .await
-            .wrap_err_with(|| format!("查 song_meta 失败 song={song_value}"))?
+            .map_err(|source| crate::Error::Record {
+                operation: "查 song_meta",
+                record: song_value.to_owned(),
+                source,
+            })?
         else {
             return Ok(None);
         };
@@ -100,7 +108,11 @@ impl NamespaceStore {
             .into_model::<SongArtistRow>()
             .all(pool)
             .await
-            .wrap_err_with(|| format!("查 song_artists 失败 song={song_value}"))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "查 song_artists",
+                record: song_value.to_owned(),
+                source,
+            })?;
 
         Ok(Some(row.into_song(artist_rows)?))
     }
@@ -109,7 +121,7 @@ impl NamespaceStore {
     ///
     /// # Return:
     ///   全部可重建的 [`Song`]（顺序不定）;降级返回空 vec。
-    pub async fn list_meta(&self) -> color_eyre::Result<Vec<Song>> {
+    pub async fn list_meta(&self) -> crate::Result<Vec<Song>> {
         let Some(pool) = self.pool() else {
             return Ok(Vec::new());
         };
@@ -117,11 +129,20 @@ impl NamespaceStore {
         let metas = metadata_query(ns)
             .all(pool)
             .await
-            .wrap_err_with(|| format!("列出 song_meta 失败 ns={ns}"))?;
-        let artist_rows = artists_query(ns)
-            .all(pool)
-            .await
-            .wrap_err_with(|| format!("列出 song_artists 失败 ns={ns}"))?;
+            .map_err(|source| crate::Error::Record {
+                operation: "列出 song_meta",
+                record: ns.to_owned(),
+                source,
+            })?;
+        let artist_rows =
+            artists_query(ns)
+                .all(pool)
+                .await
+                .map_err(|source| crate::Error::Record {
+                    operation: "列出 song_artists",
+                    record: ns.to_owned(),
+                    source,
+                })?;
         // song_value → 保序艺人组(查询已按 song_value 聚簇、position 升序)。
         let mut by_song = rustc_hash::FxHashMap::<String, Vec<SongArtistRow>>::default();
         for artist in artist_rows {

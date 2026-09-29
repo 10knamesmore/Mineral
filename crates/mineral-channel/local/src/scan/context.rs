@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{WrapErr, bail, eyre};
 use rustc_hash::FxHashMap;
 
+use crate::error::{Error, Result};
 use crate::metadata::{self, Metadata};
 
 /// One scan's immutable input after traversal and metadata probing finish.
@@ -18,7 +18,7 @@ pub(crate) struct ScanContext {
 
 impl ScanContext {
     /// Probe the current file entirely on the Rust worker.
-    pub fn probe(&mut self, path: &Path) -> color_eyre::Result<()> {
+    pub fn probe(&mut self, path: &Path) -> Result<()> {
         let metadata = metadata::probe(path, &self.cover_dir)?;
         self.probes.insert(path.to_owned(), metadata);
         Ok(())
@@ -26,28 +26,28 @@ impl ScanContext {
 }
 
 /// Expand and canonicalize roots, keeping only the shallowest configured directories.
-pub(super) fn roots(paths: &[PathBuf]) -> color_eyre::Result<Vec<PathBuf>> {
+pub(super) fn roots(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut roots = Vec::<PathBuf>::new();
     for path in paths {
         let path = if let Ok(relative) = path.strip_prefix("~") {
             PathBuf::from(
-                std::env::var_os("HOME").ok_or_else(|| eyre!("HOME unavailable for local root"))?,
+                std::env::var_os("HOME")
+                    .ok_or_else(|| Error::HomeUnavailable { path: path.clone() })?,
             )
             .join(relative)
         } else {
             path.clone()
         };
         if !path.is_absolute() {
-            bail!(
-                "local root must be absolute or start with ~/: {}",
-                path.display()
-            );
+            return Err(Error::RelativeRoot { path });
         }
-        let path = path
-            .canonicalize()
-            .wrap_err_with(|| format!("local root {}", path.display()))?;
+        let path = path.canonicalize().map_err(|source| Error::File {
+            operation: "canonicalize local root",
+            path: path.clone(),
+            source,
+        })?;
         if !path.is_dir() {
-            bail!("local root is not a directory: {}", path.display());
+            return Err(Error::RootNotDirectory { path });
         }
         if roots.iter().any(|root| path.starts_with(root)) {
             continue;

@@ -75,7 +75,9 @@ async fn failed_metadata_batch_rolls_back_earlier_rows() -> color_eyre::Result<(
     let invalid = mineral_test::with_duration(mineral_test::song("invalid"), u64::MAX);
     let mut batch = songs.iter().collect::<Vec<_>>();
     batch.push(&invalid);
-    assert!(scope.upsert_meta_batch(&batch).await.is_err());
+    assert!(
+        matches!(scope.upsert_meta_batch(&batch).await, Err(crate::Error::Duration { song, .. }) if song == invalid.id.qualified())
+    );
     assert!(scope.list_meta().await?.is_empty());
     Ok(())
 }

@@ -9,7 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-color-eyre  = { workspace = true }
+thiserror   = { workspace = true }
 sea-orm     = { workspace = true }
 sea-orm-migration = { workspace = true }
 async-trait = { workspace = true }
@@ -22,6 +22,7 @@ mineral-log      = { workspace = true }
 mineral-protocol = { workspace = true }
 
 [dev-dependencies]
+color-eyre  = { workspace = true }
 tempfile     = "3"
 mineral-test = { workspace = true }
 

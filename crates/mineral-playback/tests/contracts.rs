@@ -6,8 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mineral_model::{BitRate, PlaybackMediaInfo, SongId, SourceKind};
 use mineral_playback::{
-    DirectMedia, MediaReader, OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRegistry,
-    PlaybackRequest, PreparedPlayback, SeekSupport,
+    DirectMedia, Error, MediaReader, OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRegistry,
+    PlaybackRequest, PreparedPlayback, Result, SeekSupport,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -33,7 +33,7 @@ impl PlaybackProvider for LengthChangingProvider {
         &self,
         request: PlaybackRequest,
         _cancellation: CancellationToken,
-    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+    ) -> Result<Box<dyn PreparedPlayback>> {
         Ok(Box::new(StripPrefixPrepared {
             info: PlaybackMediaInfo {
                 song_id: request.song_id().clone(),
@@ -53,13 +53,22 @@ impl PreparedPlayback for StripPrefixPrepared {
         None
     }
 
-    async fn open(self: Box<Self>, options: OpenOptions) -> color_eyre::Result<OpenedMedia> {
+    async fn open(self: Box<Self>, options: OpenOptions) -> Result<OpenedMedia> {
         let raw = b"ENCAPSULATED:decoder-ready";
         let prepared = raw
             .strip_prefix(b"ENCAPSULATED:")
-            .ok_or_else(|| color_eyre::eyre::eyre!("fixture prefix missing"))?
+            .ok_or_else(|| Error::Provider {
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "fixture prefix missing",
+                )),
+            })?
             .to_vec();
-        let byte_len = Some(u64::try_from(prepared.len())?);
+        let byte_len = Some(
+            u64::try_from(prepared.len()).map_err(|source| Error::Provider {
+                source: Box::new(source),
+            })?,
+        );
         let reader: Box<dyn MediaReader> = Box::new(Cursor::new(prepared));
         Ok(OpenedMedia::new(
             reader,
@@ -107,7 +116,19 @@ async fn preparation_may_change_length_without_direct_media() -> color_eyre::Res
 #[test]
 fn registry_rejects_duplicate_source() {
     let source = SourceKind::from_static("duplicate-test", "Duplicate test");
-    assert!(PlaybackRegistry::new(vec![provider(source), provider(source)]).is_err());
+    assert!(matches!(
+        PlaybackRegistry::new(vec![provider(source), provider(source)]),
+        Err(Error::DuplicateProvider { source_kind }) if source_kind == source
+    ));
+}
+
+/// A provider's original failure remains available to callers after crossing the trait boundary.
+#[test]
+fn provider_error_keeps_its_source() {
+    let error = Error::Provider {
+        source: Box::new(std::io::Error::other("fixture failure")),
+    };
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 /// A local direct locator does not alter the song's original source identity.

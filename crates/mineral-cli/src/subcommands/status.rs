@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use color_eyre::eyre::{WrapErr, bail};
+use crate::error::{Error, Result};
 use mineral_audio::{AudioBackend, AudioSnapshot};
 use mineral_client::Client;
 use mineral_client::connection::ClientConfig;
@@ -16,14 +16,20 @@ use mineral_protocol::{DownloadSummary, SocketWire, SubscriptionTopic};
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `mineral status` 入口:连 daemon(含握手)→ 订阅播放 / 下载 → 打印一次快照。
-pub async fn run() -> color_eyre::Result<()> {
+pub async fn run() -> Result<()> {
     let socket_path = mineral_paths::socket_path()?;
     let wire = SocketWire::connect(&socket_path)
         .await
-        .wrap_err("连不上 daemon;先跑 `mineral serve`")?;
+        .map_err(|source| Error::SocketConnect {
+            path: socket_path.clone(),
+            source,
+        })?;
     let client = Client::from_wire(Box::new(wire), "mineral_status", ClientConfig::default())
         .await
-        .wrap_err("连不上 daemon;先跑 `mineral serve`")?;
+        .map_err(|source| Error::Handshake {
+            path: socket_path,
+            source,
+        })?;
     client.subscribe(SubscriptionTopic::Playback);
     client.subscribe(SubscriptionTopic::DownloadsSummary);
     client.wait_subscriptions_ready(READY_TIMEOUT).await;
@@ -31,8 +37,19 @@ pub async fn run() -> color_eyre::Result<()> {
     let pid = match client.daemon_info().await {
         Outcome::Applied(pid) => pid,
         Outcome::Accepted(pid) => pid,
-        Outcome::Failed { detail, .. } | Outcome::Unknown { detail } => {
-            bail!("daemon error: {detail}")
+        Outcome::Failed { kind, detail } => {
+            mineral_log::warn!(target: "cli", ?kind, detail = %detail, "daemon info request rejected");
+            return Err(Error::Rejected {
+                operation: "read daemon info",
+                kind,
+            });
+        }
+        Outcome::Unknown { reason } => {
+            mineral_log::warn!(target: "cli", ?reason, "daemon info outcome unknown");
+            return Err(Error::UnknownOutcome {
+                operation: "read daemon info",
+                reason,
+            });
         }
     };
 

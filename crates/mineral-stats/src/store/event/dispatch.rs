@@ -15,7 +15,7 @@ impl StatsStore {
         ts: i64,
         session_id: Option<i64>,
         event: &StatsEvent,
-    ) -> color_eyre::Result<()> {
+    ) -> crate::Result<()> {
         let Some(pool) = self.pool() else {
             return Ok(());
         };

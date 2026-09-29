@@ -6,19 +6,79 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use color_eyre::eyre::WrapErr as _;
 use mineral_client::Client;
-use mineral_client::connection::ClientConfig;
+use mineral_client::connection::{ClientConfig, ConnectError};
 use mineral_client::operation::Outcome;
 use mineral_protocol::{
     Event, QueueEditOutcome, QueueOp, SocketWire, Subscription, SubscriptionId, SubscriptionTopic,
+    WireError,
 };
+
+use crate::error::Result;
 
 use super::command::{CtlArgs, CtlCommand, QueueCommand, SeekSpec, VolumeSpec, format_position};
 use super::outcome::{
     FailureReason, SkipReason, State, failed_state, state_from_outcome, unknown_state,
 };
 use super::render::{Payload, Report};
+
+/// 控制命令提交前的连接、订阅或配置故障。
+#[derive(Debug, thiserror::Error)]
+enum CtlError {
+    /// Socket 连接失败。
+    #[error("connect to daemon at {}", path.display())]
+    ConnectWire {
+        /// daemon socket 路径。
+        path: std::path::PathBuf,
+
+        /// 底层传输错误。
+        #[source]
+        source: WireError,
+    },
+
+    /// daemon 拒绝握手或会话初始化失败。
+    #[error("daemon handshake failed")]
+    Handshake(#[source] ConnectError),
+
+    /// 订阅首帧未按时到达。
+    #[error("subscription {topic:?} not ready")]
+    Subscription {
+        /// 等待的订阅主题。
+        topic: SubscriptionTopic,
+    },
+
+    /// daemon 没有下发有效配置。
+    #[error("daemon config subscription returned no configuration")]
+    MissingConfig,
+
+    /// daemon 下发的配置无法落型。
+    #[error("daemon configuration invalid")]
+    InvalidConfig(#[source] mineral_config::ConfigWarning),
+}
+
+impl CtlError {
+    /// 从结构化失败生成 CLI 提示，不泄露内部诊断。
+    fn user_message(&self) -> String {
+        match self {
+            Self::ConnectWire { .. } => "连不上 daemon;先跑 `mineral serve`".to_owned(),
+            Self::Handshake(error) => match error {
+                ConnectError::Rejected(_) => "daemon 拒绝连接".to_owned(),
+                ConnectError::Wire(_)
+                | ConnectError::HandshakeClosed
+                | ConnectError::MissingWelcome => "与 daemon 握手失败".to_owned(),
+            },
+            Self::Subscription { topic } => format!("等 {topic:?} 首帧超时"),
+            Self::MissingConfig => "没收到 daemon 的有效配置".to_owned(),
+            Self::InvalidConfig(_) => "daemon 下发的配置无效".to_owned(),
+        }
+    }
+}
+
+/// 把未执行的故障记录到日志，再生成稳定的 CLI 结论。
+fn not_executed(path: &'static str, error: &CtlError) -> Report {
+    mineral_log::warn!(target: "cli", command = path, error = mineral_log::chain(error), "ctl command not executed");
+    Report::not_executed(path, error.user_message())
+}
 
 /// 等订阅首帧的上限(daemon 订阅即推,正常毫秒级;`mineral status` 用同一量级)。
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -30,8 +90,8 @@ const READY_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// # Return:
 ///   进程退出码:成功 0、被拒 1、没执行 3。
-pub async fn run(args: CtlArgs) -> color_eyre::Result<ExitCode> {
-    let socket_path = mineral_paths::socket_path().wrap_err("解析 daemon socket 路径失败")?;
+pub async fn run(args: CtlArgs) -> Result<ExitCode> {
+    let socket_path = mineral_paths::socket_path()?;
     let report = execute(&socket_path, args.cmd).await;
     report.emit(args.json)
 }
@@ -44,7 +104,7 @@ pub async fn run(args: CtlArgs) -> color_eyre::Result<ExitCode> {
 async fn execute(socket_path: &Path, cmd: CtlCommand) -> Report {
     let client = match connect(socket_path).await {
         Ok(client) => client,
-        Err(detail) => return Report::not_executed(cmd.path(), detail),
+        Err(error) => return not_executed(cmd.path(), &error),
     };
     dispatch(&client, cmd).await
 }
@@ -115,11 +175,11 @@ async fn volume_absolute(client: &Client, path: &'static str, pct: u8) -> Report
 ///   - `client`: 会话 client
 ///   - `path`: 子命令路径
 async fn play_pause(client: &Client, path: &'static str) -> Report {
-    if let Err(detail) = await_topic(client, SubscriptionTopic::Player).await {
-        return Report::not_executed(path, detail);
+    if let Err(error) = await_topic(client, SubscriptionTopic::Player).await {
+        return not_executed(path, &error);
     }
-    if let Err(detail) = await_topic(client, SubscriptionTopic::Playback).await {
-        return Report::not_executed(path, detail);
+    if let Err(error) = await_topic(client, SubscriptionTopic::Playback).await {
+        return not_executed(path, &error);
     }
     let has_current_song = client.mirror().read_player(|player| {
         player
@@ -150,8 +210,8 @@ async fn play_pause(client: &Client, path: &'static str) -> Report {
 ///   - `path`: 子命令路径
 ///   - `delta_ms`: 相对偏移(ms)
 async fn seek_relative(client: &Client, path: &'static str, delta_ms: i64) -> Report {
-    if let Err(detail) = await_topic(client, SubscriptionTopic::Playback).await {
-        return Report::not_executed(path, detail);
+    if let Err(error) = await_topic(client, SubscriptionTopic::Playback).await {
+        return not_executed(path, &error);
     }
     let (anchor, position_ms) = client.mirror().read_playback(|playback| {
         (
@@ -178,8 +238,8 @@ async fn seek_relative(client: &Client, path: &'static str, delta_ms: i64) -> Re
 ///   - `path`: 子命令路径
 ///   - `delta`: 相对增量(百分点)
 async fn volume_relative(client: &Client, path: &'static str, delta: i16) -> Report {
-    if let Err(detail) = await_topic(client, SubscriptionTopic::Playback).await {
-        return Report::not_executed(path, detail);
+    if let Err(error) = await_topic(client, SubscriptionTopic::Playback).await {
+        return not_executed(path, &error);
     }
     let current_pct = client
         .mirror()
@@ -221,17 +281,16 @@ async fn queue_transform(
     label: &str,
     at: Option<usize>,
 ) -> Report {
-    if let Err(detail) = await_topic(client, SubscriptionTopic::Events(Subscription::Config)).await
-    {
-        return Report::not_executed(path, detail);
+    if let Err(error) = await_topic(client, SubscriptionTopic::Events(Subscription::Config)).await {
+        return not_executed(path, &error);
     }
     let Some(tree) = latest_config(client) else {
-        return Report::not_executed(path, "没收到 daemon 的有效配置".to_owned());
+        return not_executed(path, &CtlError::MissingConfig);
     };
     let config = match mineral_config::from_tree(&tree.into_json()) {
         Ok(config) => config,
         Err(warning) => {
-            return Report::not_executed(path, format!("有效配置落型失败:{warning}"));
+            return not_executed(path, &CtlError::InvalidConfig(warning));
         }
     };
     let labels = config
@@ -292,30 +351,32 @@ fn queue_edit_report(path: &'static str, outcome: Outcome<QueueEditOutcome>) -> 
             ),
         },
         Outcome::Failed { kind, detail } => {
-            Report::new(path, String::new(), failed_state(kind, detail))
+            Report::new(path, String::new(), failed_state(kind, &detail))
         }
-        Outcome::Unknown { detail } => Report::new(path, String::new(), unknown_state(detail)),
+        Outcome::Unknown { reason } => Report::new(path, String::new(), unknown_state(reason)),
     }
 }
 
 /// 等 `topic` 的首帧到达。
 ///
-/// 连接成功不等于订阅首帧已到,所以等待之后必须用 `subscription_seen` 确认;未就绪即返回人读
-/// 原因,调用方据此产出「没执行」,不拿镜像初始值当 daemon 状态。
+/// 连接成功不等于订阅首帧已到,所以等待之后必须用 `subscription_seen` 确认;未就绪即返回结构化故障,调用方据此产出「没执行」,不拿镜像初始值当 daemon 状态。
 ///
 /// # Params:
 ///   - `client`: 会话 client
 ///   - `topic`: 要等首帧的订阅主题
 ///
 /// # Return:
-///   订阅 id;超时或未就绪时返回人读原因。
-async fn await_topic(client: &Client, topic: SubscriptionTopic) -> Result<SubscriptionId, String> {
+///   订阅 id;超时或未就绪时返回订阅主题。
+async fn await_topic(
+    client: &Client,
+    topic: SubscriptionTopic,
+) -> std::result::Result<SubscriptionId, CtlError> {
     let id = client.subscribe(topic);
     client.wait_subscriptions_ready(READY_TIMEOUT).await;
     if client.mirror().subscription_seen(id) {
         Ok(id)
     } else {
-        Err(format!("等 {topic:?} 首帧超时"))
+        Err(CtlError::Subscription { topic })
     }
 }
 
@@ -434,14 +495,17 @@ fn report(command: &'static str, summary: impl Into<String>, outcome: Outcome<()
 ///   - `socket_path`: daemon socket 路径
 ///
 /// # Return:
-///   会话 client;连不上 / 握手被拒时返回人读原因。
-async fn connect(socket_path: &Path) -> Result<Client, String> {
+///   会话 client;连不上 / 握手被拒时返回带原始来源的故障。
+async fn connect(socket_path: &Path) -> std::result::Result<Client, CtlError> {
     let wire = SocketWire::connect(socket_path)
         .await
-        .map_err(|error| format!("连不上 daemon({error});先跑 `mineral serve`"))?;
+        .map_err(|source| CtlError::ConnectWire {
+            path: socket_path.to_path_buf(),
+            source,
+        })?;
     Client::from_wire(Box::new(wire), "mineral_ctl", ClientConfig::cli())
         .await
-        .map_err(|error| format!("与 daemon 握手失败:{error}"))
+        .map_err(CtlError::Handshake)
 }
 
 #[cfg(test)]

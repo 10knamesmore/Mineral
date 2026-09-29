@@ -2,6 +2,7 @@
 
 mod catalog;
 mod channel;
+mod error;
 mod metadata;
 mod scan;
 
@@ -13,6 +14,7 @@ use mineral_persist::ServerStore;
 use tokio::sync::Mutex;
 
 use catalog::Catalog;
+use error::Result;
 
 /// Catalog adapter and playback provider sharing one catalog for this channel instance.
 pub struct LocalLibrary {
@@ -52,7 +54,7 @@ impl LocalLibrary {
     }
 
     /// Return a stable snapshot, loading it on the first successful read.
-    async fn catalog(&self) -> color_eyre::Result<Arc<Catalog>> {
+    async fn catalog(&self) -> Result<Arc<Catalog>> {
         if let Some(catalog) = self.catalog.load_full() {
             return Ok(catalog);
         }
@@ -76,7 +78,7 @@ impl LocalLibrary {
     }
 
     /// Scan on a blocking worker, then update generic song metadata.
-    async fn load_catalog(&self) -> color_eyre::Result<Catalog> {
+    async fn load_catalog(&self) -> Result<Catalog> {
         let roots = self.roots.clone();
         let cover_dir = self.cover_dir.clone();
         let catalog = tokio::task::spawn_blocking(move || {

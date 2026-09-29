@@ -3,7 +3,6 @@
 use std::ops::Range;
 
 use crate::entity::plays;
-use color_eyre::eyre::WrapErr as _;
 use sea_orm::sea_query::{ExprTrait, Order};
 use sea_orm::{ColumnTrait, EntityTrait, QueryOrder, QuerySelect};
 
@@ -22,11 +21,7 @@ impl StatsStore {
     ///
     /// # Return:
     ///   首播在窗口内的歌数
-    pub async fn discoveries(
-        &self,
-        range: Range<i64>,
-        limit: i64,
-    ) -> color_eyre::Result<Discoveries> {
+    pub async fn discoveries(&self, range: Range<i64>, limit: i64) -> crate::Result<Discoveries> {
         let Some(db) = self.pool() else {
             return Ok(Discoveries::default());
         };
@@ -42,7 +37,10 @@ impl StatsStore {
             .into_tuple::<(String, String)>()
             .all(db)
             .await
-            .wrap_err("discoveries new_songs 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "discoveries new_songs",
+                source,
+            })?;
         Ok(Discoveries {
             new_songs: rows
                 .into_iter()
@@ -58,7 +56,7 @@ impl StatsStore {
         &self,
         range: Range<i64>,
         earliest: bool,
-    ) -> color_eyre::Result<Option<PlayTail>> {
+    ) -> crate::Result<Option<PlayTail>> {
         let Some(db) = self.pool() else {
             return Ok(None);
         };
@@ -77,7 +75,10 @@ impl StatsStore {
             .into_model::<PlayTailRow>()
             .one(db)
             .await
-            .wrap_err("discoveries edge_play 查询失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "discoveries edge_play",
+                source,
+            })?;
         Ok(row.map(|row| PlayTail {
             song: song_id(&row.ns, &row.song_value),
             started_at: row.started_at,

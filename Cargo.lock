@@ -2947,6 +2947,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -2966,6 +2967,7 @@ dependencies = [
  "rodio",
  "serde",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "typed-builder",
@@ -3037,6 +3039,7 @@ dependencies = [
  "sha2 0.10.9",
  "symphonia",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "uuid",
@@ -3132,6 +3135,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "time",
  "tokio",
 ]
@@ -3153,6 +3157,7 @@ dependencies = [
  "rustc-hash 2.1.2",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3178,6 +3183,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "thiserror 1.0.69",
  "typed-builder",
 ]
 
@@ -3194,8 +3200,8 @@ dependencies = [
 name = "mineral-log"
 version = "0.5.8"
 dependencies = [
- "color-eyre",
  "mineral-paths",
+ "thiserror 1.0.69",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -3226,6 +3232,7 @@ dependencies = [
  "objc2-media-player",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "typed-builder",
 ]
@@ -3254,6 +3261,7 @@ dependencies = [
  "color-eyre",
  "nix",
  "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3272,6 +3280,7 @@ dependencies = [
  "sea-orm",
  "sea-orm-migration",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -3288,6 +3297,7 @@ dependencies = [
  "reqwest",
  "rustc-hash 2.1.2",
  "stream-download",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "url",
@@ -3340,6 +3350,7 @@ dependencies = [
  "proptest",
  "rustc-hash 2.1.2",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "typed-builder",
 ]
@@ -3380,6 +3391,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "time",
  "tokio",
  "tokio-util",
@@ -3412,6 +3424,7 @@ dependencies = [
  "sea-orm-migration",
  "serde",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "typed-builder",
 ]
@@ -3429,6 +3442,7 @@ dependencies = [
  "parking_lot",
  "rustc-hash 2.1.2",
  "serde",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
 ]
@@ -3496,6 +3510,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "tempfile",
+ "thiserror 1.0.69",
  "time",
  "tokio",
  "tracing-subscriber",

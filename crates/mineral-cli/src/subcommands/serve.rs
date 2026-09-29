@@ -5,11 +5,12 @@
 //! 2. stale socket 检测(已活 daemon → bail;残留 socket 文件 → 删)
 //! 3. bind + Server::spawn + serve
 
-use color_eyre::eyre::{WrapErr, bail};
 use mineral_persist::ServerStore;
 use mineral_server::{Server, ServerConfig, SourceBackends, resolve_audio_mode};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
+
+use crate::error::{Error, Result};
 
 /// 停机时 await 埋点 actor join 的超时上限:actor 结算末尾一行 + 退出远快于此,超时纯是
 /// 兜底(埋点故障绝不无限拖住 daemon 退出)。
@@ -34,19 +35,28 @@ pub async fn run(
     script: mineral_server::ScriptParts,
     config_tree: serde_json::Value,
     config_path: std::path::PathBuf,
-) -> color_eyre::Result<()> {
+) -> Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
     // 信号 handler 必须在 bind 之前装好:unix socket 一 bind,client 就能连上(连接进
     // backlog,无需 accept),并可能立刻请求退出。若此刻 handler 还没装(Server::spawn
     // 的 audio 初始化耗时不短),SIGTERM 会走默认处置直接杀进程 —— stale socket 残留、
     // audio / MPRIS 收尾全跳过。提前装好即可关掉这段竞态窗口。
-    let mut term = signal(SignalKind::terminate()).wrap_err("install SIGTERM handler")?;
-    let mut interrupt = signal(SignalKind::interrupt()).wrap_err("install SIGINT handler")?;
+    let mut term = signal(SignalKind::terminate()).map_err(|source| Error::Signal {
+        operation: "install SIGTERM handler",
+        source,
+    })?;
+    let mut interrupt = signal(SignalKind::interrupt()).map_err(|source| Error::Signal {
+        operation: "install SIGINT handler",
+        source,
+    })?;
 
     let socket_path = mineral_paths::socket_path()?;
     prepare_socket(&socket_path).await?;
-    let listener = UnixListener::bind(&socket_path)
-        .wrap_err_with(|| format!("bind unix socket {}", socket_path.display()))?;
+    let listener = UnixListener::bind(&socket_path).map_err(|source| Error::Io {
+        operation: "bind daemon socket",
+        path: socket_path.clone(),
+        source,
+    })?;
     mineral_log::info!(target: "daemon", socket_path = %socket_path.display(), "unix socket bound");
     println!("mineral daemon listening on {}", socket_path.display());
 
@@ -128,7 +138,7 @@ pub async fn run(
     } else {
         mineral_log::debug!(target: "daemon", socket_path = %socket_path.display(), "socket cleaned up");
     }
-    outcome
+    outcome.map_err(Into::into)
 }
 
 /// 等待第一个到达的关闭信号(SIGINT 或 SIGTERM)。
@@ -151,8 +161,8 @@ async fn wait_for_signal(term: &mut Signal, interrupt: &mut Signal) {
 /// - 不存在 → OK,直接返回
 /// - 存在 → 试 connect:
 ///   - 连得上 → daemon 已活,bail
-///   - 连不上(ConnectionRefused / NotFound)→ 残留 socket 文件,删
-async fn prepare_socket(path: &std::path::Path) -> color_eyre::Result<()> {
+///   - 连不上(ConnectionRefused / NotFound)→ 残留 socket 文件,删；其他错误保留原始原因。
+async fn prepare_socket(path: &std::path::Path) -> Result<()> {
     if !path.exists() {
         mineral_log::debug!(target: "daemon", "socket path fresh, no cleanup needed");
         return Ok(());
@@ -160,17 +170,29 @@ async fn prepare_socket(path: &std::path::Path) -> color_eyre::Result<()> {
     match UnixStream::connect(path).await {
         Ok(_) => {
             mineral_log::error!(target: "daemon", socket_path = %path.display(), "another daemon already running");
-            bail!(
-                "another mineral daemon is already running at {}",
-                path.display()
-            )
+            Err(Error::DaemonRunning {
+                path: path.to_path_buf(),
+            })
         }
-        Err(_) => {
+        Err(source)
+            if matches!(
+                source.kind(),
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+            ) =>
+        {
             mineral_log::warn!(target: "daemon", socket_path = %path.display(), "removing stale socket");
-            std::fs::remove_file(path)
-                .wrap_err_with(|| format!("remove stale socket {}", path.display()))?;
+            std::fs::remove_file(path).map_err(|source| Error::Io {
+                operation: "remove stale socket",
+                path: path.to_path_buf(),
+                source,
+            })?;
             Ok(())
         }
+        Err(source) => Err(Error::Io {
+            operation: "check daemon socket",
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 

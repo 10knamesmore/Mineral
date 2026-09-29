@@ -156,7 +156,6 @@ pub async fn open_client_store() -> Option<Arc<ClientStore>> {
     if let Some(parent) = db.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
-        let e = color_eyre::Report::new(e);
         mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "建 tui.db 目录失败,客户端持久化降级");
         return None;
     }

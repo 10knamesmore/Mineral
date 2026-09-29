@@ -16,7 +16,6 @@ mineral-task         = { workspace = true }
 
 bincode        = { workspace = true }
 bytes          = { workspace = true }
-color-eyre     = { workspace = true }
 derive-getters = { workspace = true }
 rustc-hash     = { workspace = true }
 serde          = { workspace = true }
@@ -30,6 +29,7 @@ typed-builder  = { workspace = true }
 async-trait    = { workspace = true }
 
 [dev-dependencies]
+color-eyre        = { workspace = true }
 tokio             = { workspace = true, features = ["macros", "io-util"] }
 mineral-test      = { workspace = true }
 proptest          = { workspace = true }

@@ -1,7 +1,6 @@
 //! plays / sessions 事实行的写入。
 
 use crate::entity::sessions;
-use color_eyre::eyre::WrapErr as _;
 use mineral_model::AudioFormat;
 use sea_orm::sea_query::Expr;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -14,7 +13,7 @@ impl StatsStore {
     ///
     /// # Params:
     ///   - `started_at`: 会话起始 epoch ms(初始 `ended_at` 同值)
-    pub async fn open_session(&self, started_at: i64) -> color_eyre::Result<Option<i64>> {
+    pub async fn open_session(&self, started_at: i64) -> crate::Result<Option<i64>> {
         let Some(pool) = self.pool() else {
             return Ok(None);
         };
@@ -25,13 +24,16 @@ impl StatsStore {
         })
         .exec(pool)
         .await
-        .wrap_err("open_session 落库失败")?
+        .map_err(|source| crate::Error::Database {
+            operation: "open_session",
+            source,
+        })?
         .last_insert_id;
         Ok(Some(id))
     }
 
     /// 随播放活动推进,更新会话结束时刻。降级时 no-op。
-    pub async fn touch_session(&self, session_id: i64, ended_at: i64) -> color_eyre::Result<()> {
+    pub async fn touch_session(&self, session_id: i64, ended_at: i64) -> crate::Result<()> {
         let Some(db) = self.pool() else {
             return Ok(());
         };
@@ -40,7 +42,10 @@ impl StatsStore {
             .filter(sessions::Column::Id.eq(session_id))
             .exec(db)
             .await
-            .wrap_err("touch_session 落库失败")?;
+            .map_err(|source| crate::Error::Database {
+                operation: "touch_session",
+                source,
+            })?;
         Ok(())
     }
 
@@ -48,7 +53,7 @@ impl StatsStore {
     ///
     /// `is_lossless` 由 `audio_format` 现算(不作单独字段,避免第二数据源);ID 拆成
     /// `ns` + 裸 `song_value` 两列;上下文拆成 `context_kind` + `context_ref`。
-    pub async fn record_play(&self, rec: &PlayRecord) -> color_eyre::Result<()> {
+    pub async fn record_play(&self, rec: &PlayRecord) -> crate::Result<()> {
         let Some(pool) = self.pool() else {
             return Ok(());
         };
@@ -92,7 +97,11 @@ impl StatsStore {
         })
         .exec(pool)
         .await
-        .wrap_err_with(|| format!("record_play 落库失败 song={song_value}"))?;
+        .map_err(|source| crate::Error::Song {
+            operation: "record_play",
+            song: song_value.to_owned(),
+            source,
+        })?;
         Ok(())
     }
 }

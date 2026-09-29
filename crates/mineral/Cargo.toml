@@ -16,6 +16,7 @@ mineral-channel-local = { workspace = true }
 dhat                    = { version = "0.3", optional = true }
 clap                    = { workspace = true }
 color-eyre              = { workspace = true }
+thiserror               = { workspace = true }
 mineral-channel-core    = { workspace = true }
 mineral-channel-netease = { workspace = true }
 mineral-channel-bilibili = { workspace = true }

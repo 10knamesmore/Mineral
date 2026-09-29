@@ -3,11 +3,22 @@
 use mineral_model::Song;
 use mineral_protocol::{
     DownloadId, DownloadOrigin, DownloadStatus, DownloadTarget, PlaylistRef, SongDownloadView,
-    ToastKind,
 };
 
 use super::DownloadManager;
 use super::state::{DownloadKey, SongDownload};
+
+/// Failure while expanding a playlist for downloads.
+#[derive(Debug, thiserror::Error)]
+enum ExpansionError {
+    /// No catalog channel serves the playlist source.
+    #[error("no catalog channel for playlist source")]
+    NoChannel,
+
+    /// Catalog lookup failed.
+    #[error("playlist lookup failed")]
+    Channel(#[from] mineral_channel_core::Error),
+}
 
 /// Scheduler lane of a newly admitted row.
 #[derive(Clone, Copy)]
@@ -48,11 +59,11 @@ impl DownloadManager {
             .find(|channel| channel.source() == id.namespace())
             .cloned();
         let result = match channel {
-            Some(channel) => channel.playlist_detail(&id, mineral_channel_core::PlaylistLoad::Complete).await.map_err(|error| {
-                mineral_log::warn!(target: "download", playlist_id = %id.qualified(), error = mineral_log::chain(&error), "playlist expansion failed");
-                "Download failed: could not load playlist".to_owned()
-            }),
-            None => Err("Download failed: source has no catalog channel".to_owned()),
+            Some(channel) => channel
+                .playlist_detail(&id, mineral_channel_core::PlaylistLoad::Complete)
+                .await
+                .map_err(ExpansionError::from),
+            None => Err(ExpansionError::NoChannel),
         };
         match result {
             Ok(playlist) if !self.inner.shutdown.is_cancelled() => {
@@ -65,8 +76,12 @@ impl DownloadManager {
                 }
             }
             Ok(_) => {}
-            Err(message) if !self.inner.shutdown.is_cancelled() => {
-                self.inner.runtime.notify.toast(ToastKind::Warn, message);
+            Err(error) if !self.inner.shutdown.is_cancelled() => {
+                mineral_log::warn!(target: "download", playlist_id = %id.qualified(), error = mineral_log::chain(&error), "playlist expansion failed");
+                self.inner
+                    .runtime
+                    .notify
+                    .failure(mineral_protocol::FailureNotice::PlaylistDownloadFailed { id });
             }
             Err(_) => {}
         }

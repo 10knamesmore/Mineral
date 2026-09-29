@@ -6,7 +6,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use color_eyre::eyre::WrapErr as _;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 
@@ -40,7 +39,7 @@ impl StatsStore {
     ///
     /// # Return:
     ///   打开成功的句柄;打开 / 迁移失败冒泡(调用方决定是否降级)
-    pub async fn open(db_path: &Path) -> color_eyre::Result<Self> {
+    pub async fn open(db_path: &Path) -> crate::Result<Self> {
         let mut options = ConnectOptions::new(format!("sqlite://{}?mode=rwc", db_path.display()));
         // 单连接常驻，使初始化的连接级 PRAGMA 在句柄生命周期内保持生效。
         options
@@ -61,10 +60,13 @@ impl StatsStore {
             });
         let pool = Database::connect(options)
             .await
-            .wrap_err_with(|| format!("打开 stats.db 失败 path={}", db_path.display()))?;
+            .map_err(|source| crate::Error::Open {
+                path: db_path.to_path_buf(),
+                source,
+            })?;
         Migrator::up(&pool, /*steps*/ None)
             .await
-            .wrap_err("stats.db 迁移失败")?;
+            .map_err(|source| crate::Error::Migration { source })?;
         Ok(Self {
             backend: Arc::new(Backend::Sqlite(pool)),
         })
@@ -103,6 +105,18 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let store = StatsStore::open(&dir.path().join("stats.db")).await?;
         Ok((dir, store))
+    }
+
+    /// Opening a database below a missing directory reports its attempted file path.
+    #[tokio::test]
+    async fn open_missing_parent_reports_database_path() -> color_eyre::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("missing").join("stats.db");
+        assert!(matches!(
+            StatsStore::open(&path).await,
+            Err(crate::Error::Open { path: failed_path, .. }) if failed_path == path
+        ));
+        Ok(())
     }
 
     /// 从句柄取 live pool,降级则测试失败(不 unwrap)。

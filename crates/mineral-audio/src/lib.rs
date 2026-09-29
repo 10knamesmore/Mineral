@@ -8,6 +8,7 @@ mod bps;
 mod command;
 mod engine;
 mod envelope;
+mod error;
 mod handle;
 mod output;
 mod queue_slots;
@@ -15,6 +16,9 @@ mod snapshot;
 mod tap;
 
 pub use bps::Bps;
+pub use error::Error;
+/// Result of an audio engine operation.
+pub type Result<T> = std::result::Result<T, Error>;
 pub use envelope::{
     ENVELOPE_VERSION, EnvelopeParams, HighpassParams, ShelfParams, envelope_from_file,
     envelope_from_samples,

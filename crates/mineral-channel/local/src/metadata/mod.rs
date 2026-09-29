@@ -6,4 +6,4 @@ mod mp4_duration;
 
 pub(crate) use file::Metadata;
 pub(crate) use file::{cover, probe, supported};
-pub(crate) use lyrics::decode_sidecar;
+pub(crate) use lyrics::{LyricsEncodingError, decode_sidecar};

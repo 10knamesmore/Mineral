@@ -5,7 +5,6 @@
 //! 在其层,本文件只做编排与业务决策(如详情聚合多端点、歌单缓存)。
 
 use async_trait::async_trait;
-use color_eyre::eyre::eyre;
 use isahc::cookies::{Cookie, CookieJar};
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
@@ -16,12 +15,13 @@ use mineral_model::{
 };
 use mineral_persist::ServerStore;
 use mineral_playback::{
-    DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
+    DirectPreparedPlayback, Error as PlaybackError, PlaybackProvider, PlaybackRequest,
+    PreparedPlayback,
 };
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::ApiCodeError;
+use crate::error::{ApiCodeError, Error as NeteaseError};
 
 use crate::api;
 use crate::config::NeteaseConfig;
@@ -49,7 +49,7 @@ impl NeteaseChannel {
     /// # Params:
     ///   - `config`: HTTP 客户端配置
     ///   - `persist`: 持久化句柄;传 [`ServerStore::disabled()`] 可跳过本地落盘
-    pub fn new(config: &NeteaseConfig, persist: ServerStore) -> color_eyre::Result<Self> {
+    pub fn new(config: &NeteaseConfig, persist: ServerStore) -> crate::Result<Self> {
         Ok(Self {
             transport: Transport::new(config)?,
             user_id: None,
@@ -73,7 +73,7 @@ impl NeteaseChannel {
         config: &NeteaseConfig,
         music_u: &str,
         persist: ServerStore,
-    ) -> color_eyre::Result<Self> {
+    ) -> crate::Result<Self> {
         Self::build(config, music_u, None, persist)
     }
 
@@ -89,7 +89,7 @@ impl NeteaseChannel {
         music_u: &str,
         user_id: UserId,
         persist: ServerStore,
-    ) -> color_eyre::Result<Self> {
+    ) -> crate::Result<Self> {
         Self::build(config, music_u, Some(user_id), persist)
     }
 
@@ -105,18 +105,27 @@ impl NeteaseChannel {
         music_u: &str,
         user_id: Option<UserId>,
         persist: ServerStore,
-    ) -> color_eyre::Result<Self> {
+    ) -> crate::Result<Self> {
         let jar = CookieJar::new();
         let url = "https://music.163.com"
             .parse()
-            .map_err(|e| eyre!("parse netease base uri: {e}"))?;
+            .map_err(|source| NeteaseError::Network {
+                operation: "parse Netease base URI",
+                source: Box::new(source),
+            })?;
         let cookie = Cookie::builder("MUSIC_U", music_u)
             .domain("music.163.com")
             .path("/")
             .build()
-            .map_err(|e| eyre!("build cookie: {e}"))?;
+            .map_err(|source| NeteaseError::Network {
+                operation: "build MUSIC_U cookie",
+                source: Box::new(source),
+            })?;
         jar.set(cookie, &url)
-            .map_err(|e| eyre!("set cookie: {e}"))?;
+            .map_err(|source| NeteaseError::Network {
+                operation: "set MUSIC_U cookie",
+                source: Box::new(source),
+            })?;
         Ok(Self {
             transport: Transport::from_cookie_jar(config, jar)?,
             user_id,
@@ -132,24 +141,37 @@ impl NeteaseChannel {
     }
 }
 
-/// 把 api 层的 `color_eyre::Report` 收敛到 channel-core 错误。
-///
-/// 携带 [`ApiCodeError`] 的按 code 结构化映射:301 → `AuthRequired`、
-/// 512(风控/歌单容量,远端不区分)→ `RateLimited`、其余透传 `Api`
-/// (含加歌重复的 502,由 TUI 翻译成"已在歌单中");纯网络/解析类
-/// Report 落 `Error::Other` 兜底。
-fn map_err(e: color_eyre::Report) -> Error {
-    match e.downcast_ref::<ApiCodeError>() {
-        Some(api) => match api.code {
-            301 => Error::AuthRequired,
-            // 405(操作频繁)与 512(风控/歌单容量)同为限流语义。
-            405 | 512 => Error::RateLimited,
-            _ => Error::Api {
-                code: api.code,
-                message: api.message.clone(),
-            },
+/// 将网易云领域错误映射为跨 channel 分类，保留原始 cause。
+fn map_err(error: NeteaseError) -> Error {
+    match error {
+        NeteaseError::Api(ApiCodeError { code: 301, .. }) => Error::AuthRequired,
+        NeteaseError::Api(ApiCodeError {
+            code: 405 | 512, ..
+        }) => Error::RateLimited,
+        NeteaseError::Api(ApiCodeError { code, message }) => Error::Api { code, message },
+        NeteaseError::Network { .. } => Error::Network {
+            source: Box::new(error),
         },
-        None => Error::Other(e),
+        NeteaseError::Parse { .. } | NeteaseError::Serialize(_) => Error::Parse {
+            source: Box::new(error),
+        },
+        NeteaseError::InvalidData { field } => Error::InvalidData { field },
+        NeteaseError::Storage(_)
+        | NeteaseError::Path(_)
+        | NeteaseError::File { .. }
+        | NeteaseError::InvalidCredentialPath { .. } => Error::Storage {
+            source: Box::new(error),
+        },
+        NeteaseError::PlaylistOffset(_) => Error::Parse {
+            source: Box::new(error),
+        },
+        NeteaseError::LoginAccount { .. }
+        | NeteaseError::Qr(_)
+        | NeteaseError::LoginCancelled
+        | NeteaseError::LoginExpired
+        | NeteaseError::LoginStatus { .. } => Error::Parse {
+            source: Box::new(error),
+        },
     }
 }
 
@@ -374,7 +396,7 @@ impl MusicChannel for NeteaseChannel {
         }
         api::song::like_song(&self.transport, id, loved)
             .await
-            .map_err(Error::Other)
+            .map_err(map_err)
     }
 
     /// 远端真实累计播放次数:登录(有 uid)才查回忆坐标;未登录返回 [`Error::NotSupported`]。
@@ -384,7 +406,7 @@ impl MusicChannel for NeteaseChannel {
         }
         api::song::remote_play_count(&self.transport, id)
             .await
-            .map_err(Error::Other)
+            .map_err(map_err)
     }
 }
 
@@ -399,34 +421,45 @@ impl PlaybackProvider for NeteaseChannel {
         &self,
         request: PlaybackRequest,
         cancellation: CancellationToken,
-    ) -> color_eyre::Result<Box<dyn PreparedPlayback>> {
+    ) -> mineral_playback::Result<Box<dyn PreparedPlayback>> {
         if cancellation.is_cancelled() {
-            return Err(eyre!("playback resolve cancelled"));
+            return Err(PlaybackError::Cancelled);
         }
         let ids = [request.song_id().clone()];
         if let Ok(dtos) = api::song::song_url_v1(&self.transport, &ids, request.quality()).await {
             if convert::all_explicitly_unavailable(&dtos) {
-                return Err(eyre!("netease song has no playable media"));
+                return Err(PlaybackError::Provider {
+                    source: Box::new(NeteaseError::InvalidData {
+                        field: "playable Netease media",
+                    }),
+                });
             }
             if let Some(media) = convert::to_direct_media(dtos).into_iter().next() {
                 return Ok(DirectPreparedPlayback::boxed(media));
             }
         }
         if cancellation.is_cancelled() {
-            return Err(eyre!("playback resolve cancelled"));
+            return Err(PlaybackError::Cancelled);
         }
-        let dtos = api::song::song_url_legacy(&self.transport, &ids, request.quality()).await?;
+        let dtos = api::song::song_url_legacy(&self.transport, &ids, request.quality())
+            .await
+            .map_err(|source| PlaybackError::Provider {
+                source: Box::new(source),
+            })?;
         let media = convert::to_direct_media(dtos)
             .into_iter()
             .next()
-            .ok_or_else(|| eyre!("netease song has no playable media"))?;
+            .ok_or_else(|| PlaybackError::Provider {
+                source: Box::new(NeteaseError::InvalidData {
+                    field: "playable Netease media",
+                }),
+            })?;
         Ok(DirectPreparedPlayback::boxed(media))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use color_eyre::eyre::{WrapErr, eyre};
     use mineral_channel_core::{Error, MusicChannel};
     use mineral_model::{SongId, SourceKind};
     use mineral_persist::ServerStore;
@@ -435,39 +468,36 @@ mod tests {
     use crate::config::NeteaseConfig;
     use crate::error::ApiCodeError;
 
-    /// `map_err` 对携带 [`ApiCodeError`] 的 Report 按 code 结构化映射;
-    /// 普通 Report 落 `Error::Other` 兜底。
+    /// 按 code 映射 API 错误，其余分类保留底层原因。
     #[test]
     fn map_err_translates_api_codes() {
         let f = |code: i64| {
-            super::map_err(color_eyre::Report::new(ApiCodeError {
+            super::map_err(crate::Error::Api(ApiCodeError {
                 code,
-                message: String::from("m"),
+                message: Some(String::from("m")),
             }))
         };
         assert!(matches!(f(301), Error::AuthRequired));
         assert!(matches!(f(512), Error::RateLimited));
-        assert!(matches!(f(405), Error::RateLimited), "405 操作频繁同为限流");
+        assert!(matches!(f(405), Error::RateLimited));
         assert!(matches!(f(502), Error::Api { code: 502, .. }));
-        assert!(matches!(
-            super::map_err(eyre!("plain network-ish error")),
-            Error::Other(_)
-        ));
+        let network = super::map_err(crate::Error::Network {
+            operation: "send request",
+            source: Box::new(std::io::Error::other("timeout")),
+        });
+        assert!(matches!(&network, Error::Network { .. }));
+        assert!(std::error::Error::source(&network).is_some());
     }
 
-    /// api 层 `.wrap_err(..)` 加过上下文后,downcast 仍沿 source 链命中,
-    /// 映射不退化(防"格式化成字符串再 eyre!"一类的回归)。
+    /// 解析失败保留字段路径和原始 serde 错误。
     #[test]
-    fn map_err_survives_wrap_err_context() -> color_eyre::Result<()> {
-        let res: color_eyre::Result<()> = Err(color_eyre::Report::new(ApiCodeError {
-            code: 301,
-            message: String::new(),
-        }));
-        let e = res
-            .wrap_err("fetch user playlists")
+    fn map_err_preserves_parse_source() -> color_eyre::Result<()> {
+        let parse = crate::wire::de::from_value::<Vec<i32>>(serde_json::json!(["invalid"]))
             .err()
-            .ok_or_else(|| eyre!("expected err"))?;
-        assert!(matches!(super::map_err(e), Error::AuthRequired));
+            .ok_or_else(|| color_eyre::eyre::eyre!("expected invalid element"))?;
+        let error = super::map_err(parse);
+        assert!(matches!(&error, Error::Parse { .. }));
+        assert!(std::error::Error::source(&error).is_some());
         Ok(())
     }
 

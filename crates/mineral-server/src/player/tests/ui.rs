@@ -46,6 +46,91 @@ fn config_leaf(
     }
 }
 
+/// RPC failures preserve their business category without inspecting error text.
+#[tokio::test]
+async fn rpc_failure_categories_follow_operation_state() -> color_eyre::Result<()> {
+    use mineral_protocol::{
+        CopyTemplateCtx, CopyTextFailure, DownloadId, FailureKind, OperationResult, Request,
+        Response,
+    };
+
+    let (core, _events_rx) = core_with_hub()?;
+    let client = crate::ClientHandle::new(core);
+    let action = crate::ipc::dispatch::execute_async(
+        &client,
+        crate::ipc::dispatch::AsyncRequest::InvokeAction {
+            name: "missing".to_owned(),
+            ctx: None,
+            args: Vec::new(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(action, OperationResult::Failed(failure) if failure.kind == FailureKind::Unavailable)
+    );
+
+    let disabled_copy = crate::ipc::dispatch::execute_async(
+        &client,
+        crate::ipc::dispatch::AsyncRequest::RenderCopyTemplate {
+            index: 0,
+            ctx: CopyTemplateCtx::Song(Box::new(song("copy"))),
+        },
+    )
+    .await;
+    assert!(
+        matches!(disabled_copy, OperationResult::Query(response) if matches!(*response, Response::CopyText(Err(CopyTextFailure::ScriptDisabled))))
+    );
+
+    let (script_core, _runtime) = super::fixtures::core_with_script("return {}")?;
+    let script_client = crate::ClientHandle::new(script_core);
+    let unregistered = crate::ipc::dispatch::execute_async(
+        &script_client,
+        crate::ipc::dispatch::AsyncRequest::InvokeAction {
+            name: "missing".to_owned(),
+            ctx: None,
+            args: Vec::new(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(unregistered, OperationResult::Failed(failure) if failure.kind == FailureKind::NotFound)
+    );
+
+    let callback_copy = crate::ipc::dispatch::execute_async(
+        &script_client,
+        crate::ipc::dispatch::AsyncRequest::RenderCopyTemplate {
+            index: 0,
+            ctx: CopyTemplateCtx::Song(Box::new(song("copy"))),
+        },
+    )
+    .await;
+    assert!(
+        matches!(callback_copy, OperationResult::Query(response) if matches!(*response, Response::CopyText(Err(CopyTextFailure::CallbackFailed { .. }))))
+    );
+
+    let stop = crate::ipc::dispatch::execute_sync(
+        &client,
+        Request::StopDownload(DownloadId::new("missing".to_owned())),
+    );
+    assert!(
+        matches!(stop, OperationResult::Failed(failure) if failure.kind == FailureKind::NotFound)
+    );
+
+    let store = crate::ipc::dispatch::execute_async(
+        &client,
+        crate::ipc::dispatch::AsyncRequest::StoreSet {
+            song: mineral_model::SongId::new(SourceKind::NETEASE, "song"),
+            key: "rating".to_owned(),
+            value: mineral_protocol::StoreValue::Int(1),
+        },
+    )
+    .await;
+    assert!(
+        matches!(store, OperationResult::Failed(failure) if failure.kind == FailureKind::Invalid)
+    );
+    Ok(())
+}
+
 /// 配置覆盖:合成 + 校验 + 推送;同值重写与撤销不存在的 path 都不发事件;
 /// 撤销回落底树值。
 #[tokio::test]
@@ -88,11 +173,11 @@ async fn config_override_merges_and_diffs() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 坏覆盖(类型不符 / 未知路径)被剔除:警告 toast、不推 ConfigChanged、
+/// 坏覆盖(类型不符 / 未知路径)被剔除:发送结构化告警、不推 ConfigChanged、
 /// 有效配置保持校验通过的那份;好覆盖不被殃及。
 #[tokio::test]
 async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
-    use mineral_protocol::{BusValue, Event, ToastKind};
+    use mineral_protocol::{BusValue, Event, FailureNotice};
     let (core, mut events_rx) = core_with_hub()?;
     // 先落一条好覆盖。
     core.apply_config_overrides(vec![override_op(
@@ -106,8 +191,10 @@ async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
         Some(BusValue::Str("x".to_owned())),
     )]);
     match events_rx.try_recv()? {
-        Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "坏覆盖应警告"),
-        other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
+        Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
+            assert_eq!(path, "tui.lyrics.compact_line_gap");
+        }
+        other => color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}"),
     }
     assert!(
         events_rx.try_recv().is_err(),
@@ -130,8 +217,10 @@ async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
         Some(BusValue::Int(1)),
     )]);
     match events_rx.try_recv()? {
-        Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "未知路径应警告"),
-        other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
+        Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
+            assert_eq!(path, "tui.lyrics.bogus");
+        }
+        other => color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}"),
     }
     assert!(
         events_rx.try_recv().is_err(),
@@ -178,10 +267,10 @@ async fn config_override_batch_single_broadcast() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 一批里坏叶子按 path 精确剔除(警告 toast),好叶子照常生效同帧下推。
+/// 一批里坏叶子按 path 精确剔除并发结构化告警,好叶子照常生效同帧下推。
 #[tokio::test]
 async fn config_override_batch_evicts_only_bad_leaf() -> color_eyre::Result<()> {
-    use mineral_protocol::{BusValue, Event, ToastKind};
+    use mineral_protocol::{BusValue, Event, FailureNotice};
     let (core, mut events_rx) = core_with_hub()?;
     core.apply_config_overrides(vec![
         override_op("tui.lyrics.fullscreen_line_gap", Some(BusValue::Int(2))),
@@ -191,8 +280,10 @@ async fn config_override_batch_evicts_only_bad_leaf() -> color_eyre::Result<()> 
         ),
     ]);
     match events_rx.try_recv()? {
-        Event::Toast { kind, .. } => assert_eq!(kind, ToastKind::Warn, "坏叶子应警告"),
-        other => color_eyre::eyre::bail!("应收警告 toast,实得 {other:?}"),
+        Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
+            assert_eq!(path, "tui.lyrics.compact_line_gap");
+        }
+        other => color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}"),
     }
     let effective = match events_rx.try_recv()? {
         Event::ConfigChanged { config } => config.into_json(),

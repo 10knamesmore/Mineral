@@ -55,7 +55,9 @@ impl PlayerCore {
     ///
     /// # Return:
     ///   上次会话;无历史 / 降级 persist 返回 `Ok(None)`。
-    pub(crate) async fn load_session(&self) -> color_eyre::Result<Option<SessionSnapshot>> {
+    pub(crate) async fn load_session(
+        &self,
+    ) -> Result<Option<SessionSnapshot>, mineral_persist::Error> {
         self.inner.persist.session().load().await
     }
 

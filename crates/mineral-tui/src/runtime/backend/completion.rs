@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use mineral_client::operation::Outcome;
 use mineral_model::SongId;
-use mineral_protocol::{QueueEditOutcome, ScriptBind};
+use mineral_protocol::{CopyTextFailure, QueueEditOutcome, ScriptBind};
 
 /// 操作完成事件(daemon 结论回流到 UI)。
 #[derive(Debug)]
@@ -32,7 +32,7 @@ pub(crate) enum Completion {
     },
 
     /// 复制模板渲染结果。
-    CopyTemplate(Outcome<Result<String, String>>),
+    CopyTemplate(Outcome<Result<String, CopyTextFailure>>),
 
     /// 喜欢切换结果(乐观值以服务端结论校正)。
     Love {

@@ -5,14 +5,14 @@ use color_eyre::eyre::eyre;
 
 use mineral_model::SongId;
 use mineral_protocol::{
-    BusValue, ClientInfo, CloseReason, DownloadDetailDelta, DownloadDetailUpdate, DownloadId,
-    DownloadOrigin, DownloadStatus, DownloadSummary, DownloadWave, FailureKind, MessageBatch,
-    OperationFailure, OperationResult, PcmChunk, PlayerSync, Request, RequestId, Response,
-    ServerHello, SessionMessage, SessionRequest, SessionResult, SongDownloadView, SubscribeRequest,
-    SubscriptionId, SubscriptionTopic, UpdateEnvelope, UpdatePayload, decode, encode, framed, recv,
-    send,
+    BusValue, ClientInfo, CloseReason, CodecError, DownloadDetailDelta, DownloadDetailUpdate,
+    DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary, DownloadWave, FailureKind,
+    FailureNotice, MessageBatch, OperationFailure, OperationResult, PcmChunk, PlayerSync, Request,
+    RequestId, Response, ServerHello, SessionMessage, SessionRequest, SessionResult, SocketWire,
+    SongDownloadView, SubscribeRequest, Subscription, SubscriptionId, SubscriptionTopic,
+    UpdateEnvelope, UpdatePayload, Wire, WireError, decode, encode, framed, recv, send,
 };
-use tokio::io::duplex;
+use tokio::io::{AsyncWriteExt, duplex};
 
 /// 同一值经 serde_json 往返,断言 Debug 保真。
 fn json_round_trips<T>(value: &T) -> color_eyre::Result<()>
@@ -148,6 +148,17 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
                     config: BusValue::Nil,
                 })),
             }),
+            SessionMessage::Update(UpdateEnvelope {
+                subscription,
+                version: 15,
+                parts: 1,
+                index: 0,
+                payload: UpdatePayload::Event(Box::new(mineral_protocol::Event::Failure(
+                    FailureNotice::ConfigRejected {
+                        fields: vec!["tui.behavior.volume_step".to_owned()],
+                    },
+                ))),
+            }),
             SessionMessage::Unsubscribe(subscription),
             SessionMessage::Resync(subscription),
             SessionMessage::Close(CloseReason::ClientClosed),
@@ -156,6 +167,10 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
             }),
         ],
     };
+    assert_eq!(
+        mineral_protocol::Event::Failure(FailureNotice::QueueTransformFailed).subscription(),
+        Subscription::Toast
+    );
     json_round_trips(&batch)?;
     framed_round_trips(batch.clone()).await?;
     // length-delimited 字节编码直接过一遍(与 SocketWire 同路径)。
@@ -294,5 +309,108 @@ async fn operation_results_round_trip() -> color_eyre::Result<()> {
         json_round_trips(&result)?;
         framed_round_trips(result).await?;
     }
+    Ok(())
+}
+
+/// bincode 字节与不完整负载的错误类别均由 codec 自己承担。
+#[test]
+fn codec_bytes_and_error_source() -> color_eyre::Result<()> {
+    assert_eq!(
+        encode(&0x1234_5678_u32)?.as_ref(),
+        &[0x78, 0x56, 0x34, 0x12]
+    );
+    let error = decode::<u32>(&[0x78])
+        .err()
+        .ok_or_else(|| eyre!("负载字节不完整时应拒绝解码"))?;
+    assert!(matches!(error, CodecError::Decode(_)));
+    assert!(std::error::Error::source(&error).is_some());
+    Ok(())
+}
+
+/// 读取和写入超过上限的帧均报告帧长问题，socket 承载保留同样的类别。
+#[tokio::test]
+async fn oversized_frame_is_classified() -> color_eyre::Result<()> {
+    let max = tokio_util::codec::LengthDelimitedCodec::new().max_frame_length();
+    let (a, _b) = duplex(64);
+    let mut sender = framed(a);
+    let error = send(&mut sender, &vec![0_u8; max])
+        .await
+        .err()
+        .ok_or_else(|| eyre!("超长帧不应发送成功"))?;
+    assert!(matches!(
+        error,
+        CodecError::FrameTooLarge { max: limit, .. } if limit == max
+    ));
+    assert!(std::error::Error::source(&error).is_some());
+
+    let (mut writer, reader) = duplex(64);
+    writer
+        .write_all(&u32::try_from(max + 1)?.to_be_bytes())
+        .await?;
+    let mut receiver = framed(reader);
+    let error = recv::<u8, _>(&mut receiver)
+        .await
+        .err()
+        .ok_or_else(|| eyre!("超长帧不应接收成功"))?;
+    assert!(matches!(
+        error,
+        CodecError::FrameTooLarge { max: limit, .. } if limit == max
+    ));
+
+    let (mut writer, reader) = tokio::net::UnixStream::pair()?;
+    writer
+        .write_all(&u32::try_from(max + 1)?.to_be_bytes())
+        .await?;
+    let mut wire = SocketWire::from_stream(reader);
+    let error = wire
+        .recv()
+        .await
+        .err()
+        .ok_or_else(|| eyre!("socket 不应接收超长帧"))?;
+    assert!(matches!(
+        error,
+        WireError::Protocol {
+            source: CodecError::FrameTooLarge { max: limit, .. },
+            ..
+        } if limit == max
+    ));
+
+    let (_reader, writer) = tokio::net::UnixStream::pair()?;
+    let mut wire = SocketWire::from_stream(writer);
+    let batch = MessageBatch::one(SessionMessage::Hello(ClientInfo::new(&"x".repeat(max))));
+    let error = wire
+        .send(batch)
+        .await
+        .err()
+        .ok_or_else(|| eyre!("socket 不应发送超长帧"))?;
+    assert!(matches!(
+        error,
+        WireError::Protocol {
+            source: CodecError::FrameTooLarge { max: limit, .. },
+            ..
+        } if limit == max
+    ));
+    Ok(())
+}
+
+/// socket 承载收到损坏的负载时保留 bincode 错误链。
+#[tokio::test]
+async fn invalid_socket_payload_is_decode_failure() -> color_eyre::Result<()> {
+    let (mut writer, reader) = tokio::net::UnixStream::pair()?;
+    writer.write_all(&[0, 0, 0, 1, 0xff]).await?;
+    let mut wire = SocketWire::from_stream(reader);
+    let error = wire
+        .recv()
+        .await
+        .err()
+        .ok_or_else(|| eyre!("socket 不应接收损坏负载"))?;
+    assert!(matches!(
+        error,
+        WireError::Protocol {
+            source: CodecError::Decode(_),
+            ..
+        }
+    ));
+    assert!(std::error::Error::source(&error).is_some());
     Ok(())
 }

@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::WrapErr;
 use mineral_log::{debug, trace};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -114,11 +113,8 @@ impl CacheIndex {
         table: CacheTable,
         root: PathBuf,
         capacity: Option<u64>,
-    ) -> color_eyre::Result<Self> {
-        let rows = table
-            .load(&pool)
-            .await
-            .wrap_err_with(|| format!("载入缓存索引失败 table={}", table.name()))?;
+    ) -> crate::Result<Self> {
+        let rows = table.load(&pool).await?;
 
         let backend = Backend {
             pool,
@@ -202,7 +198,7 @@ impl CacheIndex {
     ///
     /// # Return:
     ///   写盘成功 / 降级返回 `Ok(())`。
-    pub async fn record(&self, key: &str, relpath: &str, bytes: u64) -> color_eyre::Result<()> {
+    pub async fn record(&self, key: &str, relpath: &str, bytes: u64) -> crate::Result<()> {
         let Some(backend) = self.backend.as_ref() else {
             return Ok(());
         };
@@ -231,12 +227,13 @@ impl CacheIndex {
         src: &Path,
         subdir: &str,
         file_name: &str,
-    ) -> color_eyre::Result<Vec<Evicted>> {
+    ) -> crate::Result<Vec<Evicted>> {
         let Some(backend) = self.backend.as_ref() else {
             return Ok(Vec::new());
         };
         let existing = backend.index.lock().map.get(key).map(|e| e.relpath.clone());
         let root = backend.root.clone();
+        let task_root = root.clone();
         let subdir = subdir.to_owned();
         let file_name = file_name.to_owned();
         let src = src.to_path_buf();
@@ -244,7 +241,11 @@ impl CacheIndex {
             place_file(&root, &subdir, &file_name, &src, existing)
         })
         .await
-        .wrap_err("入库文件 move 任务 join 失败")??;
+        .map_err(|source| crate::Error::Task {
+            operation: "move file into cache",
+            root: task_root,
+            source,
+        })??;
 
         let last_access = backend.insert_mirror(key, relpath.clone(), bytes);
         backend
@@ -272,12 +273,13 @@ impl CacheIndex {
         data: &[u8],
         subdir: &str,
         file_name: &str,
-    ) -> color_eyre::Result<()> {
+    ) -> crate::Result<()> {
         let Some(backend) = self.backend.as_ref() else {
             return Ok(());
         };
         let existing = backend.index.lock().map.get(key).map(|e| e.relpath.clone());
         let root = backend.root.clone();
+        let task_root = root.clone();
         let subdir = subdir.to_owned();
         let file_name = file_name.to_owned();
         let data = data.to_vec();
@@ -285,7 +287,11 @@ impl CacheIndex {
             write_bytes_file(&root, &subdir, &file_name, &data, existing)
         })
         .await
-        .wrap_err("入库字节写盘任务 join 失败")??;
+        .map_err(|source| crate::Error::Task {
+            operation: "write bytes into cache",
+            root: task_root,
+            source,
+        })??;
 
         let last_access = backend.insert_mirror(key, relpath.clone(), bytes);
         backend
@@ -329,7 +335,7 @@ impl CacheIndex {
     /// # Return:
     ///   成功返回清理前的内容快照(条目 / 总字节 = 释放量);单文件删除失败不致命(尽力而为)。
     ///   降级态返回空快照。
-    pub async fn clear(&self) -> color_eyre::Result<CacheStats> {
+    pub async fn clear(&self) -> crate::Result<CacheStats> {
         let Some(backend) = self.backend.as_ref() else {
             return Ok(CacheStats {
                 root: None,
@@ -356,11 +362,7 @@ impl CacheIndex {
         for entry in &entries {
             drop(std::fs::remove_file(backend.root.join(&entry.relpath)));
         }
-        backend
-            .table
-            .clear(&backend.pool)
-            .await
-            .wrap_err_with(|| format!("清空缓存索引表失败 table={}", backend.table.name()))?;
+        backend.table.clear(&backend.pool).await?;
         Ok(CacheStats {
             root: Some(backend.root.clone()),
             entries,
@@ -379,7 +381,7 @@ impl Backend {
     ///
     /// # Return:
     ///   对账成功返回 `Ok(())`。
-    async fn reconcile(&self, rows: Vec<CacheRow>) -> color_eyre::Result<()> {
+    async fn reconcile(&self, rows: Vec<CacheRow>) -> crate::Result<()> {
         let mut dead = Vec::<String>::new();
         {
             let mut idx = self.index.lock();
@@ -448,7 +450,7 @@ impl Backend {
         relpath: &str,
         bytes: u64,
         last_access: u64,
-    ) -> color_eyre::Result<()> {
+    ) -> crate::Result<()> {
         trace!(target: "persist", table = self.table.name(), key, "缓存索引 upsert");
         self.table
             .upsert(
@@ -461,15 +463,11 @@ impl Backend {
                 },
             )
             .await
-            .wrap_err_with(|| format!("缓存索引 upsert 失败 table={} key={key}", self.table.name()))
     }
 
     /// `DELETE` 一行。
-    async fn delete_row(&self, key: &str) -> color_eyre::Result<()> {
-        self.table
-            .delete(&self.pool, key)
-            .await
-            .wrap_err_with(|| format!("缓存索引 delete 失败 table={} key={key}", self.table.name()))
+    async fn delete_row(&self, key: &str) -> crate::Result<()> {
+        self.table.delete(&self.pool, key).await
     }
 
     /// 超容量驱逐:按 `last_access` 升序删最旧(删文件 + `DELETE` 行 + 改 `total_bytes`),
@@ -477,7 +475,7 @@ impl Backend {
     ///
     /// # Return:
     ///   驱逐完成返回 `Ok(())`。
-    async fn evict_to_capacity(&self) -> color_eyre::Result<Vec<Evicted>> {
+    async fn evict_to_capacity(&self) -> crate::Result<Vec<Evicted>> {
         let mut evicted = Vec::<Evicted>::new();
         let Some(cap) = self.capacity else {
             return Ok(evicted);

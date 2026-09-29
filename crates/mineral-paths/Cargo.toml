@@ -9,10 +9,11 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-color-eyre = { workspace = true }
 nix        = { workspace = true, features = ["user"] }
+thiserror  = { workspace = true }
 
 [dev-dependencies]
+color-eyre = { workspace = true }
 tempfile = "3"
 
 [lints]

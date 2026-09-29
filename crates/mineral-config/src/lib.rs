@@ -13,6 +13,57 @@ mod loader;
 mod lua_stub;
 mod schema;
 
+/// 配置资产写入或内置默认配置加载失败。
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// 初始化配置目录或写入配置文件失败。
+    #[error("{operation} {} 失败", .path.display())]
+    InitIo {
+        /// 失败的操作。
+        operation: &'static str,
+
+        /// 目标路径。
+        path: std::path::PathBuf,
+
+        /// 原始 IO 错误。
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Lua 虚拟机操作失败。
+    #[error("{operation} 失败")]
+    Lua {
+        /// 虚拟机操作。
+        operation: &'static str,
+
+        /// 原始 Lua 错误。
+        #[source]
+        source: mlua::Error,
+    },
+
+    /// 内置默认表无法落成配置,属于程序包错误。
+    #[error("default.lua 无法落成 Config")]
+    DefaultConfig {
+        /// 配置字段和分类。
+        #[source]
+        warning: ConfigWarning,
+    },
+}
+
+/// 配置初始化与加载结果。
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// Lua 操作在配置管线中的通用转换;显式边界另行标出操作。
+impl From<mlua::Error> for Error {
+    /// 保留底层 Lua 错误供调用方沿 source 链诊断。
+    fn from(source: mlua::Error) -> Self {
+        Self::Lua {
+            operation: "处理 Lua 配置",
+            source,
+        }
+    }
+}
+
 pub use check::render_check;
 pub use init::{InitOutcome, run_init};
 pub use loader::{

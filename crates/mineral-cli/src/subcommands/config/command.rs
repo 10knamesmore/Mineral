@@ -21,7 +21,7 @@ pub enum ConfigCommand {
 ///
 /// # Return:
 ///   执行结果。
-pub async fn run(command: ConfigCommand) -> color_eyre::Result<()> {
+pub async fn run(command: ConfigCommand) -> crate::error::Result<()> {
     match command {
         ConfigCommand::Init => init(),
         ConfigCommand::Check => check(),
@@ -32,7 +32,7 @@ pub async fn run(command: ConfigCommand) -> color_eyre::Result<()> {
 ///
 /// # Return:
 ///   执行结果。
-fn init() -> color_eyre::Result<()> {
+fn init() -> crate::error::Result<()> {
     let dir = mineral_paths::config_dir()?;
     for outcome in mineral_config::run_init(&dir)? {
         println!("{outcome}");
@@ -44,7 +44,7 @@ fn init() -> color_eyre::Result<()> {
 ///
 /// # Return:
 ///   执行结果。
-fn check() -> color_eyre::Result<()> {
+fn check() -> crate::error::Result<()> {
     let dir = mineral_paths::config_dir()?;
     let (config, warnings) = mineral_config::load(&dir.join("config.lua"))?;
     let default_download_dir = mineral_paths::music_export_dir()?;

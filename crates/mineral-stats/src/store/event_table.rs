@@ -324,7 +324,7 @@ impl EventTable {
         self,
         db: &impl ConnectionTrait,
         range: Option<Range<i64>>,
-    ) -> color_eyre::Result<i64> {
+    ) -> crate::Result<i64> {
         let columns = self.columns();
         let mut query = Query::select();
         query
@@ -337,9 +337,19 @@ impl EventTable {
         }
         let row = db
             .query_one(&query)
-            .await?
-            .ok_or_else(|| color_eyre::eyre::eyre!("事件计数未返回行 table={}", self.name()))?;
-        Ok(row.try_get_by_index(/*index*/ 0)?)
+            .await
+            .map_err(|source| crate::Error::EventTable {
+                operation: "count",
+                table: self.name(),
+                source,
+            })?
+            .ok_or(crate::Error::MissingEventCount { table: self.name() })?;
+        row.try_get_by_index(/*index*/ 0)
+            .map_err(|source| crate::Error::EventTable {
+                operation: "decode count",
+                table: self.name(),
+                source,
+            })
     }
 
     /// 删除严格早于水位的事件。
@@ -347,13 +357,19 @@ impl EventTable {
         self,
         db: &impl ConnectionTrait,
         before: i64,
-    ) -> color_eyre::Result<()> {
+    ) -> crate::Result<()> {
         let columns = self.columns();
         let query = Query::delete()
             .from_table(columns.table)
             .and_where(Expr::col(columns.timestamp).lt(before))
             .to_owned();
-        db.execute(&query).await?;
+        db.execute(&query)
+            .await
+            .map_err(|source| crate::Error::EventTable {
+                operation: "delete before",
+                table: self.name(),
+                source,
+            })?;
         Ok(())
     }
 

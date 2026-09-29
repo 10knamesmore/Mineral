@@ -149,7 +149,7 @@ impl Client {
         match self.submit(request, decode) {
             Ok(pending) => pending.outcome().await,
             Err(error) => Outcome::Unknown {
-                detail: format!("未提交:{error}"),
+                reason: error.into(),
             },
         }
     }
@@ -190,7 +190,7 @@ impl Client {
             mineral_log::warn!(
                 target: "ipc",
                 method = request_name,
-                error = mineral_log::chain(error),
+                error = mineral_log::chain(&error),
                 "本地未提交"
             );
         }

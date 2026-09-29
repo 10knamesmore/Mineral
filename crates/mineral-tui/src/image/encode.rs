@@ -144,7 +144,7 @@ async fn encode_blocking(req: EncodeRequest, backend: &TerminalBackend) -> Optio
         let terminal_image =
             TerminalImage::encode(&image, pixels, (target.width, target.height), &graphics)?;
         let bytes = terminal_image.resident_bytes();
-        color_eyre::Result::<_>::Ok((terminal_image, bytes))
+        Result::<_, super::terminal::EncodeError>::Ok((terminal_image, bytes))
     })
     .await;
     match encoded {
@@ -163,7 +163,6 @@ async fn encode_blocking(req: EncodeRequest, backend: &TerminalBackend) -> Optio
             None
         }
         Err(e) => {
-            let e = color_eyre::Report::new(e);
             mineral_log::warn!(target: "cover", error = mineral_log::chain(&e), "封面编码 task join 失败");
             None
         }

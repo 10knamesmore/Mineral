@@ -18,7 +18,7 @@ use mlua::{Lua, MultiValue};
 ///
 /// # Return:
 ///   注入成功;表创建 / 赋值失败时返回 `Err`
-pub fn inject_noop_host(lua: &Lua) -> color_eyre::Result<()> {
+pub fn inject_noop_host(lua: &Lua) -> mlua::Result<()> {
     let absorber = lua.create_table()?;
     let meta = lua.create_table()?;
     // 任意字段访问 → 吞噬表自身(支持任意深度的子表链)。

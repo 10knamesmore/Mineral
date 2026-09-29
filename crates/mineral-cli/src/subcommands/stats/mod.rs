@@ -7,6 +7,6 @@
 mod assemble;
 mod command;
 mod render;
-mod window;
+pub(crate) mod window;
 
 pub use command::{StatsCommand, run};

@@ -14,7 +14,7 @@ rust-version.workspace = true
 fixture = []
 
 [dependencies]
-color-eyre    = { workspace = true }
+thiserror     = { workspace = true }
 sea-orm       = { workspace = true }
 sea-orm-migration = { workspace = true }
 async-trait   = { workspace = true }
@@ -25,6 +25,7 @@ typed-builder = { workspace = true }
 serde         = { workspace = true }
 
 [dev-dependencies]
+color-eyre  = { workspace = true }
 tempfile     = "3"
 mineral-test = { workspace = true }
 criterion    = { workspace = true }

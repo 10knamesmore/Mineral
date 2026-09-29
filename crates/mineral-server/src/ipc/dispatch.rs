@@ -4,7 +4,9 @@
 //! 不依赖 spawn 调度碰巧有序;查询与脚本 / 数据库慢操作并发执行,结果经 id 配对。
 //! 跨 client 以 daemon 的接受次序仲裁(各自 read loop 串行)。
 
-use mineral_protocol::{FailureKind, OperationFailure, OperationResult, Request, Response};
+use mineral_protocol::{
+    CopyTextFailure, FailureKind, OperationFailure, OperationResult, Request, Response,
+};
 
 use crate::client::ClientHandle;
 
@@ -172,7 +174,7 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
         }
         Request::StopDownload(id) => match client.stop_download(&id) {
             Ok(()) => OperationResult::Applied,
-            Err(error) => failure(&error),
+            Err(error) => failure(&error, FailureKind::NotFound),
         },
         Request::ChannelCaps => query(Response::ChannelCaps(client.channel_caps())),
         Request::DaemonInfo => query(Response::DaemonInfo {
@@ -191,10 +193,13 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
             mineral_log::info!(target: "ipc", "shutdown requested via IPC");
             OperationResult::Applied
         }
-        other => OperationResult::Failed(OperationFailure {
-            kind: FailureKind::Internal,
-            detail: format!("请求未在同步分派中处理: {other:?}"),
-        }),
+        other => {
+            mineral_log::error!(target: "ipc", request = ?other, "request reached wrong dispatch lane");
+            OperationResult::Failed(OperationFailure {
+                kind: FailureKind::Internal,
+                detail: "操作失败".to_owned(),
+            })
+        }
     }
 }
 
@@ -207,35 +212,47 @@ pub(crate) async fn execute_async(client: &ClientHandle, request: AsyncRequest) 
     match request {
         AsyncRequest::AudioOutputs => match client.audio_outputs().await {
             Ok(devices) => query(Response::AudioOutputs(devices)),
-            Err(error) => failure(&error),
+            Err(error) => failure(&error, audio_failure_kind(&error)),
         },
         AsyncRequest::InvokeAction { name, ctx, args } => {
             match client.invoke_action_async(&name, ctx, args).await {
                 Ok(()) => OperationResult::Applied,
-                Err(error) => failure(&error),
+                Err(error) => failure(&error, action_failure_kind(&error)),
             }
         }
         AsyncRequest::RenderCopyTemplate { index, ctx } => {
-            let text = client.render_copy_template_async(index, ctx).await;
+            let text = client.render_copy_template_async(index, ctx).await.map_err(|error| {
+                let detail = mineral_log::chain(&error);
+                mineral_log::warn!(target: "ipc", error = detail.as_str(), "copy template failed");
+                match error {
+                    crate::notify::ScriptError::Disabled => CopyTextFailure::ScriptDisabled,
+                    crate::notify::ScriptError::ThreadExited
+                    | crate::notify::ScriptError::Callback(mineral_script::Error::Unavailable) => {
+                        CopyTextFailure::ScriptThreadExited
+                    }
+                    crate::notify::ScriptError::ActionNotFound(_)
+                    | crate::notify::ScriptError::Callback(_) => CopyTextFailure::CallbackFailed { detail },
+                }
+            });
             query(Response::CopyText(text))
         }
         AsyncRequest::StoreGet { song, key } => match client.store_get_async(&song, &key).await {
             Ok(value) => query(Response::StoreValue(value)),
-            Err(error) => failure(&error),
+            Err(error) => failure(&error, store_failure_kind(&error)),
         },
         AsyncRequest::StoreSet { song, key, value } => {
             match client.store_set_async(&song, &key, &value).await {
                 Ok(()) => OperationResult::Applied,
-                Err(error) => failure(&error),
+                Err(error) => failure(&error, store_failure_kind(&error)),
             }
         }
         AsyncRequest::ToggleLove(song) => match client.toggle_love_async(&song).await {
             Ok(loved) => query(Response::LoveToggled(loved)),
-            Err(error) => failure(&error),
+            Err(error) => failure(&error, FailureKind::Internal),
         },
         AsyncRequest::QuerySongStats(id) => match client.query_song_stats_async(&id).await {
             Ok(stats) => query(Response::SongStats(stats)),
-            Err(error) => failure(&error),
+            Err(error) => failure(&error, FailureKind::Internal),
         },
         AsyncRequest::ScriptBinds => {
             query(Response::ScriptBinds(client.script_binds_async().await))
@@ -255,36 +272,72 @@ pub(crate) async fn execute_queue_edit(
     query(Response::QueueEdited(client.queue_edit_async(op).await))
 }
 
-/// 业务失败 → 结构化结果。
+/// 业务失败 → 结构化结果。完整错误链只记日志,wire 仅携带安全类别。
 ///
 /// # Params:
-///   - `error`: 错误链(经 [`mineral_log::chain`] 展开)
-pub(crate) fn failure(error: &color_eyre::Report) -> OperationResult {
-    let detail = mineral_log::chain(error);
+///   - `error`: 操作的原始错误
+///   - `kind`: 从操作或错误变体决定的稳定分类
+pub(crate) fn failure(
+    error: &(dyn std::error::Error + 'static),
+    kind: FailureKind,
+) -> OperationResult {
+    mineral_log::warn!(target: "ipc", error = mineral_log::chain(error), failure_kind = ?kind, "RPC request failed");
     OperationResult::Failed(OperationFailure {
-        kind: classify_detail(&detail),
-        detail,
+        kind,
+        detail: match kind {
+            FailureKind::Invalid => "请求参数不合法",
+            FailureKind::NotFound => "目标不存在",
+            FailureKind::Unavailable => "服务暂不可用",
+            FailureKind::Conflict => "当前状态不允许该操作",
+            FailureKind::Internal => "操作失败",
+        }
+        .to_owned(),
     })
 }
 
-/// 按错误文本中的关键词推断失败类别;未命中时归为 `Internal`。
-///
-/// # Params:
-///   - `detail`: 人读错误文本
-pub(crate) fn classify_detail(detail: &str) -> FailureKind {
-    if detail.contains("未启用") || detail.contains("unavailable") || detail.contains("未登录")
-    {
-        FailureKind::Unavailable
-    } else if detail.contains("未注册") || detail.contains("unknown") {
-        FailureKind::NotFound
-    } else if detail.contains("越界")
-        || detail.contains("不能为空")
-        || detail.contains("超过上限")
-        || detail.contains("不支持")
-    {
-        FailureKind::Invalid
-    } else {
-        FailureKind::Internal
+/// Classifies a script action without inspecting its display text.
+fn action_failure_kind(error: &crate::notify::ScriptError) -> FailureKind {
+    match error {
+        crate::notify::ScriptError::Disabled
+        | crate::notify::ScriptError::ThreadExited
+        | crate::notify::ScriptError::Callback(mineral_script::Error::Unavailable) => {
+            FailureKind::Unavailable
+        }
+        crate::notify::ScriptError::ActionNotFound(_)
+        | crate::notify::ScriptError::Callback(mineral_script::Error::MissingFunction { .. }) => {
+            FailureKind::NotFound
+        }
+        crate::notify::ScriptError::Callback(
+            mineral_script::Error::InvalidSongId { .. }
+            | mineral_script::Error::InvalidSongEntry { .. },
+        ) => FailureKind::Invalid,
+        crate::notify::ScriptError::Callback(
+            mineral_script::Error::Lua { .. }
+            | mineral_script::Error::Child { .. }
+            | mineral_script::Error::Thread(_),
+        ) => FailureKind::Internal,
+    }
+}
+
+/// Classifies persistent KV validation separately from storage failures.
+fn store_failure_kind(error: &mineral_persist::Error) -> FailureKind {
+    match error {
+        mineral_persist::Error::ReservedKey { .. } | mineral_persist::Error::NotInteger { .. } => {
+            FailureKind::Invalid
+        }
+        _ => FailureKind::Internal,
+    }
+}
+
+/// Classifies audio device validation separately from output availability.
+pub(crate) fn audio_failure_kind(error: &mineral_audio::Error) -> FailureKind {
+    match error {
+        mineral_audio::Error::InvalidDeviceId { .. } => FailureKind::Invalid,
+        mineral_audio::Error::DeviceUnavailable { .. } => FailureKind::NotFound,
+        mineral_audio::Error::OutputUnavailable
+        | mineral_audio::Error::OutputDisabled
+        | mineral_audio::Error::NoDefaultDevice => FailureKind::Unavailable,
+        _ => FailureKind::Internal,
     }
 }
 

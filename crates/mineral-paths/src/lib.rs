@@ -11,11 +11,62 @@ use std::path::PathBuf;
 mod socket;
 mod xdg;
 
+/// 路径解析、runtime 目录安全检查与 socket 路径校验失败。
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// 回退目录所需的 HOME 环境变量不存在。
+    #[error("HOME 未设置，无法确定 mineral 目录")]
+    MissingHome,
+
+    /// 创建或检查 runtime 目录失败。
+    #[error("{operation} runtime 目录失败: {}", .path.display())]
+    RuntimeDirectory {
+        /// 失败的操作。
+        operation: &'static str,
+
+        /// 目标目录。
+        path: PathBuf,
+
+        /// 原始文件系统错误。
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// runtime 目录由另一位用户持有。
+    #[error("runtime 目录属主非本人(uid={owner} != {current}),拒绝使用 {}", .path.display())]
+    RuntimeOwner {
+        /// 目录路径。
+        path: PathBuf,
+
+        /// 实际属主 UID。
+        owner: u32,
+
+        /// 当前进程 UID。
+        current: u32,
+    },
+
+    /// Unix socket 地址超过平台的 sun_path 限制。
+    #[error("socket 路径过长({length} >= {maximum}),请用 $MINERAL_SOCKET_DIR 指一个更短的目录: {}", .path.display())]
+    SocketPathTooLong {
+        /// 路径字节数。
+        length: usize,
+
+        /// 平台允许的最大字节数(含结尾 NUL)。
+        maximum: usize,
+
+        /// socket 路径。
+        path: PathBuf,
+    },
+}
+
+/// 本 crate 路径操作的结果。
+pub type Result<T> = std::result::Result<T, Error>;
+
 /// 配置根目录(`$XDG_CONFIG_HOME/mineral` 或 `~/.config/mineral`)。
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn config_dir() -> color_eyre::Result<PathBuf> {
+pub fn config_dir() -> Result<PathBuf> {
     xdg::config_dir()
 }
 
@@ -23,7 +74,7 @@ pub fn config_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn data_dir() -> color_eyre::Result<PathBuf> {
+pub fn data_dir() -> Result<PathBuf> {
     xdg::data_dir()
 }
 
@@ -31,7 +82,7 @@ pub fn data_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn cache_dir() -> color_eyre::Result<PathBuf> {
+pub fn cache_dir() -> Result<PathBuf> {
     xdg::cache_dir()
 }
 
@@ -39,7 +90,7 @@ pub fn cache_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn audio_cache_dir() -> color_eyre::Result<PathBuf> {
+pub fn audio_cache_dir() -> Result<PathBuf> {
     Ok(cache_dir()?.join("audio"))
 }
 
@@ -47,7 +98,7 @@ pub fn audio_cache_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn cover_cache_dir() -> color_eyre::Result<PathBuf> {
+pub fn cover_cache_dir() -> Result<PathBuf> {
     Ok(cache_dir()?.join("cover"))
 }
 
@@ -60,7 +111,7 @@ pub fn cover_cache_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn music_export_dir() -> color_eyre::Result<PathBuf> {
+pub fn music_export_dir() -> Result<PathBuf> {
     Ok(xdg::music_dir()?.join("mineral"))
 }
 
@@ -72,7 +123,7 @@ pub fn music_export_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的文件路径。本函数不创建目录。
-pub fn tui_db() -> color_eyre::Result<PathBuf> {
+pub fn tui_db() -> Result<PathBuf> {
     Ok(data_dir()?.join("tui.db"))
 }
 
@@ -82,7 +133,7 @@ pub fn tui_db() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   解析得到的目录路径。本函数不创建目录。
-pub fn runtime_dir() -> color_eyre::Result<PathBuf> {
+pub fn runtime_dir() -> Result<PathBuf> {
     socket::runtime_dir()
 }
 
@@ -94,7 +145,7 @@ pub fn runtime_dir() -> color_eyre::Result<PathBuf> {
 ///
 /// # Return:
 ///   `<runtime_dir>/mineral.sock` 的绝对路径;目录创建/属主校验失败或路径超长返回 `Err`。
-pub fn socket_path() -> color_eyre::Result<PathBuf> {
+pub fn socket_path() -> Result<PathBuf> {
     socket::socket_path()
 }
 
@@ -229,8 +280,28 @@ mod tests {
         let deep = tmp.path().join("x".repeat(200));
         let _g = EnvGuard::set("MINERAL_SOCKET_DIR", &deep);
 
-        assert!(super::socket_path().is_err(), "超长 socket 路径应报错");
+        assert!(
+            matches!(
+                super::socket_path(),
+                Err(super::Error::SocketPathTooLong { .. })
+            ),
+            "超长 socket 路径应报分类错误"
+        );
         Ok(())
+    }
+
+    /// HOME 缺失是明确的路径错误类别。
+    #[test]
+    fn missing_home_is_classified() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvGuard::unset("HOME");
+        let _xdg = EnvGuard::unset("XDG_CONFIG_HOME");
+        assert!(matches!(
+            super::config_dir(),
+            Err(super::Error::MissingHome)
+        ));
     }
 
     /// 平台默认落 `<music_dir>/mineral`(music_dir 缺 XDG_MUSIC_DIR → `~/Music`);

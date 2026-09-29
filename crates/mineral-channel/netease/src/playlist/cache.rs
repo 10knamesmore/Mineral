@@ -154,7 +154,7 @@ mod tests {
         name: Option<&str>,
         version: Option<i64>,
         entries: &[PlaylistEntry],
-    ) -> color_eyre::Result<()> {
+    ) -> mineral_persist::Result<()> {
         for entry in entries {
             persist
                 .scope(entry.song.source())

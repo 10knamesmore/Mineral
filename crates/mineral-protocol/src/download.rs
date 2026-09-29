@@ -110,6 +110,38 @@ impl DownloadStatus {
     }
 }
 
+/// 下载失败的可传输类别；原始原因留在 daemon 日志，客户端据此生成提示。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+pub enum DownloadFailure {
+    /// 播放资源提供者或导出目录不可用。
+    #[error("download resource unavailable")]
+    Unavailable,
+
+    /// 播放资源解析或准备失败。
+    #[error("download media preparation failed")]
+    Preparation,
+
+    /// 已打开的媒体无法继续读取。
+    #[error("download media read failed")]
+    Read,
+
+    /// 导出目录或文件写入失败。
+    #[error("download storage failed")]
+    Storage,
+
+    /// 媒体字节数不合法，或内容短于声明长度。
+    #[error("download media is incomplete or invalid")]
+    InvalidMedia,
+
+    /// 下载脚本改写没有提供可播放的媒体。
+    #[error("download rewrite is invalid")]
+    InvalidRewrite,
+
+    /// 后台任务异常或内部计数无法表示。
+    #[error("download worker failed")]
+    Internal,
+}
+
 /// Flat client snapshot of one Song download.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SongDownloadView {
@@ -137,8 +169,8 @@ pub struct SongDownloadView {
     /// Smoothed current transfer rate in bytes per second.
     pub speed_bps: u64,
 
-    /// Full failure chain for a failed row.
-    pub failure: Option<String>,
+    /// 失败类别；非失败状态没有值，诊断细节保留在 daemon 日志。
+    pub failure: Option<DownloadFailure>,
 }
 
 /// Result counts for the latest settled wave of Song downloads.

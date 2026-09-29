@@ -2,7 +2,7 @@
 //! 收集输出、支持中途 kill。本模块只管「跑一个子进程」,并发闸与
 //! kill 路由在 daemon 泵(server 侧)。
 
-use color_eyre::eyre::WrapErr;
+use crate::{Error, Result};
 
 /// 一次 `mineral.spawn` 的结构化参数(Lua table 在 api 层边界解析)。
 #[non_exhaustive]
@@ -63,7 +63,7 @@ pub struct SpawnId(pub(crate) u64);
 pub async fn run_child(
     spec: SpawnSpec,
     kill: tokio::sync::oneshot::Receiver<()>,
-) -> color_eyre::Result<SpawnResult> {
+) -> Result<SpawnResult> {
     use tokio::io::AsyncReadExt;
     let mut cmd = tokio::process::Command::new(&spec.program);
     cmd.args(&spec.args)
@@ -78,9 +78,11 @@ pub async fn run_child(
     for (key, value) in &spec.env {
         cmd.env(key, value);
     }
-    let mut child = cmd
-        .spawn()
-        .wrap_err_with(|| format!("spawn `{}` 失败", spec.program))?;
+    let mut child = cmd.spawn().map_err(|source| Error::Child {
+        operation: "启动",
+        program: spec.program.clone(),
+        source,
+    })?;
     // 先起两条收集任务再等退出:子进程写满管道缓冲会阻塞,必须边跑边读。
     let stdout_task = child.stdout.take().map(|mut pipe| {
         tokio::spawn(async move {
@@ -97,11 +99,17 @@ pub async fn run_child(
         })
     });
     let (status, killed) = tokio::select! {
-        status = child.wait() => (status.wrap_err("等待子进程退出失败")?, false),
+        status = child.wait() => (status.map_err(|source| Error::Child {
+            operation: "等待退出", program: spec.program.clone(), source,
+        })?, false),
         _ = kill => {
-            child.kill().await.wrap_err("kill 子进程失败")?;
+            child.kill().await.map_err(|source| Error::Child {
+                operation: "中止", program: spec.program.clone(), source,
+            })?;
             // kill() 内部已 wait 收尸;再 wait 拿终态(已退出,立即返回)。
-            (child.wait().await.wrap_err("kill 后收尸失败")?, true)
+            (child.wait().await.map_err(|source| Error::Child {
+                operation: "中止后等待退出", program: spec.program.clone(), source,
+            })?, true)
         }
     };
     let stdout = collect(stdout_task).await;
@@ -170,11 +178,19 @@ mod tests {
         Ok(())
     }
 
+    /// 缺失可执行文件属于启动阶段失败,保留 IO 的 NotFound 分类。
     #[tokio::test]
     async fn missing_program_is_spawn_error() {
         let (_kill_tx, kill_rx) = tokio::sync::oneshot::channel();
         let result = run_child(spec("mineral-test-no-such-bin", &[]), kill_rx).await;
-        assert!(result.is_err(), "可执行不存在必须报 spawn 错误");
+        assert!(matches!(
+            result,
+            Err(crate::Error::Child {
+                operation: "启动",
+                source,
+                ..
+            }) if source.kind() == std::io::ErrorKind::NotFound
+        ));
     }
 
     #[tokio::test]

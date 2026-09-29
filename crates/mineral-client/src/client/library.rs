@@ -62,7 +62,7 @@ impl Client {
         ) {
             Ok(pending) => pending,
             Err(error) => {
-                mineral_log::warn!(target: "ipc", error = %error, "播放统计查询未提交");
+                mineral_log::warn!(target: "ipc", error = mineral_log::chain(&error), "播放统计查询未提交");
                 self.mirror()
                     .push_event(mineral_protocol::Event::Task(Box::new(
                         TaskEvent::LocalPlayCountFetched {

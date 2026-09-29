@@ -1,6 +1,5 @@
 //! 系统域事件的落库:每张表一条运行期 `query`(无 actor 列)。
 
-use color_eyre::eyre::WrapErr as _;
 use mineral_model::SongId;
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
@@ -36,7 +35,7 @@ pub(super) async fn write(
     ts: i64,
     session_id: Option<i64>,
     event: &SystemEvent,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let w = SystemWrite {
         pool,
         ts,
@@ -88,7 +87,7 @@ async fn write_stream_resolution(
     quality_requested: &str,
     outcome: StreamOutcome,
     for_prefetch: bool,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     let for_prefetch = i64::from(for_prefetch);
@@ -106,7 +105,10 @@ async fn write_stream_resolution(
     )
     .exec(w.pool)
     .await
-    .wrap_err("record_event stream_resolutions 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event stream_resolutions",
+        source,
+    })?;
     Ok(())
 }
 
@@ -118,7 +120,7 @@ async fn write_hook_fire(
     stage: HookStage,
     decision: HookDecision,
     fail_open: Option<FailOpen>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let (ns, song_value) = split_song(song);
     crate::entity::hook_fires::Entity::insert(crate::entity::hook_fires::ActiveModel {
         ts: Set(w.ts),
@@ -133,7 +135,10 @@ async fn write_hook_fire(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event hook_fires 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event hook_fires",
+        source,
+    })?;
     Ok(())
 }
 
@@ -142,7 +147,7 @@ async fn write_gapless_boundary(
     w: &SystemWrite<'_>,
     song: &SongId,
     result: GaplessResult,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     crate::entity::gapless_boundaries::Entity::insert(
@@ -157,7 +162,10 @@ async fn write_gapless_boundary(
     )
     .exec(w.pool)
     .await
-    .wrap_err("record_event gapless_boundaries 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event gapless_boundaries",
+        source,
+    })?;
     Ok(())
 }
 
@@ -167,7 +175,7 @@ async fn write_prefetch(
     song: &SongId,
     source: PrefetchSource,
     resolution: PrefetchResolution,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     crate::entity::prefetches::Entity::insert(crate::entity::prefetches::ActiveModel {
@@ -181,7 +189,10 @@ async fn write_prefetch(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event prefetches 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event prefetches",
+        source,
+    })?;
     Ok(())
 }
 
@@ -193,7 +204,7 @@ async fn write_cache_harvest(
     format: &str,
     outcome: CacheHarvestOutcome,
     bytes: Option<i64>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     let ns = song.namespace().name();
     let song_value = song.value();
     crate::entity::cache_harvests::Entity::insert(crate::entity::cache_harvests::ActiveModel {
@@ -209,7 +220,10 @@ async fn write_cache_harvest(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event cache_harvests 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event cache_harvests",
+        source,
+    })?;
     Ok(())
 }
 
@@ -218,7 +232,7 @@ async fn write_cache_eviction(
     w: &SystemWrite<'_>,
     cache_key: &str,
     bytes: i64,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::cache_evictions::Entity::insert(crate::entity::cache_evictions::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -228,7 +242,10 @@ async fn write_cache_eviction(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event cache_evictions 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event cache_evictions",
+        source,
+    })?;
     Ok(())
 }
 
@@ -237,7 +254,7 @@ async fn write_script_lifecycle(
     w: &SystemWrite<'_>,
     event: ScriptEvent,
     detail: Option<&str>,
-) -> color_eyre::Result<()> {
+) -> crate::Result<()> {
     crate::entity::script_lifecycle::Entity::insert(crate::entity::script_lifecycle::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -247,12 +264,15 @@ async fn write_script_lifecycle(
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event script_lifecycle 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event script_lifecycle",
+        source,
+    })?;
     Ok(())
 }
 
 /// 落 config_reloads 一行(无专有列)。
-async fn write_config_reload(w: &SystemWrite<'_>) -> color_eyre::Result<()> {
+async fn write_config_reload(w: &SystemWrite<'_>) -> crate::Result<()> {
     crate::entity::config_reloads::Entity::insert(crate::entity::config_reloads::ActiveModel {
         ts: Set(w.ts),
         session_id: Set(w.session_id),
@@ -260,7 +280,10 @@ async fn write_config_reload(w: &SystemWrite<'_>) -> color_eyre::Result<()> {
     })
     .exec(w.pool)
     .await
-    .wrap_err("record_event config_reloads 落库失败")?;
+    .map_err(|source| crate::Error::Database {
+        operation: "record_event config_reloads",
+        source,
+    })?;
     Ok(())
 }
 

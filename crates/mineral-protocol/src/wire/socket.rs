@@ -5,7 +5,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
 
-use crate::{Framed, MessageBatch, framed};
+use crate::{CodecError, Framed, MessageBatch, framed};
 
 use super::{Wire, WireError, WireSink, WireSource};
 
@@ -53,20 +53,14 @@ impl Wire for SocketWire {
         self.conn
             .send(encode_batch(&batch)?)
             .await
-            .map_err(|source| WireError::Io {
-                operation: "写入 socket",
-                source,
-            })
+            .map_err(send_wire_error)
     }
 
     async fn recv(&mut self) -> Result<Option<MessageBatch>, WireError> {
         let Some(frame) = self.conn.next().await else {
             return Ok(None);
         };
-        let frame = frame.map_err(|source| WireError::Io {
-            operation: "读取 socket",
-            source,
-        })?;
+        let frame = frame.map_err(receive_wire_error)?;
         Ok(Some(decode_batch(&frame)?))
     }
 
@@ -98,10 +92,7 @@ impl WireSink for SocketSink {
         self.sink
             .send(encode_batch(&batch)?)
             .await
-            .map_err(|source| WireError::Io {
-                operation: "写入 socket",
-                source,
-            })
+            .map_err(send_wire_error)
     }
 
     async fn close(&mut self) -> Result<(), WireError> {
@@ -124,11 +115,36 @@ impl WireSource for SocketSource {
         let Some(frame) = self.stream.next().await else {
             return Ok(None);
         };
-        let frame = frame.map_err(|source| WireError::Io {
+        let frame = frame.map_err(receive_wire_error)?;
+        Ok(Some(decode_batch(&frame)?))
+    }
+}
+
+/// 将 socket 读取失败与 codec 帧长超限分别归类。
+fn receive_wire_error(source: std::io::Error) -> WireError {
+    match crate::codec::receive_error(source) {
+        CodecError::Receive(source) => WireError::Io {
             operation: "读取 socket",
             source,
-        })?;
-        Ok(Some(decode_batch(&frame)?))
+        },
+        source => WireError::Protocol {
+            operation: "读取会话帧",
+            source,
+        },
+    }
+}
+
+/// 将 socket 写入失败与 codec 帧长超限分别归类。
+fn send_wire_error(source: std::io::Error) -> WireError {
+    match crate::codec::send_error(source) {
+        CodecError::Send(source) => WireError::Io {
+            operation: "写入 socket",
+            source,
+        },
+        source => WireError::Protocol {
+            operation: "写入会话帧",
+            source,
+        },
     }
 }
 

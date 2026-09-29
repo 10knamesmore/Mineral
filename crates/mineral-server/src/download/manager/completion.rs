@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use mineral_model::{BitRate, Song};
-use mineral_protocol::DownloadStatus;
+use mineral_protocol::{DownloadFailure, DownloadStatus};
 
 use super::super::{DownloadOutcome, SkipCause};
 use super::DownloadManager;
@@ -37,8 +37,8 @@ pub(super) enum CompletionEffect {
 
     /// Transfer failure.
     Failed {
-        /// Human-readable full error chain.
-        failure: String,
+        /// Original transfer error, retained until the terminal effects are logged.
+        error: crate::download::TransferError,
     },
 
     /// Cooperative Stop before export commit.
@@ -63,10 +63,10 @@ impl CompletionEffect {
         }
     }
 
-    /// Failure text for the client row.
-    pub(super) fn failure(&self) -> Option<String> {
+    /// Failure category for the client row.
+    pub(super) fn failure(&self) -> Option<DownloadFailure> {
         match self {
-            Self::Failed { failure } => Some(failure.clone()),
+            Self::Failed { error } => Some(error.failure_kind()),
             Self::Downloaded { .. } | Self::Skipped { .. } | Self::Stopped => None,
         }
     }
@@ -77,7 +77,7 @@ impl DownloadManager {
     pub(super) fn finish_attempt(
         &self,
         attempt: &AdmittedAttempt,
-        outcome: color_eyre::Result<DownloadOutcome>,
+        outcome: Result<DownloadOutcome, crate::download::TransferError>,
     ) {
         let effect = match outcome {
             Ok(DownloadOutcome::Downloaded {
@@ -95,9 +95,7 @@ impl DownloadManager {
                 CompletionEffect::Skipped { cause, quality }
             }
             Err(_error) if attempt.cancellation.is_cancelled() => CompletionEffect::Stopped,
-            Err(error) => CompletionEffect::Failed {
-                failure: mineral_log::chain(&error),
-            },
+            Err(error) => CompletionEffect::Failed { error },
         };
         let status = effect.status();
         {
@@ -174,13 +172,13 @@ impl DownloadManager {
                     None,
                 );
             }
-            CompletionEffect::Failed { failure } => {
+            CompletionEffect::Failed { error } => {
                 mineral_log::warn!(
                     target: "download",
                     download_id = %attempt.id,
                     song_id = %attempt.song.id.qualified(),
                     source = attempt.song.source().name(),
-                    error = failure,
+                    error = mineral_log::chain(&error),
                     "download failed"
                 );
                 record_download(

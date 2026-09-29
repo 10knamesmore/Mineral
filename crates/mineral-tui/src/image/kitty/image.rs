@@ -44,7 +44,7 @@ impl KittyImage {
         source: &DynamicImage,
         image_id: u32,
         relay: TerminalRelay,
-    ) -> color_eyre::Result<Self> {
+    ) -> Result<Self, super::shared_memory::Error> {
         let pixels = PixelData::from_image(source);
         let resource = SharedMemory::create(image_id, &pixels.bytes)?;
         let transmission = transmit_shared_memory(

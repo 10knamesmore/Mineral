@@ -54,20 +54,22 @@ pub(super) async fn fetch_and_decode(
     let source_bytes = load_source(source, url, client, cache).await?;
     let cfg = Arc::clone(cfg);
 
-    let decoded = tokio::task::spawn_blocking(move || -> color_eyre::Result<DecodedCover> {
-        let image = crate::image::decode::display(&source_bytes, &pixels)?;
-        mineral_log::debug!(target: "cover",
+    let decoded = tokio::task::spawn_blocking(
+        move || -> Result<DecodedCover, crate::image::decode::Error> {
+            let image = crate::image::decode::display(&source_bytes, &pixels)?;
+            mineral_log::debug!(target: "cover",
                     target_width = pixels.width().get(), target_height = pixels.height().get(),
                     decoded_width = image.width(), decoded_height = image.height(),
                     decoded_bytes = image.as_bytes().len(), "display cover decoded");
-        let palette = extract_palette(&image, cfg.kmeans());
-        let fingerprint = CoverFingerprint::of(&image);
-        Ok(DecodedCover {
-            image,
-            fingerprint,
-            palette,
-        })
-    })
+            let palette = extract_palette(&image, cfg.kmeans());
+            let fingerprint = CoverFingerprint::of(&image);
+            Ok(DecodedCover {
+                image,
+                fingerprint,
+                palette,
+            })
+        },
+    )
     .await;
 
     match decoded {
