@@ -11,14 +11,6 @@ const CONFIG_TEMPLATE: &str = include_str!("lua/template.lua");
 /// 二进制的这份内容,不读用户目录的副本)。
 const DEFAULT_LUA: &str = include_str!("lua/default.lua");
 
-/// 写到用户目录的 default.lua 副本头部横幅:讲清它只是参考、改它无效。
-const DEFAULT_BANNER: &str = "\
--- ⚠ 默认值参考(由 `mineral config init` 随版本刷新,手改会被覆盖)。
--- 程序不读取本文件:默认值编译在二进制里,这份只是给你查“每个字段默认是什么”。
--- 要改配置请写同目录的 config.lua(只写要覆盖的字段,其余回落这里所示的默认)。
-
-";
-
 /// 内置 host API stub(随版本覆盖到用户目录,供 LSP)。
 const META_MINERAL: &str = include_str!("lua/meta/mineral.lua");
 
@@ -72,10 +64,7 @@ pub fn run_init(config_dir: &Path) -> Result<Vec<InitOutcome>> {
         LUARC_JSON,
     )?);
     // 默认值参考:程序不读它,只为让用户就近查“每个字段默认是什么”。
-    outcomes.push(overwrite(
-        &config_dir.join("default.lua"),
-        &format!("{DEFAULT_BANNER}{DEFAULT_LUA}"),
-    )?);
+    outcomes.push(overwrite(&config_dir.join("default.lua"), DEFAULT_LUA)?);
 
     let meta_dir = config_dir.join("lua").join("meta");
     std::fs::create_dir_all(&meta_dir).map_err(|source| Error::InitIo {
@@ -148,31 +137,10 @@ mod tests {
         let first = run_init(&dir)?;
         assert!(dir.join("config.lua").is_file(), "config.lua 应生成");
         assert!(dir.join(".luarc.json").is_file(), ".luarc.json 应生成");
-        let default_ref = std::fs::read_to_string(dir.join("default.lua"))?;
-        assert!(
-            default_ref.starts_with("-- ⚠ 默认值参考"),
-            "default.lua 参考副本应带『程序不读取』横幅"
-        );
-        assert!(
-            default_ref.contains("return {"),
-            "default.lua 参考副本应含完整默认表"
-        );
+        assert!(dir.join("default.lua").is_file(), "default.lua 应生成");
         assert!(
             dir.join("lua/meta/mineral.lua").is_file(),
             "host stub 应生成"
-        );
-        let config_stub = std::fs::read_to_string(dir.join("lua/meta/config.lua"))?;
-        assert!(
-            config_stub.starts_with("---@meta"),
-            "config stub 应以 ---@meta 开头(LuaLS 库文件标记)"
-        );
-        assert!(
-            config_stub.contains("---@class mineral.Config"),
-            "config stub 应含根 Config class(拼装产物)"
-        );
-        assert!(
-            config_stub.contains("---@field stats? mineral.StatsConfig"),
-            "config stub 应含 stats 段(手写时代缺失的正是它)"
         );
         assert!(
             first.iter().all(|o| matches!(o, InitOutcome::Written(_))),

@@ -1,13 +1,7 @@
 ---@type mineral.Config
--- Mineral 用户配置。只需写要覆盖的字段,其余回落默认(深合并,数组整体替换)。
--- 编辑器补全 / 类型检查依赖同目录 lua/meta 下的 stub(本文件由 `mineral config init` 生成)。
--- 完整可覆盖字段见 lua/meta/config.lua;各字段默认值见同目录 default.lua(仅参考,程序不读)。
---
--- 本文件同时是脚本:顶层 mineral.* 调用写在 **return 之前**(Lua 的 return 必须是
--- 最后一条语句),daemon 加载时真实执行;return 的表是纯配置数据,里面不放调用。
--- 脚本 API 指南见仓库 docs/scripting.md。
+-- Mineral 用户配置
 
--- 示例(脚本层,取消注释即生效):
+-- 示例:
 -- mineral.on("track_started", function(args)
 --   mineral.ui.card({
 --     title = "Now Play",
@@ -34,9 +28,7 @@ return {
   --   keys = { play_pause = "x" },
   -- },
 
-  -- 示例:歌单列表呈现策展(省略 = 隐藏,顺序 = 展示序,name 可改;
-  -- 函数出错/超时原列表照常显示)。sources.curate_playlists 是跨源版,
-  -- 收合并列表(条目带 source 字段),可做全局排序。
+  -- 示例:歌单列表呈现
   -- sources = {
   --   bilibili = {
   --     curate_playlists = function(lists)

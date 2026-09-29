@@ -3,9 +3,7 @@ local MB = KB * 1024
 local GB = MB * 1024
 
 ---@type mineral.Config
--- Mineral 默认配置。用户 config.lua 经深合并覆盖此表(数组整体替换)。
--- 顶层只做纯计算,勿在此放副作用(多进程各 eval 一次)。
--- 字段注解(---@class / ---@field)的真相源在 lua/meta/config.lua,本表只 ---@type 引用。
+-- Mineral 默认配置
 return {
   tui = {
     -- 主题色板(默认 Catppuccin Mocha)。色值还可写 { ansi = "blue" }(终端 ANSI 槽,

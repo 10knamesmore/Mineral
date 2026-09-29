@@ -6,48 +6,47 @@
 
 use mineral_config_macros::config_section;
 
-/// 响度包络计算配置。
+/// 响度包络计算，修改后不重算已有包络
 #[config_section]
 pub struct EnvelopeConfig {
-    /// 包络定长点数(产出粒度,渲染端再按显示宽度二次重采样)。
+    /// 包络采样点数
     points: usize,
 
-    /// 响度块时长(毫秒):块内取均方,块粒度按采样率折算成帧数。
+    /// 响度分块时长
     block_ms: u32,
 
-    /// momentary 滑窗时长(毫秒):对齐 BS.1770 momentary 为 4 × 块时长(75% 重叠)。
+    /// 响度滑窗时长
     window_ms: u32,
 
-    /// K-weighting 第一级:高频搁架(头部声学)滤波参数。
+    /// 高频搁架滤波
     shelf: ShelfConfig,
 
-    /// K-weighting 第二级:RLB 高通(人耳低频不敏感)滤波参数。
+    /// 低频高通滤波
     highpass: HighpassConfig,
 }
 
-/// 高频搁架滤波参数(模拟原型,按采样率经双线性变换推导数字系数)。
+/// 高频搁架滤波
 #[config_section]
 pub struct ShelfConfig {
-    /// 转折频率(Hz)。
+    /// 转折频率
     f0_hz: f64,
 
-    /// 搁架增益(dB)。
+    /// 搁架增益
     gain_db: f64,
 
-    /// 品质因数。
+    /// 品质因数
     q: f64,
 
-    /// 过渡带增益分配指数(`Vb = Vh^band_exponent`);与其余参数同为参考实现
-    /// 从规范系数表反推的模拟原型参数。
+    /// 过渡带增益分配指数
     band_exponent: f64,
 }
 
-/// RLB 高通滤波参数(模拟原型,按采样率经双线性变换推导数字系数)。
+/// RLB 高通滤波
 #[config_section]
 pub struct HighpassConfig {
-    /// 转折频率(Hz)。
+    /// 转折频率
     f0_hz: f64,
 
-    /// 品质因数。
+    /// 品质因数
     q: f64,
 }

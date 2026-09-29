@@ -6,10 +6,10 @@ use mineral_config_macros::config_section;
 
 use crate::schema::de;
 
-/// 缓存容量段。
+/// 音频缓存
 #[config_section]
 pub struct CacheConfig {
-    /// 音频本体缓存容量上限(字节);可写算式如 `10 * 1024 ^ 3`。
+    /// 音频缓存容量（字节）
     #[serde(deserialize_with = "de::u64_lossy")]
     audio_capacity: u64,
 }

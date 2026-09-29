@@ -30,90 +30,88 @@ use super::toast::ToastConfig;
 use super::waveform::WaveformConfig;
 use super::window_title::WindowTitleConfig;
 
-/// 用户运行期配置的强类型真相源。深合并后整表一次反序列化落成本类型。
+/// Mineral 配置
 #[config_section]
 pub struct Config {
-    /// TUI client 段:in-repo client 专属命名空间(主题 / 键位 / 交互手感 / 各面板观感)。
+    /// 终端界面
     tui: TuiConfig,
 
-    /// 音频段(音量 / 后端 / 播放音质 / 引擎内参)。
+    /// 音频播放
     audio: AudioConfig,
 
-    /// 缓存容量段(音频磁盘缓存)。
+    /// 音频缓存
     cache: CacheConfig,
 
-    /// 下载段(音质 / 目录)。
+    /// 下载
     download: DownloadConfig,
 
-    /// 音乐源段(网易云等)。
+    /// 音乐来源
     sources: SourcesConfig,
 
-    /// 队列段(脚本注册的具名队列变换)。
+    /// 播放队列
     queue: QueueConfig,
 
-    /// daemon 段(gapless 预取 + 各间隔节拍)。
+    /// 后台服务
     daemon: DaemonConfig,
 
-    /// 脚本运行时段(watchdog 双阈值)。
+    /// 脚本运行
     script: ScriptConfig,
 
-    /// 行为埋点采集段(采集档位 / 事件微调 / 保留 / 查询期口径)。
+    /// 行为统计
     stats: StatsConfig,
 }
 
-/// TUI client 配置命名空间。把主题 / 键位 / 交互手感收进 client 段:TUI 是
-/// in-repo client,在协议上无特权,只有「打包特权」。第三方 client 的配置活在
-/// 自己生态,不进本文件。
+/// 终端界面配置
 #[config_section]
 pub struct TuiConfig {
-    /// 主题色板段(14 token + 3 roles)。
+    /// 主题配色
     theme: ThemeConfig,
 
-    /// 键位重映射段(动作 → 键)。
+    /// 按键绑定
     keys: KeysConfig,
 
-    /// 交互手感段(音量/seek 步长、列表跳行、过滤起播范围、daemon 续命开关)。
+    /// 交互行为
     behavior: BehaviorConfig,
 
-    /// 频谱面板段(观感开关 + 平滑/衰减 + peak 物理)。
+    /// 频谱面板
     spectrum: SpectrumConfig,
 
-    /// 进度条波形段(振幅波形开关 + 封面取色开关)。
+    /// 进度条波形
     waveform: WaveformConfig,
 
-    /// 封面段(抓取/缓存/并发 + kmeans 取色)。
+    /// 封面加载与缓存
     cover: CoverConfig,
 
-    /// 全屏切歌封面转场段(样式 + 时长)。
+    /// 全屏封面转场
     cover_transition: CoverTransitionConfig,
 
-    /// 氛围背景段(全屏沉浸页的调色板渐变场)。
+    /// 全屏氛围背景
     ambient: AmbientConfig,
 
-    /// 预取段(各 lookahead 半径 + 去抖 + 抓取并发)。
+    /// 列表与封面预取
     prefetch: PrefetchConfig,
 
-    /// 搜索段:`deep`(本地过滤搜索行为旋钮)与 `channel`(远程搜索白名单)两个子段。
+    /// 搜索
     search: SearchConfig,
 
-    /// 歌词段(行距 + 滚动手感)。
+    /// 歌词
     lyrics: LyricsConfig,
 
-    /// 动画段(帧率 + 转场、播放栏反馈与扫入时长 + 视图扫入风格)。
+    /// 动画
     animation: AnimationConfig,
 
-    /// 列表 minimap 段(最小光晕半径 + 吸附半径;时长见 `animation.minimap_cursor_ms`)。
+    /// 列表缩略图
     minimap: MinimapConfig,
 
-    /// toast 段(顶栏通知停留时长)。
+    /// 通知
     toast: ToastConfig,
 
-    /// 布局段(完整布局门槛 + 播放栏高度 + 全屏分区尺寸 + 浮层 dock 宽)。
+    /// 布局
     layout: LayoutConfig,
 
-    /// copy 段(复制菜单的自定义模板)。
+    /// 复制模板
     copy: CopyConfig,
 
-    /// 窗口标题段(终端任务栏 / tab 标题)。
+    /// 窗口标题
     window_title: WindowTitleConfig,
 }

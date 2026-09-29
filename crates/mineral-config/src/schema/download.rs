@@ -9,25 +9,23 @@ use std::path::PathBuf;
 
 use mineral_model::BitRate;
 
-/// 下载段。
+/// 下载配置
 #[config_section]
 pub struct DownloadConfig {
-    /// 下载音质,与播放音质相互独立。
+    /// 下载音质
     quality: BitRate,
 
-    /// 下载导出目录,绝对路径;`None`(Lua `nil`)→ 接线处回落平台默认导出目录(`~/Music/mineral`)。
+    /// 下载绝对路径；省略用 ~/Music/mineral
     dir: Option<PathBuf>,
 
-    /// 同时执行的 Song download 上限;每个 active download 对应一个 Tokio task 和至多一个
-    /// `spawn_blocking` writer,必须至少为 1。
+    /// 下载并发数，至少 1
     #[serde(deserialize_with = "deserialize_positive_usize")]
     max_concurrent: usize,
 
-    /// 落盘(下载导出 / 播放缓存)后给音频文件内嵌 metadata tag(标题 / 艺人 / 专辑 / 封面 /
-    /// 歌词等);后台打标,失败只记日志,不影响下载与播放。
+    /// 为下载和缓存写入音频标签
     tagging: bool,
 
-    /// 打标并发 worker 数(同时也是对源站请求并发的放大系数;`0` / `1` = 串行)。
+    /// 打标并发数；0 或 1 为串行
     tagging_workers: usize,
 }
 

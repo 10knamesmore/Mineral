@@ -2,9 +2,9 @@
 
 use mineral_config_macros::config_section;
 
-/// toast 配置。
+/// 通知
 #[config_section]
 pub struct ToastConfig {
-    /// 一次性通知(下载完成 / 配置告警等)toast 停留时长(秒)。
+    /// 临时通知停留时长
     flash_ttl_secs: u64,
 }

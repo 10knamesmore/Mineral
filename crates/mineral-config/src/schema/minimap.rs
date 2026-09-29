@@ -2,7 +2,7 @@
 
 use mineral_config_macros::config_section;
 
-/// 列表右边框 minimap 配置。
+/// 列表缩略图
 #[config_section]
 pub struct MinimapConfig {
     /// 最小光晕半径(轨道行数)

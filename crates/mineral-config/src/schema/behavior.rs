@@ -7,57 +7,53 @@
 use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
-/// 交互手感旋钮集合。
+/// 交互行为
 #[config_section]
 pub struct BehaviorConfig {
-    /// 单次音量增减步长(百分点);1-100 合理,音量本身钳在 0-100。
+    /// 音量调节步长（百分点）
     volume_step: u8,
 
-    /// 单次 seek 步长(秒),≥1。
+    /// 快进快退步长
     seek_step_secs: u32,
 
-    /// 大步 seek 步长(秒)。
+    /// 大步快进快退步长
     seek_big_step_secs: u32,
 
-    /// 列表大步跳行的行数,≥1。
+    /// 光标大步跳行数
     list_jump_rows: u16,
 
-    /// 光标与列表视口上下边缘保持的最小行距(nvim `scrolloff`);`0` = 贴边才滚,
-    /// ≥ 半视口时光标近似居中。
+    /// 光标距视口边缘的行数
     scrolloff: u16,
 
-    /// 单行档滚动(`<C-d>` / `<C-u>`)一次移动的行数,≥1。列表与全屏歌词共用。
+    /// 单次逐行滚动行数
     line_scroll_rows: usize,
 
-    /// 翻页档滚动(`<C-f>` / `<C-b>`)一次移动的行数,≥1。
+    /// 单次翻页行数
     page_scroll_rows: usize,
 
-    /// 搜索结果、艺人专辑和歌单曲目的分页预取半径:光标距已加载末行不超过此行数且还有
-    /// 更多时,自动拉下一页。越大越早预取(滚动越顺滑、请求越靠前)。
+    /// 距列表末尾多少行预取
     search_prefetch_rows: u16,
 
-    /// TUI 退出时是否杀掉自己拉起的 daemon;`false` = 续命后台播放,下次启动自动接回。
-    /// 只影响本次亲手拉起的 daemon,attach 已有 daemon 永不杀。
+    /// 退出时关闭本次拉起的 daemon
     kill_spawned_daemon_on_exit: bool,
 
-    /// 歌单内光标位置记忆档:退出曲目列表时记住位置,下次进入恢复。
-    /// 搜索命中定位(`search.deep.locate_on_enter`)优先于记忆位置。
+    /// 歌单光标记忆；搜索命中定位优先
     remember_track_pos: TrackPosMemory,
 
-    /// Library 过滤态起播时提交完整 collection，还是只提交当前匹配项。
+    /// 过滤后起播的队列范围
     filter_play_scope: FilterPlayScope,
 }
 
-/// Library 过滤态起播时建立播放队列的范围。
+/// 过滤后起播的队列范围
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum FilterPlayScope {
-    /// 过滤只负责定位，播放队列仍包含当前完整 collection。
+    /// 整个列表
     Collection,
 
-    /// 播放队列只包含当前过滤结果。
+    /// 仅匹配项
     Matches,
 }
 
@@ -68,19 +64,19 @@ impl FilterPlayScope {
     }
 }
 
-/// 歌单内光标位置记忆的生效档位。
+/// 歌单光标记忆方式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum TrackPosMemory {
-    /// 不记不恢复,每次进歌单回到第 0 行。
+    /// 不记忆
     Off,
 
-    /// 只在本次运行内记忆,关掉 TUI 即忘。
+    /// 仅本次运行
     Session,
 
-    /// 记忆并落盘,跨重启保留。
+    /// 跨重启保留
     Persist,
 }
 

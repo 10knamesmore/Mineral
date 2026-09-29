@@ -3170,12 +3170,10 @@ version = "0.5.8"
 dependencies = [
  "color-eyre",
  "derive-getters",
- "insta",
  "mineral-config-macros",
  "mineral-log",
  "mineral-model",
  "mineral-paths",
- "mineral-test",
  "mlua",
  "num-traits",
  "proptest",

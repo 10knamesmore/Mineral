@@ -21,158 +21,140 @@ pub struct SpectrumConfig {
     /// 渲染风格。
     style: SpectrumStyle,
 
-    /// FFT 窗大小(样本),建议 2 的幂:大 = 低频细节多但瞬态钝、起播首窗慢
-    /// (4096@48kHz ≈ 85ms),小 = 跟手但低频糊。**外键**:`audio.tap_capacity`
-    /// 须 ≥ 2 × 此值,否则 UI 卡一帧就丢样本出毛刺。
+    /// FFT 窗采样点数；audio.tap_capacity 须 ≥ 此值两倍
     fft_size: usize,
 
-    /// 频率轴下界(Hz);低于此的能量不显示。
+    /// 频率下界（Hz）
     f_min: f32,
 
-    /// 频率轴上界(Hz);超过奈奎斯特时取奈奎斯特。
+    /// 频率上界（Hz），不超过采样率一半
     f_max: f32,
 
-    /// 频率轴对数化程度(0 线性 ..= 1 纯对数,纯对数每 octave 等宽);
-    /// 略小于 1 可收掉低频「宽平顶」。
+    /// 频率轴比例，0 线性、1 对数
     log_axis_blend: f32,
 
-    /// dB 标定下界(低于此条高为 0);抬高 = 砍安静细节整体变矮,降低 = 噪声底也可见。
-    /// 须 < `db_ceil`。
+    /// 音量下界（dB），须小于 db_ceil
     db_floor: f32,
 
-    /// dB 标定上界(高于此满高);必须 > `db_floor`,两者共同决定显示动态范围。
+    /// 音量上界（dB），须大于 db_floor
     db_ceil: f32,
 
-    /// 频带统计中峰值的占比(0 纯均值 = 平 ..= 1 纯峰值 = 躁);中间值兼顾动态与稳定。
+    /// 峰值占比，0 均值、1 峰值
     peak_mix: f32,
 
-    /// 无封面色时,整体色相是否缓慢漂移。
+    /// 无封面色时轮转色相
     hue_rotate: bool,
 
-    /// 任何状态下条的最小高度(1/8 字符单位,0-64);`0` = 静默时面板全空。
+    /// 柱高下限（1/8 字符，0-64）
     baseline_min: u16,
 
-    /// 起音(attack):条高**上升**到位 90% 所需毫秒。越小越跟手(鼓点立即顶上),
-    /// 越大越钝;≤ 帧间隔时退化为瞬时。
+    /// 柱高上升至目标 90% 的时长
     attack_ms: u32,
 
-    /// 衰减(decay):播放中条高**向更低目标回落** 90% 所需毫秒(余韵滑落时长)。
-    /// 动画感主要来自这里——比 `attack_ms` 大才有"快攻慢放"的运动轨迹。
+    /// 播放中柱高回落 90% 的时长
     decay_ms: u32,
 
-    /// 释音(release):暂停/无信号时条高落向 0(止于 `baseline_min`)90% 所需毫秒
-    /// (bars 专属;scope / waterfall / terrain 暂停整幅冻结)。
+    /// 暂停后柱高回落 90% 的时长，仅 bars 生效
     release_ms: u32,
 
-    /// 色相旋转一整圈(360°)的毫秒数。
+    /// 色相轮转周期
     hue_cycle_ms: u32,
 
-    /// 封面就绪后从当前配色缓动到封面色场的过渡毫秒数。
+    /// 封面配色过渡时长
     cover_fade_ms: u32,
 
-    /// 色场纵向采样偏移(‰,0-1000):顶端比底端沿色带多偏向高频多少,
-    /// 拉开条底 / 条顶明度层次。
+    /// 色带纵向偏移 0-1000
     cover_vshift_permille: u32,
 
-    /// 盲文点阵风格(scope / terrain)落笔色与实际背景的最小亮度差(0-1):
-    /// 封面色场背景与同源的谱色撞色时,把落笔色向亮 / 暗侧抬开到此差值,
-    /// 保持细点可辨;`0` = 关闭保底。
+    /// 点阵与背景最小亮度差 0-1
     dot_bg_contrast: f32,
 
-    /// bars 风格参数;`style = "bars"` 时生效。
+    /// 柱形频谱
     bars: BarsConfig,
 
-    /// scope 风格参数;`style = "scope"` 时生效。
+    /// 波形示波器
     scope: ScopeConfig,
 
-    /// waterfall 风格参数;`style = "waterfall"` 时生效。
+    /// 瀑布频谱
     waterfall: WaterfallConfig,
 
-    /// terrain 风格参数;`style = "terrain"` 时生效。
+    /// 山脊频谱
     terrain: TerrainConfig,
 }
 
-/// 频谱渲染风格。不依赖渲染 crate;接线处映射到具体画法。
+/// 频谱样式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum SpectrumStyle {
-    /// 频谱柱(默认):FFT 条高 + peak cap / trail 装饰。
+    /// 柱形频谱
     Bars,
 
-    /// 示波器:时域 min/max 包络滚动(右新左旧),不走 FFT。
+    /// 波形示波器
     Scope,
 
-    /// 频谱历史瀑布:每帧 FFT 条高推入历史,x=频率 y=时间,`▀` 半块
-    /// 一字符行装两帧、幅度→热力色。
+    /// 瀑布频谱
     Waterfall,
 
-    /// 山脊地形:每层一帧 ADSR 平滑后的历史频谱轮廓,前景遮挡后景。
+    /// 山脊频谱
     Terrain,
 }
 
-/// bars 风格参数(挂在 `SpectrumConfig` 下):peak cap / trail 装饰 + 弹簧物理。
+/// 柱形频谱
 #[config_section]
 pub struct BarsConfig {
-    /// 是否显示 peak cap(`▔` 浮在条顶)。
+    /// 显示峰值横线
     show_peak_cap: bool,
 
-    /// 是否显示 trail(peak 与 bar 间余韵 fade)。
+    /// 显示峰值拖尾
     show_trail: bool,
 
-    /// 是否启用 peak 弹簧物理(过冲 + 阻尼回弹);`false` = 直接吸附。
+    /// 启用峰值弹簧
     spring_peak: bool,
 
-    /// 新 peak 跟涨后在原位悬停的毫秒数。
+    /// 峰值悬停时长
     peak_hold_ms: u32,
 
-    /// peak 悬停结束后,从满高(64 单位)落到 0 的满程毫秒数。
+    /// 峰值从满高落到底的时长
     peak_fall_ms: u32,
 
-    /// 弹簧刚度(每 tick `force += stiffness × (target - pos)`);0.1-1.0 合理,
-    /// 太大瞬间过冲像 bug。
-    /// **注**:弹簧是无量纲系数制,与 `animation.frame_tick_ms` 耦合——改帧率会改弹簧手感。
+    /// 弹簧刚度，效果随帧间隔变化
     spring_stiffness: f32,
 
-    /// 弹簧阻尼(每 tick `force -= damping × velocity`)。同上,与帧率耦合;
-    /// < 2√刚度 时欠阻尼有回弹感,越大越稳越不弹。
+    /// 弹簧阻尼，效果随帧间隔变化
     spring_damping: f32,
 }
 
-/// scope 风格参数(挂在 `SpectrumConfig` 下)。
+/// 波形示波器
 #[config_section]
 pub struct ScopeConfig {
-    /// 每根包络列聚合的音频时长(毫秒)= 滚动速度:越小滚得越快、可见时间窗越短。
+    /// 每列音频时长
     column_ms: u32,
 }
 
-/// waterfall 风格参数(挂在 `SpectrumConfig` 下)。
+/// 瀑布频谱
 #[config_section]
 pub struct WaterfallConfig {
-    /// 推行间隔(毫秒)。`▀` 半块一字符行装两帧 = 每半格 `push_ms / 2` 毫秒;
-    /// 越小流速越快、可见历史窗越短。
+    /// 推行间隔，半格为此值一半
     push_ms: u32,
 
-    /// 幅度→热力色的对比 gamma(`色档 = (幅度/RES)^contrast × RES`,端点不动、单调)。
-    /// 1 = 线性;> 1 压暗噪底、只留强峰(音高线更突出);< 1 抬亮弱能量
-    /// (泛音/弱谐波浮现,代价是噪声也起)。非有限 / 非正值按 1 处理。
+    /// 热力色 gamma；1 为线性，须为有限正数
     contrast: f32,
 }
 
-/// terrain 风格参数(挂在 `SpectrumConfig` 下)。
+/// 山脊频谱
 #[config_section]
 pub struct TerrainConfig {
-    /// 推层间隔(毫秒)。层数 × 此值 = 地形时间纵深。
+    /// 推层间隔
     push_ms: u32,
 
-    /// 历史层数。层距 = 可用纵深 / 层数,层数多了单层太挤。
+    /// 历史层数
     layers: usize,
 
-    /// 轮廓振幅占面板高的比例(0..=1)。须明显小于 1,否则层间交叠过深互相淹没。
+    /// 振幅占面板高度比例 0-1
     amplitude: f32,
 
-    /// 远层亮度保底(0..=1):越旧的历史层亮度衰减到此为止,不再隐入衬底。
-    /// 0 = 远层淡到全隐;1 = 全层等亮、无纵深;抬高 = 后景更清晰、纵深更浅。
+    /// 远层亮度下限 0-1
     fade_floor: f32,
 }

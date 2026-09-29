@@ -11,10 +11,7 @@ use serde::Deserialize;
 
 use crate::keys::KeyChord;
 
-/// 键位重映射表:每个字段是一个内建动作的稳定命令名,值为绑定到它的键。
-///
-/// 字段集与渲染层内建键表一一对应(无参动作直名;带参动作按方向/幅度展开)。
-/// 本段只承载强类型绑定;把命令名 + 步长参数组装成可执行动作是 client 接线的事。
+/// 动作对应按键，空数组解绑
 #[config_section]
 pub struct KeysConfig {
     /// 暂停 / 恢复。
@@ -23,67 +20,67 @@ pub struct KeysConfig {
     /// 下一首。
     next: KeyBinding,
 
-    /// 上一首 / 回开头(分界见 `daemon.prev_restart_threshold_ms`)。
+    /// 上一首或回曲首，分界见 daemon.prev_restart_threshold_ms
     prev: KeyBinding,
 
-    /// 进 / 退全屏播放态。
+    /// 切换全屏播放
     toggle_fullscreen: KeyBinding,
 
-    /// 进 / 退 Search 布局态(全屏态屏蔽)。
+    /// 切换搜索页，全屏时无效
     open_search: KeyBinding,
 
-    /// 打开浮动播放队列(已开时再按 = 关闭)。
+    /// 切换播放队列浮层
     open_queue: KeyBinding,
 
-    /// 打开 Downloads 停靠浮层(已开时再按 = 关闭)。
+    /// 切换下载浮层
     open_downloads: KeyBinding,
 
-    /// 打开 Audio settings 浮层(已开时再按 = 关闭)。
+    /// 切换音频设置浮层
     open_audio_settings: KeyBinding,
 
-    /// 打开退出确认浮层。
+    /// 退出确认
     quit: KeyBinding,
 
-    /// 打开键位 cheatsheet 浮层(已开时再按 = 关闭)。
+    /// 切换按键帮助
     open_help: KeyBinding,
 
-    /// 循环歌词副语言(原文 → 翻译 → 罗马音)。
+    /// 切换原文、翻译、罗马音
     cycle_lyric: KeyBinding,
 
-    /// 进入搜索输入态(全屏态屏蔽)。
+    /// 输入搜索词，全屏时无效
     enter_search: KeyBinding,
 
-    /// 在当前视图「进入」:进入歌单 / 播放选中曲。
+    /// 进入歌单或播放选中曲
     activate: KeyBinding,
 
-    /// 在当前视图「返回」(搜索非空时先清搜索)。
+    /// 返回；搜索非空时先清空
     back: KeyBinding,
 
-    /// 下探一层 / 进入选中项详情(搜索面板:song 进其专辑、容器进详情;artist 专辑区下钻该专辑)。
+    /// 进入选中项详情
     drill_into: KeyBinding,
 
-    /// 切换详情内分区(artist:热门曲 ↔ 专辑)。
+    /// 切换详情分区
     cycle_detail_section: KeyBinding,
 
     /// 循环播放模式。
     cycle_mode: KeyBinding,
 
-    /// 音量增(步长见 `behavior.volume_step`)。
+    /// 增大音量
     volume_up: KeyBinding,
 
-    /// 音量减(步长见 `behavior.volume_step`)。
+    /// 减小音量
     volume_down: KeyBinding,
 
-    /// 快进(步长见 `behavior.seek_step_secs`)。
+    /// 快进
     seek_forward: KeyBinding,
 
-    /// 快退(步长见 `behavior.seek_step_secs`)。
+    /// 快退
     seek_backward: KeyBinding,
 
-    /// 大步快进(步长见 `behavior.seek_big_step_secs`)。
+    /// 大步快进
     seek_forward_big: KeyBinding,
 
-    /// 大步快退(步长见 `behavior.seek_big_step_secs`)。
+    /// 大步快退
     seek_backward_big: KeyBinding,
 
     /// 列表光标下移一行。
@@ -92,10 +89,10 @@ pub struct KeysConfig {
     /// 列表光标上移一行。
     move_up: KeyBinding,
 
-    /// 列表光标大步下移(行数见 `behavior.list_jump_rows`)。
+    /// 光标大步下移
     move_down_big: KeyBinding,
 
-    /// 列表光标大步上移(行数见 `behavior.list_jump_rows`)。
+    /// 光标大步上移
     move_up_big: KeyBinding,
 
     /// 列表光标跳首行。
@@ -104,45 +101,43 @@ pub struct KeysConfig {
     /// 列表光标跳末行。
     move_last: KeyBinding,
 
-    /// 切换选中曲的 ♥。
+    /// 切换歌曲收藏状态
     love: KeyBinding,
 
-    /// 把选中条目在队列里下移一格。
+    /// 队列条目下移
     reorder_down: KeyBinding,
 
-    /// 把选中条目在队列里上移一格。
+    /// 队列条目上移
     reorder_up: KeyBinding,
 
-    /// 光标跳回当前在播条目。
+    /// 定位当前播放条目
     jump_to_current: KeyBinding,
 
     /// 下载当前视图选中项。
     download: KeyBinding,
 
-    /// 关最早一张驻留通知卡片(连按逐条关)。
+    /// 关闭最早的驻留通知
     dismiss_notice: KeyBinding,
 
-    /// 上下文操作菜单(内容随光标实体 × 视图)。
+    /// 打开操作菜单
     open_action_menu: KeyBinding,
 
-    /// 复制菜单(内置项 + `copy.templates` 自定义模板)。
+    /// 打开复制菜单
     open_copy_menu: KeyBinding,
 
-    /// 逐行下滚(行数见 `behavior.line_scroll_rows`):全屏滚歌词,浏览态滚列表视口。
+    /// 逐行下滚
     scroll_line_down: KeyBinding,
 
-    /// 逐行上滚(行数见 `behavior.line_scroll_rows`)。
+    /// 逐行上滚
     scroll_line_up: KeyBinding,
 
-    /// 翻页下滚(行数见 `behavior.page_scroll_rows`)。
+    /// 向下翻页
     scroll_page_down: KeyBinding,
 
-    /// 翻页上滚(行数见 `behavior.page_scroll_rows`)。
+    /// 向上翻页
     scroll_page_up: KeyBinding,
 
-    /// 脚本动作绑定:`mineral.action` 注册名 → 键(开放映射,默认空)。
-    /// 与内建动作不同,这里的键集合由用户脚本决定,client 触发时经
-    /// daemon 转投脚本线程执行。
+    /// 脚本动作名对应按键
     script: FxHashMap<String, KeyBinding>,
 }
 

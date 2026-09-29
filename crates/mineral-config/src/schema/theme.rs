@@ -13,22 +13,19 @@ const TOKEN_NAMES: [&str; 14] = [
     "accent_2", "red", "yellow", "green", "peach",
 ];
 
-/// 主题色板:14 个 color token + 3 个语义角色映射。
-///
-/// 每个 token 是一个 [`ColorValue`](固定色 / ANSI 槽 / 终端默认);token 之间不能互相引用。
+/// 主题配色，基础色之间不可互相引用
 #[config_section]
 pub struct ThemeConfig {
-    /// 整屏背景填充色:普通页面每格底色刷成此色,消除与全屏沉浸背景之间的色跳变。
-    /// 取具体色 / token 引用即填充,取 `{ reset = true }` 则不填充(用终端默认底)。
+    /// 整屏底色；{ reset = true } 使用终端底色
     background: ColorRef,
 
     /// 主背景。
     base: ColorValue,
 
-    /// 次背景(嵌套面板 / 浮层底)。
+    /// 面板及浮层底色
     mantle: ColorValue,
 
-    /// 第三背景(底部 transport / cmd 行)。
+    /// 播放栏及命令行底色
     crust: ColorValue,
 
     /// 行选中背景 / 进度条轨道。
@@ -46,10 +43,10 @@ pub struct ThemeConfig {
     /// 主文本。
     text: ColorValue,
 
-    /// 主强调色:选中 / 聚焦边框 / 当前播放。
+    /// 主强调色
     accent: ColorValue,
 
-    /// 副强调色:进度条填充 / 频谱顶段。
+    /// 副强调色
     accent_2: ColorValue,
 
     /// 错误 / 删除 / love 标记。
@@ -64,53 +61,49 @@ pub struct ThemeConfig {
     /// 命令 / 搜索前缀。
     peach: ColorValue,
 
-    /// 搜索命中字符的样式(色 + 叠加字体效果)。
+    /// 搜索命中样式
     search_hit: SearchHitConfig,
 
-    /// 封面驱动的动态主题(accent 随在播封面主色渐变)。
+    /// 封面动态配色
     dynamic: DynamicThemeConfig,
 
-    /// 文本层级的不透明度(歌词渐暗 / transport 标签等对实际背景的混合比例)。
+    /// 文本不透明度
     text_alpha: TextAlphaConfig,
 }
 
-/// 封面驱动的动态主题:在播封面取色就绪后,`accent` / `accent_2` 从当前值
-/// 渐变到封面派生色;无封面 / 取色失败渐变回本表的静态 token。
+/// 封面驱动强调色，取色失败用静态配色
 #[config_section]
 pub struct DynamicThemeConfig {
-    /// 是否启用(关闭即恒用静态 `accent` / `accent_2`)。
+    /// 是否启用
     enabled: bool,
 
-    /// 切歌 / 封面就绪时 accent 渐变过去的时长,毫秒。
+    /// 强调色过渡时长
     fade_ms: u32,
 }
 
-/// 文本层级的不透明度(0-1):次级文本的前景色 = 所在处实际背景色与 `text` 按此比例
-/// 混合,背景是氛围渐变场还是纯底色都保持成比例的对比度。仅当背景拿得到真彩分量时
-/// 生效;ANSI / 终端默认背景下回落对应的静态 token(`subtext` / `overlay` /
-/// `surface1` / `surface0`)。
+/// 文本不透明度 0-1；背景非真彩时用静态配色
 #[config_section]
 pub struct TextAlphaConfig {
-    /// 次级文本:metadata / 面板标题 / 时间戳(对应静态 token `subtext`)。
+    /// 次级文本不透明度
     strong: f32,
 
-    /// 暗淡标签:二级标签 / 按键提示 / 别名后缀(对应静态 token `overlay`)。
+    /// 暗淡标签不透明度
     muted: f32,
 
-    /// 弱线条:未聚焦边框 / 已缓冲轨道(对应静态 token `surface1`)。
+    /// 弱线条不透明度
     faint: f32,
 
-    /// 近背景:歌词远端淡出终点 / 空槽 / 未缓冲轨道(对应静态 token `surface0`)。
+    /// 近背景元素不透明度
     ghost: f32,
 }
 
-/// 搜索命中字符的样式:在所在列的基础样式上叠加。
+/// 搜索命中样式
 #[config_section]
 pub struct SearchHitConfig {
-    /// 高亮色:token 名(`"peach"` 等,随主题联动)或裸 `"#rrggbb"`。
+    /// 高亮色
     color: ColorRef,
 
-    /// 叠加的字体效果(数组整体替换;空数组 = 仅变色)。
+    /// 叠加字体效果；空数组仅变色
     modifiers: Vec<TextStyle>,
 }
 
@@ -412,7 +405,7 @@ where
     }
 }
 
-/// 可叠加的字体效果。终端实际渲染效果取决于终端模拟器支持(如部分终端无斜体)。
+/// 字体效果，需终端支持
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]

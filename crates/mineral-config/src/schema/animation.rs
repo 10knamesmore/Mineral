@@ -8,207 +8,201 @@ use serde::Deserialize;
 /// 动画配置。
 #[config_section]
 pub struct AnimationConfig {
-    /// 主循环帧间隔(毫秒;16 ≈ 60fps,越小越流畅越费 CPU);重绘 / 拉数据 / 推进动画统一这一节奏。
-    /// 它是所有时长旋钮(`*_ms`)折算成拍数的分母——改它不改各动画的真实时长。
+    /// 主循环帧间隔
     frame_tick_ms: u64,
 
-    /// 整屏转场(启动扩大 / 退出收缩)动画时长(毫秒)。
+    /// 整屏转场时长
     transition_ms: u32,
 
-    /// 侧栏歌单 ↔ 曲目切换扫入动画时长(毫秒)。
+    /// 侧栏歌单 ↔ 曲目切换扫入动画时长
     sweep_ms: u32,
 
-    /// 列表视口滚动平移时长(毫秒;逐行 / 翻页滚动与 scrolloff 触发的滚动共用)。
+    /// 列表滚动时长
     list_scroll_ms: u32,
 
-    /// 列表 minimap 光标的位置缓动时长(毫秒)，独立于视口滚动；0 为一帧到位。
+    /// 缩略图光标移动时长
     minimap_cursor_ms: u32,
 
-    /// 全屏播放态进退场形变动画时长(毫秒)。
+    /// 全屏进退场时长
     fullscreen_ms: u32,
 
     /// 控制键按压反馈时长
     controls_press_ms: u32,
 
-    /// 播放栏音量、模式和控制键的反馈停留与过渡时长。
+    /// 播放栏操作反馈
     transport: TransportFeedbackConfig,
 
-    /// 全屏氛围背景相对几何形变的滞后跟随(follow-through):背景色不与形变同步到位,
-    /// 而是落在后面淡入 / 淡出;进 / 退全屏可各配一套时长(进优雅、退迅速)。
+    /// 全屏背景跟随延迟
     ambient_trail: AmbientTrailConfig,
 
-    /// 浮层(队列 / 确认框)进出动画时长(毫秒)。
+    /// 浮层进退场时长
     popup_anim_ms: u32,
 
-    /// toast(顶栏通知)横向展开收起动画时长(毫秒)。
+    /// 通知展开收起时长
     toast_anim_ms: u32,
 
-    /// 终端失焦/聚焦时顶栏变灰的淡入淡出时长(毫秒)。
+    /// 窗口焦点变色时长
     focus_fade_ms: u32,
 
-    /// Search 布局态焦点高亮边框滑动时长(毫秒);仅 `search_focus_transition = Slide` 时生效。
+    /// 搜索焦点边框滑动时长，仅 slide 生效
     search_focus_morph_ms: u32,
 
-    /// 待机(无在播曲)唱片纹封面高光旋转一整圈的时长(毫秒)。
+    /// 待机唱片旋转周期
     vinyl_rev_ms: u32,
 
-    /// 侧栏曲目扫入风格。
+    /// 侧栏切换样式
     view_sweep: SweepStyle,
 
-    /// 锚定弹出菜单(PopMenu)的进场风格。
+    /// 菜单进场样式
     menu_reveal: MenuReveal,
 
-    /// Search 布局态焦点高亮边框切换的过渡风格(直切 / 边框滑动)。
+    /// 搜索焦点切换样式
     search_focus_transition: SearchFocusTransition,
 
-    /// loading 占位的旋转 spinner 帧(逐帧循环画;search「searching」/ detail 数据未到共用)。
-    /// 默认 braille 一周;每帧按 `frame_tick_ms` 节奏推进。空数组 = 不画字形(仅留 loading 文案)。
+    /// 加载动画帧；空数组隐藏字形
     spinner_frames: Vec<String>,
 
-    /// 溢出标题滚动(marquee)段(选中行 / 播放栏长歌名)。
+    /// 长标题滚动
     marquee: MarqueeConfig,
 }
 
-/// 播放栏操作反馈的停留和动画时长，单位均为毫秒。
+/// 播放栏操作反馈
 #[config_section]
 pub struct TransportFeedbackConfig {
-    /// 从最近一次调节音量动作起保留百分比的时长；后端同步不续期。
+    /// 音量百分比停留时长
     volume_hold_ms: u32,
 
-    /// 从最近一次切换模式动作起保留短标签的时长；后端同步不续期。
+    /// 播放模式文字停留时长
     mode_hold_ms: u32,
 
-    /// 从最近一次播放控制动作起保留整组按钮的时长。
+    /// 播放按钮停留时长
     controls_hold_ms: u32,
 
-    /// 音量标题切换时旧文本淡出的时长。
+    /// 旧音量文字淡出时长
     volume_fade_out_ms: u32,
 
-    /// 音量标题切换时新文本淡入的时长。
+    /// 新音量文字淡入时长
     volume_fade_in_ms: u32,
 
-    /// 模式文字从左到右全部显现的时长；图标直接更新。
+    /// 播放模式文字显现时长
     mode_reveal_ms: u32,
 
-    /// 模式区域调整宽度的时长。
+    /// 播放模式区域缩放时长
     mode_resize_ms: u32,
 
-    /// 控制键反馈淡入淡出的时长。
+    /// 播放按钮淡入淡出时长
     controls_fade_ms: u32,
 }
 
-/// 全屏氛围背景的滞后跟随参数(挂在 `AnimationConfig` 下):进 / 退各一套时长,故进场可
-/// 优雅慢入、退场可迅速收干净。
+/// 全屏背景跟随延迟
 #[config_section]
 pub struct AmbientTrailConfig {
-    /// 进全屏方向的滞后跟随时长(优雅慢入)。
+    /// 进入全屏
     enter: TrailTimingConfig,
 
-    /// 退全屏方向的滞后跟随时长(迅速收)。
+    /// 退出全屏
     exit: TrailTimingConfig,
 }
 
-/// 一个方向(进 / 退)的滞后跟随时长(挂在 `AmbientTrailConfig` 下):背景色先僵一段
-/// `delay_ms`,再用 ease-out 缓动在 `ease_ms` 内追到几何形变的终态。两者都为 0 则退化为
-/// 与形变同步到位(无滞后)。
+/// 背景延迟及过渡时长
 #[config_section]
 pub struct TrailTimingConfig {
-    /// 背景色开始跟随前的滞后时长(毫秒):形变已起步 / 收拢,背景色仍按兵不动这么久。
+    /// 背景跟随延迟
     delay_ms: u32,
 
-    /// 滞后结束后背景色缓入 / 缓出到位的时长(毫秒):越长越慵懒。
+    /// 背景过渡时长
     ease_ms: u32,
 }
 
-/// 溢出标题滚动(marquee)配置。
+/// 长标题滚动
 #[config_section]
 pub struct MarqueeConfig {
-    /// 滚动方式(循环 / 来回往返 / 关闭)。
+    /// 滚动方式
     mode: MarqueeMode,
 
-    /// 每前进 1 列的毫秒;越小滚越快。
+    /// 每列滚动时长
     step_ms: u32,
 
-    /// 起步 / 选中切换后的停顿毫秒(先读到开头再开滚)。
+    /// 滚动前停顿时长
     pause_ms: u32,
 
-    /// 滚动窗口边缘 fade 的渐入毫秒(相位重置起缓升到满强度);0 = 关闭边缘 fade。
+    /// 边缘渐暗入场时长；0 为关闭
     fade_ms: u32,
 
-    /// 边缘 fade 的空间宽度(列):窗口两侧各这么多列内逐级变暗。
+    /// 两侧渐暗宽度（列）
     fade_cols: u16,
 
-    /// 循环方式(`mode = "loop"`)独有段。
+    /// 循环滚动参数
     #[serde(rename = "loop")]
     loop_: MarqueeLoopConfig,
 
-    /// 往返方式(`mode = "bounce"`)独有段。
+    /// 往返滚动参数
     bounce: MarqueeBounceConfig,
 }
 
-/// 溢出标题循环滚动(`mode = "loop"`)独有配置。
+/// 循环滚动
 #[config_section]
 pub struct MarqueeLoopConfig {
-    /// 循环拼接处的分隔串;空串 = 首尾直接相接。
+    /// 首尾拼接分隔串
     gap: String,
 }
 
-/// 溢出标题往返滚动(`mode = "bounce"`)独有配置。
+/// 往返滚动
 #[config_section]
 pub struct MarqueeBounceConfig {
-    /// 到达两端后的停顿毫秒(读完首 / 尾再折返);0 = 不停顿直接折返。
+    /// 折返前停顿时长
     edge_pause_ms: u32,
 }
 
-/// 溢出标题的滚动方式。不依赖渲染 crate;接线处映射到具体实现。
+/// 长标题滚动方式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MarqueeMode {
-    /// 循环滚动:文本首尾相接(中间夹 `gap`)向左匀速循环。
+    /// 首尾循环滚动
     Loop,
 
-    /// 来回往返:滚到末尾后反向滚回开头,不拼接 `gap`。
+    /// 来回往返滚动
     Bounce,
 
-    /// 关闭:溢出标题维持静态截断,不滚动。
+    /// 静态截断
     Off,
 }
 
-/// Search 布局态焦点高亮边框切换的过渡风格。不依赖渲染 crate;接线处映射到具体实现。
+/// 搜索焦点切换样式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchFocusTransition {
-    /// 边框滑动:高亮边框从旧面板矩形几何插值滑到新面板矩形。
+    /// 边框滑动
     Slide,
 
-    /// 直切:高亮边框瞬移到新面板,无过渡。
+    /// 直接切换
     Instant,
 }
 
-/// 锚定弹出菜单进场风格。不依赖渲染 crate;接线处映射到具体实现。
+/// 菜单进场样式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum MenuReveal {
-    /// 方向性揭开:宽度恒满,贴锚边自上而下(或镜像)生长。
+    /// 从锚边逐行展开
     Directional,
 
-    /// 形变:从锚点行矩形几何插值成最终菜单矩形,内容随重叠区揭入。
+    /// 从锚点缩放展开
     Morph,
 }
 
-/// 侧栏视图扫入过渡风格。不依赖渲染 crate;接线处映射到具体实现。
+/// 侧栏切换样式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum SweepStyle {
-    /// 推入栈:曲目从右滑入,同时把歌单往左推走。
+    /// 曲目推走歌单
     Push,
 
-    /// 覆盖滑入:歌单原地不动,曲目从右盖上。
+    /// 曲目覆盖歌单
     Cover,
 }

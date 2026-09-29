@@ -13,15 +13,14 @@ use mineral_config_macros::config_section;
 /// 摘走的变换函数数组在 VM named registry 里的键(daemon 脚本运行时按下标取用)。
 pub const QUEUE_TRANSFORM_FNS: &str = "mineral.queue_transform_fns";
 
-/// queue 配置。
+/// 队列变换
 #[config_section]
 pub struct QueueConfig {
-    /// 具名队列变换,出现在队列操作菜单的脚本段(数组整体替换)。
+    /// 自定义队列变换，数组整体替换
     transforms: Vec<QueueTransform>,
 }
 
-/// 一个具名队列变换(的展示侧;变换函数本体留在 VM,见模块文档)。
-/// 函数在 daemon 脚本运行时执行(看门狗超时保护,超时/报错只 toast 不改队列)。
+/// 队列变换；函数报错或超时不改队列
 #[config_section]
 #[lua_optional_by_serde]
 #[lua_extra_field(
@@ -30,10 +29,10 @@ pub struct QueueConfig {
     "变换函数,收有序队列与位置上下文,返回新的有序队列"
 )]
 pub struct QueueTransform {
-    /// 菜单快捷字母(单字符)。省略 = 仅导航 + 激活可达;用户项之间后者胜。
+    /// 菜单快捷字母；冲突时后者覆盖
     #[serde(default)]
     key: Option<char>,
 
-    /// 菜单显示名。
+    /// 菜单名称
     label: String,
 }

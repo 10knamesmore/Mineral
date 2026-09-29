@@ -10,160 +10,152 @@ use crate::schema::de;
 /// 封面配置。
 #[config_section]
 pub struct CoverConfig {
-    /// 封面终端图协议:自动探测(含已知不合成图环境的降级)或指定协议。
-    /// Kitty 只在 POSIX shared memory 可用时生效；其他指定协议无视降级信号。
+    /// 封面图像协议；Kitty 需要 POSIX 共享内存
     protocol: CoverProtocolMode,
 
-    /// 单张封面下载 HTTP 超时(秒)。
+    /// 封面下载超时
     http_timeout_secs: u64,
 
-    /// 封面切换去抖(毫秒):列表滚动停稳此时长才准备高清像素与终端成品，期间优先显示真实 preview。
+    /// 高清封面加载防抖
     debounce_ms: u64,
 
-    /// 封面下载并发 worker 数,≥1。
+    /// 下载并发数，至少 1
     download_workers: usize,
 
-    /// 封面终端协议编码并发 worker 数,≥1。
+    /// 编码并发数，至少 1
     encode_workers: usize,
 
-    /// 封面解码的目标像素尺寸；修改后用于后续解码，已缓存图片继续复用。
+    /// 解码目标尺寸，修改不影响已缓存图片
     decode_pixels: CoverDecodePixelsConfig,
 
-    /// kmeans 取色参数(封面派生配色)。
+    /// 封面取色
     kmeans: KmeansConfig,
 
-    /// 缓存预算(磁盘配额 + 三层 RAM 预算)。
+    /// 封面缓存容量
     cache: CoverCacheConfig,
 }
 
-/// 封面解码目标；保持原图比例，选择两轴均达到目标的最低解码档位，小图不放大。
+/// 解码目标尺寸；保持比例，小图不放大
 #[config_section]
 #[derive(typed_builder::TypedBuilder)]
 pub struct CoverDecodePixelsConfig {
-    /// 目标宽度，单位像素，须大于零。
+    /// 目标宽度（像素），须大于 0
     #[lua_type("integer")]
     width: NonZeroU32,
 
-    /// 目标高度，单位像素，须大于零。
+    /// 目标高度（像素），须大于 0
     #[lua_type("integer")]
     height: NonZeroU32,
 }
 
-/// 封面缓存预算(挂在 `CoverConfig` 下)。四档都是 client 进程的旋钮:
-/// 磁盘是跨进程共享的持久文件,三层 RAM 是本进程常驻内存。
+/// 封面缓存预算；可见图片可暂超内存预算
 #[config_section]
 pub struct CoverCacheConfig {
-    /// 磁盘缓存容量上限(字节),保存下载得到的原始压缩字节;可写算式如 `4 * 1024 ^ 3`。
+    /// 原图磁盘容量（字节）
     #[serde(deserialize_with = "de::u64_lossy")]
     disk: u64,
 
-    /// 已准备的高清像素 RAM 预算(字节)。区别于 `disk`(磁盘原始字节):这是按配置尺寸
-    /// 解码的位图。优先逐出最久未显示的封面；当前可见工作集可暂时超额，离屏后回收。
+    /// 高清像素内存容量（字节）
     #[serde(deserialize_with = "de::u64_lossy")]
     image: u64,
 
-    /// 低清 preview RAM 预算(字节)。preview 按图片与目标像素尺寸缓存，高清像素被逐出后
-    /// 仍可在快速滚动时显示；优先逐出未显示的 preview，当前可见工作集可暂时超额。
+    /// 预览图内存容量（字节）
     #[serde(deserialize_with = "de::u64_lossy")]
     preview: u64,
 
-    /// 已编码终端协议 RAM 预算(字节)。
-    /// 保存 Kitty 资源句柄或 Sixel、iTerm2、halfblocks 成品。
-    /// 按成品实际持有的数据记账；优先逐出未显示的成品，当前可见工作集可暂时超额。
+    /// 终端图像内存容量（字节）
     #[serde(deserialize_with = "de::u64_lossy")]
     protocol: u64,
 }
 
-/// 封面终端图协议选择。
+/// 封面图像协议
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum CoverProtocolMode {
-    /// 启动时向终端探测能力自动协商；已知探测穿透但渲染不合成图数据的环境
-    /// (如 zellij)自动降级半块字符,开箱不乱码。
+    /// 自动探测，不支持时使用半块字符
     Auto,
 
-    /// 强制半块字符渲染(任何终端 / multiplexer 都正确,清晰度最低)。
+    /// 半块字符
     Halfblocks,
 
-    /// 使用 kitty graphics protocol；POSIX shared memory 不可用时保留启动协商结果。
+    /// Kitty；无 POSIX 共享内存时沿用自动探测结果
     Kitty,
 
-    /// 强制 sixel。
+    /// Sixel
     Sixel,
 
-    /// 强制 iTerm2 inline 图协议。
+    /// iTerm2
     Iterm2,
 }
 
-/// 全屏切歌封面转场段(挂在 `TuiConfig` 下)。转场期封面以字符半块像素级合成,
-/// 落定后回终端图协议高清渲染。
+/// 全屏封面转场
 #[config_section]
 pub struct CoverTransitionConfig {
-    /// 是否启用(关闭则切歌封面直接换,不做合成转场)。
+    /// 是否启用
     enabled: bool,
 
-    /// 转场样式。
+    /// 转场样式
     style: CoverTransitionStyle,
 
-    /// 转场时长,毫秒。
+    /// 转场时长
     duration_ms: u32,
 
-    /// zoom 样式参数(`style = "zoom"` 时生效)。
+    /// 缩放转场参数
     zoom: ZoomConfig,
 }
 
-/// zoom 转场样式参数(挂在 `CoverTransitionConfig` 下)。
+/// 缩放转场
 #[config_section]
 pub struct ZoomConfig {
-    /// 缩放幅度:旧图放大到此倍数退场,新图从此倍数回缩到 1 落定;1 = 无缩放(等效 fade)。
+    /// 缩放倍数；1 为仅淡入淡出
     scale: f32,
 }
 
-/// 全屏切歌封面转场样式。
+/// 全屏封面转场样式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum CoverTransitionStyle {
-    /// 新旧封面逐像素淡入淡出。
+    /// 淡入淡出
     Fade,
 
-    /// 旧图左移退场,新图自右推入。
+    /// 向左推入
     Slide,
 
-    /// 旧图放大退场,新图自微放大回缩落定。
+    /// 缩放切换
     Zoom,
 }
 
-/// kmeans 取色参数(挂在 `CoverConfig` 下)。
+/// 封面取色
 #[config_section]
 pub struct KmeansConfig {
-    /// 取色前先缩到的采样边长(像素);聚类只看颜色分布,64 足够,调大只费 CPU。
+    /// 采样边长（像素）
     sample_dim: u32,
 
-    /// 提取的色板色数(聚类数 k),≥1;色多层次细、色少更整体。
+    /// 色板颜色数，至少 1
     swatches: usize,
 
-    /// kmeans 随机种子(确定性复现);**必须固定**,否则同一封面每次取色不同、颜色会跳。
+    /// 取色随机种子，固定可复现
     seed: u64,
 
-    /// kmeans 最大迭代次数;封面色块少,库推荐量级即可收敛。
+    /// 最大迭代次数
     max_iter: usize,
 
-    /// 收敛阈值(质心位移 < 此值即停);Lab 空间推荐 5.0。
+    /// 质心位移收敛阈值
     converge: f32,
 
-    /// 明度下限(Lab L,0-100;过滤近黑像素,避免黑背景霸占色板)。
+    /// 明度下限（Lab L，0-100）
     l_min: f32,
 
-    /// 明度上限(Lab L,0-100;过滤近白像素)。
+    /// 明度上限（Lab L，0-100）
     l_max: f32,
 
-    /// 彩度下限 √(a²+b²)(过滤近灰像素;灰底对配色无贡献)。
+    /// 彩度下限（Lab √(a²+b²)）
     chroma_min: f32,
 
-    /// 过滤后有效像素占比低于此(%)则放弃过滤改用全部像素,0-100;保证黑白封面也有色。
+    /// 有效像素最小百分比，不足则取消过滤
     min_valid_pixels_pct: usize,
 }

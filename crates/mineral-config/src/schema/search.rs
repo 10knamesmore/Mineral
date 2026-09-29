@@ -8,60 +8,52 @@ use mineral_model::SearchKind;
 /// 搜索配置。
 #[config_section]
 pub struct SearchConfig {
-    /// 本地过滤搜索(`/`)的行为旋钮。
+    /// 本地过滤搜索
     deep: DeepSearchConfig,
 
-    /// channel 远程搜索两个下拉的白名单。
+    /// 远程搜索
     channel: ChannelSearchConfig,
 }
 
-/// 本地过滤搜索(`/`)的行为旋钮。
+/// 歌单内歌曲搜索
 #[config_section]
 pub struct DeepSearchConfig {
-    /// Playlists 视图搜索是否穿透到歌单内歌曲(总开关)。
+    /// 是否搜索歌单内歌曲
     enabled: bool,
 
-    /// 深度搜索各字段的命中分折扣(字段级独立配置)。
+    /// 搜索字段权重
     weights: DeepWeights,
 
-    /// 深度命中行 Enter 进歌单后,光标是否直接定位到命中歌(`false` = 仍从头看)。
+    /// 进入歌单时定位命中曲
     locate_on_enter: bool,
 }
 
-/// 深度搜索的字段级权重。每项 0~1(越界 clamp),`0` = 该字段不参与匹配。
-///
-/// 歌单最终分 = max(歌单名分, 歌单内最佳歌曲分),
-/// 单曲分 = max(name 权重 × 歌名分, alias 权重 × 别名分, artist 权重 × 艺人分,
-/// album 权重 × 专辑分)。
+/// 字段匹配权重 0-1；0 为不匹配
 #[config_section]
 pub struct DeepWeights {
-    /// 歌名命中分折扣。
+    /// 歌名权重
     name: f32,
 
-    /// 别名(译名 / 副标题)命中分折扣。
+    /// 别名权重
     alias: f32,
 
-    /// 艺人名命中分折扣(多艺人取最高)。
+    /// 艺人名权重
     artist: f32,
 
-    /// 专辑名命中分折扣。
+    /// 专辑名权重
     album: f32,
 }
 
-/// channel 远程搜索两个下拉的白名单。
+/// 远程搜索
 #[config_section]
 pub struct ChannelSearchConfig {
-    /// detail 驻留防抖(毫秒):光标停稳后才请求选中实体详情与封面;
-    /// 避免快速翻列表时为掠过的实体发起 remote 请求。
+    /// 选中项详情加载防抖
     detail_debounce_ms: u64,
 
-    /// source 白名单:列出即暴露、顺序即下拉顺序,未列出的隐藏。
-    /// source 名是开放 string(插件源可写),没加载的名字运行时静默跳过——同一份配置
-    /// 跨机器可移植。空列表 = 消费侧防呆回退全量(按名字典序)。
+    /// 来源及排列顺序；未加载的跳过，空表显示全部
     #[lua_type("mineral.SourceName[]")]
     sources: Vec<String>,
 
-    /// kind 白名单:与各 source 声明的可搜集合求交,保配置顺序。
-    /// 封闭枚举,typo 在加载期报落型告警。空列表 = 消费侧防呆回退全量(各 source 声明序)。
+    /// 搜索类型及顺序；仅显示来源支持项，空表显示全部
     kinds: Vec<SearchKind>,
 }

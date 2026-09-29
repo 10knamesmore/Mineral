@@ -5,23 +5,22 @@
 
 use mineral_config_macros::config_section;
 
-/// 脚本运行时段。
+/// 脚本运行
 #[config_section]
 #[derive(Copy)]
 pub struct ScriptConfig {
-    /// 看门狗:每多少条 Lua VM 指令检查一次墙钟(越小越灵敏、开销越大)。
+    /// 每隔多少指令检查超时
     watchdog_instruction_interval: u32,
 
-    /// 看门狗软阈值(毫秒):回调超过记一次 warn 日志,继续执行。
+    /// 回调告警阈值，超时继续执行
     watchdog_soft_wall_ms: u64,
 
-    /// 看门狗硬阈值(毫秒):回调超过被中断(只杀本次调用,VM 保留)。
+    /// 回调中断阈值，超时终止本次调用
     watchdog_hard_wall_ms: u64,
 
-    /// 同步拦截 hook(`before_stream` / `before_download`)软超时(毫秒):
-    /// 超时未回执按放行处理 + warn,播放 / 下载不被慢 hook 卡住。
+    /// 拦截回调等待上限，超时放行
     hook_timeout_ms: u64,
 
-    /// `mineral.spawn` 子进程并发上限(防脚本 fork 炸);0 = 不限。
+    /// 子进程并发上限；0 为不限
     spawn_max_concurrent: usize,
 }

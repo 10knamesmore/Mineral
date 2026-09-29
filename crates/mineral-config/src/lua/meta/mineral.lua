@@ -1,59 +1,58 @@
 ---@meta
--- Mineral host API 类型 stub(LuaCATS)。随程序分发,供编辑器补全 / 类型检查。
--- 不要 require 本文件,它只供 LSP 读取。
+-- Mineral host API 类型。随程序分发,供编辑器补全 / 类型检查。
 
 ---@class mineral
 mineral = {}
 
---- 事件 / 查询回调里的歌曲
+--- 歌曲信息
 ---@class mineral.Song
----@field id string  全局唯一 id(`namespace:value`,如 "netease:123"),可直接回喂 player API
+---@field id string  全局 ID（namespace:value）
 ---@field title string  歌名
----@field duration_ms integer|nil  时长(毫秒);来源没给 / 本地文件未探时为 nil,运算前需判空
----@field artists string[]  艺术家名列表(主艺人在前;可能为空数组)
----@field album string|nil  专辑名(单曲 / 拿不到为 nil)
----@field cover_url string|nil  封面:远端 = http(s) URL,本地源 = 文件路径;拿不到为 nil
----@field source_url string|nil  原始位置:本地源 = 音频文件路径;远端未缓存为 nil
----@field source string  来源名(如 "netease" / "local")
----@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
+---@field duration_ms integer|nil  曲目时长
+---@field artists string[]  艺人名，主艺人在前
+---@field album string|nil  专辑名
+---@field cover_url string|nil  封面 URL 或本地路径
+---@field source_url string|nil  原始资源路径或 URL
+---@field source string  来源名
+---@field url string|nil  网页分享链接
 
---- 复制模板(context = "playlist")回调里的歌单
+--- 歌单信息
 ---@class mineral.Playlist
----@field id string  全局唯一 id(`namespace:value`)
+---@field id string  全局 ID（namespace:value）
 ---@field name string  歌单名
----@field description string  简介,拿不到为空串
----@field track_count integer  标称曲目数(可能与 #songs 不一致——分页或仅头部加载时)
----@field cover_url string|nil  封面:远端 = http(s) URL;拿不到为 nil
----@field source string  来源名(如 "netease" / "local")
----@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
----@field songs mineral.Song[]  已加载的曲目(client 侧缓存快照;未拉取过为空数组)
+---@field description string  简介，缺失为空串
+---@field track_count integer  总曲目数，可能多于已加载曲目
+---@field cover_url string|nil  封面 URL
+---@field source string  来源名
+---@field url string|nil  网页分享链接
+---@field songs mineral.Song[]  已加载曲目，可能未加载完整
 
---- 复制模板(context = "album")回调里的专辑
+--- 专辑信息
 ---@class mineral.Album
----@field id string  全局唯一 id(`namespace:value`)
+---@field id string  全局 ID（namespace:value）
 ---@field name string  专辑名
----@field artists string[]  艺术家名列表(主艺人在前;可能为空数组)
----@field description string  简介,拿不到为空串
----@field track_count integer|nil  标称曲目数;未知为 nil(轻量投影拿不到,与「真的 0 曲」区分)
----@field cover_url string|nil  封面:远端 = http(s) URL;拿不到为 nil
----@field source string  来源名(如 "netease" / "local")
----@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
----@field songs mineral.Song[]  已加载的曲目(搜索投影常空,下钻详情后填充)
+---@field artists string[]  艺人名，主艺人在前
+---@field description string  简介，缺失为空串
+---@field track_count integer|nil  总曲目数，未知为 nil
+---@field cover_url string|nil  封面 URL
+---@field source string  来源名
+---@field url string|nil  网页分享链接
+---@field songs mineral.Song[]  已加载曲目，可能未加载完整
 
---- 复制模板(context = "artist")回调里的 artist
+--- 艺人信息
 ---@class mineral.Artist
----@field id string  全局唯一 id(`namespace:value`)
+---@field id string  全局 ID（namespace:value）
 ---@field name string  艺名
----@field description string  简介,拿不到为空串
----@field follower_count integer|nil  关注者数;未知为 nil
----@field album_count integer|nil  名下专辑数;拿不到为 nil
----@field song_count integer|nil  名下歌曲数;拿不到为 nil
----@field avatar_url string|nil  头像 URL;拿不到为 nil
----@field source string  来源名(如 "netease" / "local")
----@field url string|nil  网页分享链接(按源声明的模板拼出);源没有网页形态为 nil
----@field songs mineral.Song[]  代表 / 热门曲(未拉取过为空数组)
+---@field description string  简介，缺失为空串
+---@field follower_count integer|nil  关注者数
+---@field album_count integer|nil  专辑数
+---@field song_count integer|nil  歌曲数
+---@field avatar_url string|nil  头像 URL
+---@field source string  来源名
+---@field url string|nil  网页分享链接
+---@field songs mineral.Song[]  代表曲，未加载时为空数组
 
---- 曲目结束原因(与 Rust `TrackFinishedReason` 由守卫测试钉死同步)。
+--- 曲目结束原因
 ---@alias mineral.FinishReason "eof"|"skip"|"error"|"stop"
 
 --- `track_started` 回调的 args。
@@ -70,7 +69,7 @@ mineral = {}
 ---@field song mineral.Song  下载完成的歌
 ---@field path string  落盘路径
 ---@field quality "standard"|"higher"|"exhigh"|"lossless"|"hires"  下载请求档位；hook 可声明替代资源的目录档位
----@field format string|nil  容器格式(如 "flac" / "mp3";拿不到为 nil)
+---@field format string|nil  容器格式
 
 --- `mineral.on` 的合法事件名(字符串枚举;与 Rust 事件墙由守卫测试钉死同步)。
 ---@alias mineral.EventName "track_started"|"track_finished"|"download_completed"
@@ -95,40 +94,37 @@ function mineral.on(event, handler) end
 ---@type table
 mineral.DEFER = {}
 
---- 拦截 ctx 的公共基座(所有拦截点都有);各拦截点的完整 ctx 是它的子类
---- (per-kind `@class` + `mineral.hook` 的 `@overload`,与 `mineral.on` 的
---- per-event args 同一模式——新增拦截点 = 加一个子类 + 一行 overload)。
+--- 拦截回调共用上下文
 ---@class mineral.HookCtx
 ---@field song mineral.Song  触发拦截的歌
 ---@field kind mineral.HookName  拦截点名
 ---@field resolve fun(decision: nil|boolean|mineral.HookReturn): nil  延迟补交裁决(配合返回 DEFER);只认第一次,超时后补交静默丢
 local HookCtx = {}
 
---- `before_stream` 的 ctx:宿主解析出的播放流 + unplayable 信号。
+--- 播放拦截上下文
 ---@class mineral.BeforeStreamCtx: mineral.HookCtx
----@field mode "immediate"|"prefetch"  取流管线的提交点口味,两处各 fire 一次:即时起播前(预算 = `script.hook_timeout_ms`)/ gapless 预取武装前(预算 = 曲尾预取窗口,适合异步跨源搜);简单脚本可无视
----@field url string|nil  原始播放 URL;nil = 宿主没解析出可播 URL(取链失败 / 灰歌)
----@field quality string  向播放来源请求的档位(standard/higher/exhigh/lossless/hires)，无 URL 时仍有值
----@field unplayable boolean  是否无可播 URL(`url == nil` 的便利投影);true 时改写 = 顶入可播流
+---@field mode "immediate"|"prefetch"  即时起播或预取；等待上限分别为 script.hook_timeout_ms、曲尾预取窗口
+---@field url string|nil  播放 URL，解析失败为 nil
+---@field quality string  请求音质，无 URL 时仍有值
+---@field unplayable boolean  是否无可播 URL
 local BeforeStreamCtx = {}
 
---- `before_download` 的 ctx:取到的下载直链。没有 `mode`——提交点口味是
---- 取流管线的概念,下载链路没有这个维度。
+--- 下载拦截上下文
 ---@class mineral.BeforeDownloadCtx: mineral.HookCtx
----@field url string|nil  下载直链;nil = 宿主没解析出直链
----@field quality string  向下载来源请求的档位，无直链时仍有值
----@field unplayable boolean  是否无直链(`url == nil` 的便利投影)
+---@field url string|nil  下载直链，解析失败为 nil
+---@field quality string  请求音质，无直链时仍有值
+---@field unplayable boolean  是否无下载直链
 local BeforeDownloadCtx = {}
 
---- 同步拦截回调的改写返回值(字段全可选,只给要改的)。
+--- 拦截改写结果，只填要改的字段
 ---@class mineral.HookReturn
 ---@field url? string  改写后的 URL
 ---@field quality? string  改写后的音质名
----@field headers? string[][]  改写后的取流请求头,`{{name, value}}` 数组(随顶替的 url 带上其鉴权/防盗链头)
----@field layout? "contiguous"|"chunked"  顶替流的容器布局:分片/自适应容器给 "chunked" 让播放层流式打开(避免起播预扫全片),直链给 "contiguous" 保留 seek;改 url 而不给时默认 "chunked"
----@field bitrate_bps? integer  顶替流的实测码率(bps),纯展示元信息(transport fmt 段);从 `library.song_url` 拿到真值时透传,不给显 0
----@field format? string  顶替流的容器格式名(如 "m4a"/"flac"),纯展示元信息;未知名保留原文
----@field skip? string  跳过本次,值为原因(给了 skip 则忽略其余字段)
+---@field headers? string[][]  请求头，{{name, value}} 数组
+---@field layout? "contiguous"|"chunked"  容器布局；分片用 chunked，直链用 contiguous；改 URL 时省略为 chunked
+---@field bitrate_bps? integer  实际码率，仅供显示
+---@field format? string  容器格式，仅供显示
+---@field skip? string  跳过原因，优先于其他字段
 
 --- 注册同步拦截 hook:daemon 在歌走向「开播」的提交点(`before_stream`,即时起播
 --- 前 / gapless 预取武装前,见 `ctx.mode`)/ 下载写盘前(`before_download`)等待
@@ -193,24 +189,23 @@ function mineral.emit(name, payload) end
 ---@param handler fun(payload: mineral.BusPayload): nil
 function mineral.on_message(name, handler) end
 
---- 按键瞬间 client 正在展示的视图(与 Rust `ViewKind` 由守卫测试钉死同步)。
+--- 按键时所在视图
 ---@alias mineral.ViewKind "playlists"|"tracks"|"queue"|"fullscreen"|"search"
 
 --- 选中歌单的轻量引用。
 ---@class mineral.PlaylistRef
----@field id string  歌单 id(`namespace:value`)
+---@field id string  全局 ID（namespace:value）
 ---@field name string  歌单名
 
---- 动作回调收到的上下文(按键瞬间采集;CLI 等无界面触发面为空表,字段全 nil)。
---- 只携带 daemon 不知道的 client 侧信息;播放器态(音量/进度/队列)用 `mineral.get`。
+--- 动作上下文，界面字段在无界面触发时为 nil
 ---@class mineral.ActionCtx
 ---@field view mineral.ViewKind|nil  按键时所在视图
----@field selected_song mineral.Song|nil  列表光标选中的歌(队列浮层取光标条目)
----@field selected_playlist mineral.PlaylistRef|nil  选中 / 所在的歌单
----@field now_playing mineral.Song|nil  在播的歌(停止态 nil)
----@field selected_loved boolean|nil  选中歌的 ♥ 态(无选中 / 未知为 nil)
----@field search_query string|nil  当前搜索 / 过滤词(空词为 nil)
----@field args string[]  CLI `mineral action <name> <args...>` 的位置实参;TUI 键位触发为空数组
+---@field selected_song mineral.Song|nil  光标选中的歌曲
+---@field selected_playlist mineral.PlaylistRef|nil  选中或所在歌单
+---@field now_playing mineral.Song|nil  当前播放歌曲
+---@field selected_loved boolean|nil  选中歌曲的收藏状态
+---@field search_query string|nil  搜索或过滤词，空词为 nil
+---@field args string[]  CLI 位置参数；按键触发时为空数组
 
 --- 注册具名动作(物理键解耦,多 client 共用触发面)。重名 / 空名报错。
 --- 触发面:TUI `tui.keys.script` 绑键(ctx 带按键上下文)/ CLI `mineral action <name>`(ctx 空表)。
@@ -228,14 +223,14 @@ function mineral.bind(key, handler) end
 --- 可观测属性名(字符串枚举;与 Rust `PropKey` 由守卫测试钉死同步)。
 ---@alias mineral.PropName "player.song"|"player.state"|"player.volume"|"player.position"|"player.mode"|"queue.length"|"terminal"
 
---- 终端 UI 状态(`terminal` 复合属性的值;无 client 在线时整体为 nil)。
+--- 终端状态，无客户端时为 nil
 ---@class mineral.TerminalState
 ---@field rows integer  终端行数
 ---@field cols integer  终端列数
----@field fullscreen boolean  是否处于全屏播放态
----@field focused boolean  终端窗口是否持有输入焦点(终端不支持 focus 事件时恒 true)
+---@field fullscreen boolean  是否全屏播放
+---@field focused boolean  窗口是否聚焦；不支持焦点事件时为 true
 
---- 播放循环模式的蛇形稳定名(与 Rust `PlayMode::script_name` 由守卫测试钉死同步)。
+--- 播放模式
 ---@alias mineral.PlayMode "sequential"|"shuffle"|"repeat_all"|"repeat_one"
 
 --- 播放态。
@@ -342,21 +337,20 @@ function mineral.queue.list(on_songs) end
 ---@param songs mineral.Song[]  新的队列顺序
 function mineral.queue.set(songs) end
 
---- `queue.transforms[].transform` 回调收到的位置上下文(下标 1-based,与队列数组同口径)。
+--- 队列位置，下标从 1 开始
 ---@class mineral.QueueCtx
 ---@field current integer  在播条目的下标
----@field selected integer|nil  发起时的光标下标;无光标概念(脚本主动调用)时为 nil
+---@field selected integer|nil  光标下标，无光标时为 nil
 
---- 歌单的轻量投影(`library.playlists` 出参与 `curate_playlists` 入参共用;
---- 曲目另经 `library.tracks` 拉)。
+--- 歌单摘要，曲目另用 library.tracks 获取
 ---@class mineral.PlaylistBrief
----@field id string  歌单 id(`namespace:value`)
+---@field id string  全局 ID（namespace:value）
 ---@field name string  歌单名
 ---@field track_count integer  曲目数
----@field description string  简介(拿不到为空串)
----@field play_count integer|nil  播放量(拿不到为 nil)
----@field subscriber_count integer|nil  收藏 / 订阅数(拿不到为 nil)
----@field source string  来源名(如 "bilibili";跨源函数里免解析 id)
+---@field description string  简介，缺失为空串
+---@field play_count integer|nil  播放量
+---@field subscriber_count integer|nil  收藏或订阅数
+---@field source string  来源名
 
 ---@class mineral.library
 mineral.library = {}
@@ -381,17 +375,15 @@ function mineral.library.tracks(playlist_id, on_songs) end
 ---@overload fun(query: string, on_songs: fun(songs: mineral.Song[]|nil, err: string|nil): nil): nil
 function mineral.library.search(query, opts, on_songs) end
 
---- 一首歌的可播 URL 投影(`library.song_url` 回调入参)。
---- `url` / `quality` / `headers` / `layout` 与 hook 改写返回值同形,可原样喂给
---- `ctx.resolve(...)` 完成顶入。
+--- 可播资源，可直接用于拦截改写
 ---@class mineral.PlayUrl
----@field song_id string  全限定歌曲 id
+---@field song_id string  全局歌曲 ID
 ---@field url string  可播地址
----@field quality string  本次查询向 playback provider 请求的档位，并非来源返回的实际音质
----@field bitrate_bps integer  实际比特率(bps),拿不到为 0
----@field size integer  文件字节数,拿不到为 0
----@field format string  容器格式(如 "mp3"/"flac"),拿不到为空串
----@field headers string[][]  取流请求头,`{{name, value}}` 数组(空 = 无附加头)
+---@field quality string  请求音质，不代表实际音质
+---@field bitrate_bps integer|nil  实际码率
+---@field size integer|nil  文件大小（字节）
+---@field format string|nil  容器格式
+---@field headers string[][]  请求头，{{name, value}} 数组
 ---@field layout "contiguous"|"chunked"  流容器布局
 
 --- 解析一首歌的可播 URL(异步回调):按 id 的 namespace 走对应源取流。
@@ -439,18 +431,15 @@ mineral.ui = {}
 ---@class mineral.config
 mineral.config = {}
 
---- 一段行内文本 + 样式(文本放位置 1),toast / card 标题 / card body 通用。
---- fg 取主题角色名(随主题落色)或 "#rrggbb" 直给;样式缺省 = 所在语境默认色。
---- align 把同一行的 spans 分成左/中/右三段(`|左段  中段  右段|`),段内按原顺序连排
---- (toast / 卡片标题等非整行语境忽略 align)。
+--- 带样式的行内文本，未指定样式时沿用上下文
 ---@class mineral.Span
 ---@field [1] string  文本内容
----@field fg? "text"|"subtext"|"overlay"|"accent"|"red"|"yellow"|"green"|"peach"|string
----@field bold? boolean
----@field italic? boolean
----@field underline? boolean
----@field dim? boolean
----@field align? "left"|"center"|"right"
+---@field fg? "text"|"subtext"|"overlay"|"accent"|"red"|"yellow"|"green"|"peach"|string 前景色，主题色名或 #rrggbb
+---@field bold? boolean 粗体
+---@field italic? boolean 斜体
+---@field underline? boolean 下划线
+---@field dim? boolean 暗淡
+---@field align? "left"|"center"|"right" 行内分组对齐，仅整行内容生效
 
 --- 推送单行 toast 到 client(同 id 替换不堆叠;多行内容截首行)。
 --- msg 是 `print` 式宽容:任意值经 tostring 显示;**nil 静默跳过**
@@ -485,36 +474,31 @@ function mineral.ui.window_title(text) end
 ---@overload fun(path: string, value: mineral.BusPayload|nil)
 function mineral.config.override(patch) end
 
---- mineral 版本(结构化三分量,与发布版本同步;共享配置做兼容分叉用)。
+--- Mineral 版本
 ---@class mineral.SysVersion
----@field major integer
----@field minor integer
----@field patch integer
+---@field major integer 主版本
+---@field minor integer 次版本
+---@field patch integer 修订版本
 local SysVersion = {}
 
 --- 拼回 `"x.y.z"` 字符串形(日志 / toast 拼串用)。
 ---@return string
 function SysVersion:str() end
 
---- 关键路径(daemon 视角解析;极端环境单项解析失败时该字段为 nil)。
---- 用例:`dofile(mineral.sys.paths.config .. "/lua/my_plugin.lua")` 拆分配置、
---- 往 data 写脚本自己的持久文件、spawn 处理 log。
+--- daemon 所在机器的路径，解析失败为 nil
 ---@class mineral.SysPaths
----@field config string  配置目录(~/.config/mineral)
----@field data string  数据目录(~/.local/share/mineral)
----@field cache string  缓存目录(~/.cache/mineral)
----@field log string  日志文件(<cache>/mineral.log)
----@field socket string  daemon IPC socket 路径
+---@field config string|nil  配置目录(~/.config/mineral)
+---@field data string|nil  数据目录(~/.local/share/mineral)
+---@field cache string|nil  缓存目录(~/.cache/mineral)
+---@field log string|nil  日志文件(<cache>/mineral.log)
+---@field socket string|nil  daemon IPC socket 路径
 
---- host 独有的系统信息(常量,加载时灌入)。时间日期用 Lua 标准库:
---- `os.time()` 实时时间戳、`os.date("*t")` 实时结构化表,不做重复 API。
---- 有意不给 cwd:daemon 的 cwd 取决于谁拉起它,无稳定语义——文件操作用
---- `paths.*`,子进程工作目录用 `mineral.spawn` 的 `opts.cwd`。
+--- 系统信息，加载后不变
 ---@class mineral.sys
----@field name "Mineral"  应用展示名(外部上报 / 通知标题拼串用)
+---@field name "Mineral"  应用名称
 ---@field os "linux"|"macos"  编译目标操作系统
----@field arch string  CPU 架构,如 "x86_64" / "aarch64"
----@field hostname string  主机名(双机共享配置分叉用)
+---@field arch string  CPU 架构
+---@field hostname string|nil  主机名
 ---@field version mineral.SysVersion  mineral 版本
 ---@field paths mineral.SysPaths  关键路径
 mineral.sys = {}

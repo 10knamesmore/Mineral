@@ -16,7 +16,7 @@ pub const CURATE_PLAYLISTS_SOURCE_FNS: &str = "mineral.curate_playlists_source_f
 /// 在 VM named registry 里的键;未声明时为 Nil。
 pub const CURATE_PLAYLISTS_MERGED_FN: &str = "mineral.curate_playlists_merged_fn";
 
-/// 音乐源段聚合。
+/// 音乐来源
 #[config_section]
 #[lua_extra_field(
     "curate_playlists?",
@@ -24,16 +24,16 @@ pub const CURATE_PLAYLISTS_MERGED_FN: &str = "mineral.curate_playlists_merged_fn
     "跨源策展:各源函数跑完、按注册序合并后的列表(条目带 source 字段),可全局排序/交错"
 )]
 pub struct SourcesConfig {
-    /// 网易云源段。
+    /// 网易云音乐
     netease: NeteaseSection,
 
-    /// 哔哩哔哩源段。
+    /// 哔哩哔哩
     bilibili: BilibiliSection,
 
-    /// Mineral 聚合源段(全源收藏投影)。
+    /// 跨源收藏
     mineral: MineralSection,
 
-    /// daemon 本机扫描目录。
+    /// 本地音乐
     local: LocalSection,
 }
 
@@ -53,10 +53,7 @@ impl SourcesConfig {
     }
 }
 
-/// Mineral 聚合源段(全源收藏投影,source = `mineral`)。
-///
-/// 非网络源:没有 timeout / proxy 等网络旋钮(故不走 `#[source_section]`),
-/// 可配徽标色 + 后台补 meta 的节流参数。
+/// 跨源收藏
 #[config_section]
 #[lua_extra_field(
     "curate_playlists?",
@@ -64,32 +61,24 @@ impl SourcesConfig {
     "该源歌单列表的呈现策展(过滤/改名/重排)"
 )]
 pub struct MineralSection {
-    /// 来源徽标色:token 名(随主题联动)或 `"#rrggbb"`(固定色)。
+    /// 来源徽标色
     color: ColorRef,
 
-    /// 后台补 meta 的节流参数(聚合面如何逐步补全 sync 导入的、缺 meta 的收藏)。
+    /// 收藏曲目信息补全
     backfill: BackfillSection,
 }
 
-/// 聚合收藏后台补 meta 的节流参数。
-///
-/// sync 导入的远端红心先只有 id、无 meta,聚合视图重建不出。后台任务逐源(source-neutral:
-/// 按各歌 namespace 走各自 channel 的 `songs_detail`,**不假设它是批量还是逐个**——批量源一次
-/// 调用一个请求,逐个源一次调用内部循环,那是 channel 的事)分块拉详情补 persist,渐进填满。
+/// 收藏曲目信息补全
 #[config_section]
 pub struct BackfillSection {
-    /// 每次 `songs_detail` 调用处理多少 id:聚合面刷新的粒度,也限住单次调用时长。
-    /// **非「请求数」**——请求怎么发是 channel 内部的事(批量 / 逐个)。
+    /// 每批补全歌曲数，不是请求数
     chunk_size: usize,
 
-    /// 并行几个 `songs_detail` 调用(并发上限即节流强度)。无论单次调用内部是一个请求还是
-    /// 多个,同时最多 `max_concurrent` 个在飞;越小越温柔。
+    /// 歌曲详情调用并发数
     max_concurrent: usize,
 }
 
-/// 哔哩哔哩源段。
-///
-/// B站取流 URL(baseUrl)与 API 请求都要带 `Referer`(见 header 通道)。
+/// 哔哩哔哩
 #[source_section]
 #[lua_extra_field(
     "curate_playlists?",
@@ -98,7 +87,7 @@ pub struct BackfillSection {
 )]
 pub struct BilibiliSection {}
 
-/// 网易云源段。
+/// 网易云音乐
 #[source_section]
 #[lua_extra_field(
     "curate_playlists?",
@@ -106,18 +95,18 @@ pub struct BilibiliSection {}
     "该源歌单列表的呈现策展(过滤/改名/重排)"
 )]
 pub struct NeteaseSection {
-    /// 歌单曲目按需加载时的网易请求参数。
+    /// 歌单曲目加载
     playlist_fetch: PlaylistFetchSection,
 }
 
-/// 网易歌单曲目的请求批次；浏览续页和整张加载的触发时机由调用方决定。
+/// 歌单曲目加载
 #[config_section]
 pub struct PlaylistFetchSection {
-    /// 浏览歌单时每批覆盖的 ID 数量，也是单次歌曲详情请求的上限；须大于零。
+    /// 每批歌曲数，须大于 0
     #[lua_type("integer")]
     batch_size: NonZeroUsize,
 
-    /// 同一歌单内并发的歌曲详情请求数；须大于零。
+    /// 同一歌单请求并发数，须大于 0
     #[lua_type("integer")]
     max_concurrent: NonZeroUsize,
 }
@@ -219,7 +208,7 @@ mod tests {
     }
 }
 
-/// 本地来源：daemon 扫描目录，按直接含歌的目录建歌单。
+/// 本地音乐，按直接含歌的目录建歌单
 #[config_section]
 #[lua_extra_field(
     "curate_playlists?",
@@ -227,9 +216,9 @@ mod tests {
     "本地歌单列表的呈现策展"
 )]
 pub struct LocalSection {
-    /// 扫描根目录，接受绝对路径和 ~/，在 daemon 所在机器展开。
+    /// 扫描目录，接受绝对路径和 ~/，按 daemon 所在机器解析
     roots: Vec<PathBuf>,
 
-    /// 来源徽标色。
+    /// 来源徽标色
     color: ColorRef,
 }

@@ -3,32 +3,32 @@
 use mineral_config_macros::{config_section, lua_enum};
 use serde::Deserialize;
 
-/// TUI 窗口标题配置。四态各一套模板:template(播 / 暂共用)、idle、disconnected。
+/// 窗口标题
 #[config_section]
 pub struct WindowTitleConfig {
-    /// 总开关。`false` 时不 push/pop 标题栈，也不发送任何 OSC 标题序列。
+    /// 是否启用
     enabled: bool,
 
-    /// 四态状态图标字形（`StateIcon` 段按当前态解析）。
+    /// 状态图标
     icons: TitleIcons,
 
-    /// 有歌态（播放 / 暂停共用）模板，段顺序即输出顺序。
+    /// 播放及暂停时的模板
     template: Vec<TitleSegment>,
 
-    /// 空闲态（无当前歌）模板。
+    /// 无歌曲时的模板
     idle: Vec<TitleSegment>,
 
-    /// 断连态（失联 daemon）模板。
+    /// 断连时的模板
     disconnected: Vec<TitleSegment>,
 }
 
-/// 四态状态图标字形。默认符号在 `default.lua`；用户部分覆盖经 deep_merge 补全其余。
+/// 状态图标
 #[config_section]
 pub struct TitleIcons {
-    /// 播放中图标（动作图标惯例：按下即暂停）。
+    /// 播放中图标
     playing: String,
 
-    /// 暂停图标（按下即播放）。
+    /// 暂停图标
     paused: String,
 
     /// 空闲图标。
@@ -42,64 +42,61 @@ pub struct TitleIcons {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TitleSegment {
-    /// 当前态的状态图标；字形取自 [`TitleIcons`] 按当前态解析。
+    /// 当前状态图标
     StateIcon {
-        /// `true` = 输出当前态图标字形（后随一个空格）；`false` = 空段，不输出
-        /// （留着以便用户在覆盖模板里临时关掉图标而不改段结构）。
+        /// 是否显示状态图标
         icon: bool,
     },
 
-    /// 取自当前上下文的一个字段，空值时整段（含 prefix/suffix）不输出。
+    /// 上下文字段，空值时连同前后缀隐藏
     Field {
         /// 要引用的字段。
         field: TitleField,
 
-        /// 字段值前的固定文本（省略 = 空）。
+        /// 字段前缀
         #[serde(default)]
         prefix: String,
 
-        /// 字段值后的固定文本（省略 = 空）。
+        /// 字段后缀
         #[serde(default)]
         suffix: String,
 
-        /// 时间字段（`Position` / `Duration`）的渲染格式；非时间字段忽略。
-        /// 省略即 `TimeFormat::Preset(TimePreset::Clock)`——这是段内可选属性的类型语义，
-        /// 非配置默认（用户数组内逐段可选，`default.lua` 填不进来）。
+        /// 时间格式；省略用 clock，非时间字段忽略
         #[serde(default)]
         format: TimeFormat,
     },
 
     /// 字面文本。
     Literal {
-        /// 要输出的固定字符串。
+        /// 固定文本
         text: String,
     },
 }
 
-/// 模板可引用的字段。
+/// 标题可引用字段
 #[lua_enum]
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TitleField {
-    /// 歌名（`Song.name`，必有）。
+    /// 歌名
     Title,
 
-    /// 首个艺人的名字；无艺人时整段折叠。
+    /// 首个艺人名
     Artist,
 
-    /// 专辑名；单曲为 `None` 时整段折叠。
+    /// 专辑名
     Album,
 
-    /// 当前播放进度；按 `format` 渲染，恒输出（0 → `00:00`）。
+    /// 播放进度
     Position,
 
-    /// 当前曲目全长；按 `format` 渲染，为 0（未探出）时整段折叠。
+    /// 曲目时长；未知时隐藏
     Duration,
 
-    /// 来源标签（`Song.source().label()`，如 netease / bilibili）。
+    /// 来源名
     Source,
 
-    /// 当前正在唱的歌词行；无同步 / 时间轴失真 / 无当前行时整段折叠。
+    /// 当前歌词行
     Lyric,
 }
 

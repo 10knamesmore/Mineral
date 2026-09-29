@@ -29,43 +29,43 @@ where
     Ok(map)
 }
 
-/// 采集档位。
+/// 统计采集范围
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StatsLevel {
-    /// 零写入。
+    /// 不采集
     Off,
 
-    /// 播放 + 会话(core 本体)。
+    /// 播放与会话
     Core,
 
-    /// 全谱交互。
+    /// 全部交互
     Full,
 }
 
-/// 搜索词落库模式。
+/// 搜索记录方式
 #[lua_enum]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchQueryMode {
-    /// 原文入库。
+    /// 保留原文
     Raw,
 
-    /// 不可逆散列(保次数 / 去重,丢原文)。
+    /// 仅存散列
     Hashed,
 
-    /// 连搜索行都不记。
+    /// 不记录搜索
     Off,
 }
 
-/// 流水保留策略:Lua `false` = 永久,正整数 = 保留天数。
+/// 保留天数；false 为永久
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetentionDays {
-    /// 永久(盘点跨年,默认)。
+    /// 永久保留
     Forever,
 
-    /// 只保留最近 N 天。
+    /// 最近 N 天
     Days(u32),
 }
 
@@ -130,42 +130,41 @@ where
     }
 }
 
-/// 查询期口径子表(只影响报告计算,不影响落库)。
+/// 报告计算口径，不影响采集
 #[config_section]
 pub struct ReportConfig {
-    /// 有效播放阈值(秒):听不足此秒数的行不计入 top 榜 / 完播率(流水照记)。
+    /// 计入榜单和完播率的最短收听时长
     min_listen_secs: u64,
 
-    /// 各 top 榜长度(CLI `--top` 可再覆盖)。
+    /// 榜单条数，CLI --top 可覆盖
     top_limit: usize,
 }
 
-/// stats 段。
+/// 行为统计
 #[config_section]
 pub struct StatsConfig {
-    /// 采集档位:`off` 零写入 / `core` 播放+会话 / `full` 全谱交互。
+    /// 采集范围
     level: StatsLevel,
 
-    /// 在档位基线上按事件微调(kind 名 → 是否采集);plays / sessions 是 core 本体、
-    /// 校验期拒绝覆盖(见 `deserialize_collect`);未知 kind 名由 daemon 应用时按合法 kind 集警告。
+    /// 按事件开关采集，不能覆盖 plays 和 sessions
     #[serde(deserialize_with = "deserialize_collect")]
     collect: FxHashMap<String, bool>,
 
-    /// 搜索词模式。
+    /// 搜索记录方式
     search_queries: SearchQueryMode,
 
-    /// 完全不落库的来源 name(如 `plugin-dev`)。
+    /// 不采集的来源
     #[serde(deserialize_with = "super::de::string_list")]
     #[lua_type("mineral.SourceName[]")]
     exclude_sources: Vec<String>,
 
-    /// 播放活动间隔超过此值(分钟)切分新收听会话。
+    /// 划分新会话的播放间隔
     session_gap_minutes: u64,
 
-    /// 流水保留天数;`false` = 永久(盘点跨年)。
+    /// 保留天数；false 为永久
     retention_days: RetentionDays,
 
-    /// 查询期口径子表。
+    /// 报告计算口径
     report: ReportConfig,
 }
 

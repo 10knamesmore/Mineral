@@ -54,19 +54,18 @@ pub fn source_section(attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     };
     let shared: syn::FieldsNamed = syn::parse_quote!({
-        /// 单次 API 请求超时(秒)。
+        /// API 请求超时
         timeout_secs: u64,
 
-        /// 代理:`Some(url)` = 代理地址(如 `socks5://127.0.0.1:1080` / `http://...`);
-        /// `None`(Lua `false`)= 不走代理,不接受 `true`。
+        /// 代理 URL；false 为禁用
         #[serde(deserialize_with = "de_proxy")]
         #[lua_type("string|false")]
         proxy: Option<String>,
 
-        /// 到该源的最大并发连接数(`0` = 不限)。
+        /// 连接并发上限；0 为不限
         max_connections: usize,
 
-        /// 来源徽标色:token 名(随主题联动)或 `#rrggbb`(固定品牌色)。
+        /// 来源徽标色
         color: ColorRef,
     });
     let own_fields = std::mem::take(&mut fields.named);

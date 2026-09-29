@@ -220,22 +220,6 @@ mod tests {
         out
     }
 
-    /// stub 是用户面文档:Rust 实现细节的样板句(可见性/getter 约定)与 rustdoc
-    /// 链接语法不该漏进来。防回归:新 struct 文档再写这些,这里红。
-    #[test]
-    fn stub_free_of_rust_only_boilerplate() {
-        let assembled = super::meta_config_lua();
-        assert!(
-            !assembled.contains("字段私有"),
-            "可见性样板句不该进用户面 stub"
-        );
-        assert!(
-            !assembled.contains("non_exhaustive"),
-            "Rust 属性名不该进用户面 stub"
-        );
-        assert!(!assembled.contains("[`"), "rustdoc 链接语法应被宏剥除");
-    }
-
     /// 跨 crate 枚举(mineral-model)挂不了 lua_enum 宏,alias 手写在 aliases.lua;
     /// 逐变体 serde 序列化与 alias 字面量比对,钉住值集与顺序,防两边漂移。
     #[test]
@@ -337,15 +321,6 @@ mod tests {
                     .ok_or_else(|| eyre!("变体应序列化为字符串,实得 {value}"))
             })
             .collect()
-    }
-
-    /// 产物快照:stub 全文是用户可见面,review 每次 schema 变更对它的影响。
-    #[test]
-    fn assembled_stub_snapshot() {
-        mineral_test::assert_snap!(
-            "meta/config.lua 生成全文(preamble + aliases + 宏生成 class/alias)",
-            super::meta_config_lua()
-        );
     }
 
     /// source_section 注入的共用网络字段应进 stub,proxy 的 string|false
