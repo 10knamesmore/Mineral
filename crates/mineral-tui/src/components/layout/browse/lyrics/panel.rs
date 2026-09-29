@@ -8,7 +8,7 @@
 //! 副行不参与 wipe,恒按 muted 样式渲染。
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
@@ -20,6 +20,7 @@ use crate::render::anim::ease_in_out;
 use crate::render::color::{lerp_color, lerp_permille};
 use crate::render::control_press;
 use crate::render::theme::{Ink, Theme};
+use crate::runtime::format::format_ms;
 use crate::runtime::playback::SyncTrust;
 use crate::runtime::state::{AppState, LyricExtra};
 
@@ -74,7 +75,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         draw_fallback(frame, inner, ink);
         return;
     };
-    paint_window(frame, window, theme);
+    paint_window(frame, inner, window, theme);
 }
 
 /// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)× 时间轴信任档。两档同步用
@@ -521,8 +522,16 @@ fn layout_window(inner: Rect, input: WindowInput<'_>) -> WindowLayout<'_> {
     }
 }
 
-/// 绘制可见歌词。
-fn paint_window(frame: &mut Frame<'_>, window: &WindowLayout<'_>, theme: &Theme) {
+/// 歌词随窗口滚动，焦点时间固定在中央光标高度。
+fn paint_window(frame: &mut Frame<'_>, inner: Rect, window: &WindowLayout<'_>, theme: &Theme) {
+    let cursor_y = inner.y + inner.height / 2;
+    let cursor_time = window
+        .ctx
+        .focus
+        .and_then(|index| window.lines.get(index))
+        .and_then(|line| line.time_ms)
+        .map(format_ms)
+        .filter(|text| text.len() + 2 < usize::from(inner.width / 2));
     for row in &window.rows {
         let row_bg = center_bg(frame, row.area);
         let line = render_cell(
@@ -534,7 +543,29 @@ fn paint_window(frame: &mut Frame<'_>, window: &WindowLayout<'_>, theme: &Theme)
             theme,
             row_bg,
         );
-        frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), row.area);
+        frame.render_widget(
+            Paragraph::new(line).alignment(Alignment::Center),
+            cursor_time
+                .as_ref()
+                .filter(|_| row.area.y == cursor_y)
+                .map_or(row.area, |text| {
+                    // 左右等宽留白
+                    #[allow(clippy::as_conversions, reason = "formar_ms has limited length")]
+                    row.area.inner(Margin::new(text.len() as u16 + 2, 0))
+                }),
+        );
+    }
+    if let Some(text) = cursor_time {
+        #[allow(clippy::as_conversions, reason = "formar_ms has limited length")]
+        let width = text.len() as u16;
+        let time_area = Rect::new(inner.right() - width - 1, cursor_y, width, 1);
+        let ink = theme.ink_over(center_bg(frame, time_area));
+        frame.render_widget(
+            Paragraph::new(text)
+                .style(Style::new().fg(ink.strong))
+                .alignment(Alignment::Right),
+            time_area,
+        );
     }
 }
 
