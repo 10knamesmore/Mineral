@@ -254,6 +254,19 @@ impl Timing {
     }
 }
 
+/// terrain 历史快照与推层节奏；暂停时一起冻结。
+#[derive(Clone, Debug, Default)]
+struct TerrainHistory {
+    /// 头部最新，保存推层时的 ADSR 条高；渲染按面板宽度插值。
+    layers: VecDeque<Box<[f32]>>,
+
+    /// 距下次推层的剩余拍数。
+    countdown: u16,
+
+    /// 当前推层在 `terrain.layers` 次循环内的位置，保留跨推层的滚动取整相位。
+    push_phase: usize,
+}
+
 /// 频谱状态:每根条的当前高度 + peak target/hold/弹簧 pos+vel + 色相相位。
 ///
 /// peak 拆两层:`peaks[i]` 是 hold/fall 状态机算出的"目标"高度,`peak_pos[i]`
@@ -295,14 +308,8 @@ pub struct SpectrumState {
     /// 距下次 waterfall 推行的剩余拍数。
     water_countdown: u16,
 
-    /// terrain 历史层(头部最新)。层 = 推层那刻 ADSR 平滑后的条高快照
-    /// (f32,0..=RES)——decay 余韵让相邻层时间连贯,喂真值山脊会碎成条纹。
-    /// 仅 `style = terrain` 时推进;渲染按层长插值读取,层长与面板宽解耦。
-    terrain_hist: VecDeque<Box<[f32]>>,
-
-    /// 距下次 terrain 推层的剩余拍数。渲染经 [`Self::terrain_progress`] 读它做
-    /// 层间滚动插值——地形连续上浮而非整层跳变。
-    terrain_countdown: u16,
+    /// 仅 terrain 风格推进的历史层与滚动节奏。
+    terrain: TerrainHistory,
 
     /// scope 包络历史环(尾部最新,渲染右新左旧)。列 = `scope.column_ms` 毫秒
     /// 音频的 min/max 极值(已乘音量);无新样本(暂停)时冻结不动。
@@ -340,8 +347,7 @@ impl SpectrumState {
             target_bars: Cell::new(DEFAULT_BAR_COUNT),
             water_hist: VecDeque::new(),
             water_countdown: 0,
-            terrain_hist: VecDeque::new(),
-            terrain_countdown: 0,
+            terrain: TerrainHistory::default(),
             wave: VecDeque::new(),
             wave_carry: Vec::new(),
             cfg,
@@ -586,30 +592,35 @@ impl SpectrumState {
 
     /// terrain 推层:按 `terrain.push_ms` 折算的节奏快照当前平滑条高。
     fn push_terrain(&mut self) {
-        if self.terrain_countdown > 0 {
-            self.terrain_countdown -= 1;
+        if self.terrain.countdown > 0 {
+            self.terrain.countdown -= 1;
             return;
         }
-        self.terrain_countdown = self.timing.terrain_push_ticks.saturating_sub(1);
-        self.terrain_hist
+        let layers = (*self.cfg.terrain().layers()).max(1);
+        self.terrain.countdown = self.timing.terrain_push_ticks.saturating_sub(1);
+        self.terrain.push_phase = (self.terrain.push_phase + 1) % layers;
+        self.terrain
+            .layers
             .push_front(self.bars.clone().into_boxed_slice());
-        self.terrain_hist
-            .truncate((*self.cfg.terrain().layers()).max(1));
+        self.terrain.layers.truncate(layers);
     }
 
     /// 渲染侧读:第 `idx` 层 terrain 历史(0 = 最新最前)。超出层数返回 `None`。
     pub(super) fn terrain_layer(&self, idx: usize) -> Option<&[f32]> {
-        self.terrain_hist.get(idx).map(AsRef::as_ref)
+        self.terrain.layers.get(idx).map(AsRef::as_ref)
     }
 
-    /// 渲染侧读:距上次推层的进度(0..1)。渲染用它把所有历史层连续上浮
-    /// `progress × 层距`——推层瞬间新层从最前山脊位置无缝接棒,地形匀速滚动
-    /// 而非每 `terrain.push_ms` 整层跳一格。
+    /// 当前推层在整轮历史中的相位；一轮对应整数点高，可循环而不改变取整节奏。
+    pub(super) fn terrain_scroll_phase(&self) -> usize {
+        self.terrain.push_phase
+    }
+
+    /// 距上次推层的进度(0..1)，与推层相位一起决定所有历史层的公共滚动位移。
     pub(super) fn terrain_progress(&self) -> f32 {
         let ticks = self.timing.terrain_push_ticks.max(1);
         let elapsed = ticks
             .saturating_sub(1)
-            .saturating_sub(self.terrain_countdown);
+            .saturating_sub(self.terrain.countdown);
         f32::from(elapsed) / f32::from(ticks)
     }
 
@@ -821,7 +832,7 @@ mod tests {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
         assert!(s.water_hist.is_empty(), "bars 风格不该推 waterfall 历史");
-        assert!(s.terrain_hist.is_empty(), "bars 风格不该推 terrain 历史");
+        assert!(s.terrain.layers.is_empty(), "bars 风格不该推 terrain 历史");
         Ok(())
     }
 
@@ -886,12 +897,12 @@ mod tests {
         for _ in 0..32 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        let hist_before = s.terrain_hist.clone();
+        let hist_before = s.terrain.layers.clone();
         for _ in 0..32 {
             s.tick(false /*playing*/, 100 /*volume_pct*/, None);
             s.tick(false /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        assert_eq!(s.terrain_hist, hist_before, "暂停期不该推层");
+        assert_eq!(s.terrain.layers, hist_before, "暂停期不该推层");
         Ok(())
     }
 
@@ -934,7 +945,7 @@ mod tests {
         for _ in 0..200 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        assert_eq!(s.terrain_hist.len(), *s.cfg.terrain().layers());
+        assert_eq!(s.terrain.layers.len(), *s.cfg.terrain().layers());
         Ok(())
     }
 
@@ -1048,7 +1059,7 @@ mod tests {
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        assert!(s.terrain_hist.is_empty(), "bars 态不该推层");
+        assert!(s.terrain.layers.is_empty(), "bars 态不该推层");
         let tree = mineral_config::merge_tree(
             mineral_config::default_tree()?,
             serde_json::json!({ "tui": { "spectrum": { "style": "terrain" } } }),
@@ -1059,7 +1070,7 @@ mod tests {
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
-        assert!(!s.terrain_hist.is_empty(), "热更为 terrain 后应开始推层");
+        assert!(!s.terrain.layers.is_empty(), "热更为 terrain 后应开始推层");
         Ok(())
     }
 }

@@ -1,12 +1,10 @@
 //! 山脊地形画法:最前山脊 = 当前 ADSR 平滑条(固定在底部的「现在」),历史层
-//! 按推层进度连续上浮,越旧越高越沉,前景遮挡后景形成纵深(Braille 亚格分辨率
+//! 按公共整数位移同步上浮,越旧越高越沉,前景遮挡后景形成纵深(Braille 亚格分辨率
 //! 画连续轮廓线)。
 //!
-//! 平滑滚动:历史层 k 画在 `base − (k + progress) × 层距`,progress ∈ [0,1) 每拍
-//! 推进;推层瞬间 progress 归零、层序整体 +1,新历史层恰好从最前山脊的位置接棒,
-//! 位置与亮度都连续——山脊匀速向上漂,而非每 `push_ms` 整层跳一格。亮度随深度
-//! 衰减到 `terrain.fade_floor` 保底(远层仍可辨、不隐入衬底),最旧层浮出顶部时
-//! 平滑退场。
+//! 轮廓高度单独取整，再叠加所有历史层共用的整数滚动位移，保持轮廓形状。
+//! 每层以生成时的整数滚动位置为起点，新层从底部接棒；推层不重置取整相位。
+//! 亮度仍按连续深度衰减到 `terrain.fade_floor`。
 //!
 //! 遮挡是画家算法:最前山脊先画并立「地平线」(每 dot 列已画的最高点),更旧的
 //! 层只在地平线之上可见;层内可见性按**本层动笔前**的地平线判定,画完统一压低
@@ -35,7 +33,7 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     let point_w = cols * 2;
     let point_h = rows * 4;
     let layers = (*state.cfg().terrain().layers()).max(1);
-    let base_y = point_h as f32 - 1.0;
+    let base_y = point_h as isize - 1;
     // 顶端色过亮度保底(谱色与氛围背景同源,撞色时山脊融进场里);衬底锚用对实际
     // 背景现算的 faint 档——远层「隐入衬底」的语义 = 贴实际背景,固定 token 在氛围
     // 场 / 亮主题上会反向显眼。采到 Reset 按 base 混合,ANSI 主题回落静态 surface1。
@@ -66,14 +64,18 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     // 最前山脊:当前平滑条,深度 0(最亮),固定在 base。推层那刻的快照即历史层 0,
     // 内容与它一致 → 新层从这里无缝起浮。
     painter.draw_ridge(state.smoothed_bars(), base_y, /*depth*/ 0.0);
-    let lift = (point_h as f32 - 6.0).max(1.0) / layers as f32;
     let progress = state.terrain_progress();
+    let travel = point_h.saturating_sub(6).max(1) as f64;
+    let phase = state.terrain_scroll_phase() as f64;
+    let scroll = ((phase + f64::from(progress)) * travel / layers as f64).floor() as isize;
     for k in 0..layers {
         let Some(layer) = state.terrain_layer(k) else {
             break;
         };
         let depth = k as f32 + progress;
-        painter.draw_ridge(layer, base_y - depth * lift, depth);
+        // 相位循环时两项同减整数 travel；floor 对负起点也保持平移关系。
+        let origin = ((phase - k as f64) * travel / layers as f64).floor() as isize;
+        painter.draw_ridge(layer, base_y + origin - scroll, depth);
     }
     painter.grid.blit(frame.buffer_mut(), area);
 }
@@ -115,12 +117,13 @@ impl RidgePainter {
     /// 画一条山脊轮廓:`data` 插值到 dot 列,基线 `base_y`,亮度随 `depth` 衰减。
     /// 只在当前地平线之上落笔,画完把地平线压到本层轮廓。
     #[allow(clippy::as_conversions)] // 浮点几何 → 点坐标:量级 ≤ 数千,f32 内精确
-    fn draw_ridge(&mut self, data: &[f32], base_y: f32, depth: f32) {
+    fn draw_ridge(&mut self, data: &[f32], base_y: isize, depth: f32) {
         let brightness = depth_brightness(depth, self.layers_f, self.fade_floor);
         let mut prev_y: Option<isize> = None;
         for px in 0..self.point_w {
             let v = sample(data, px, self.point_w);
-            let y = (base_y - v * self.amplitude).round() as isize;
+            let height = (v * self.amplitude).round() as isize;
+            let y = base_y - height;
             // 陡坡补竖直连线,否则轮廓在斜率 > 1 处断成散点。
             let from = prev_y.map_or(y, |p| {
                 if p < y {
