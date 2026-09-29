@@ -16,4 +16,3 @@ mod storage;
 mod tests;
 
 pub use file_cache::{CacheEntryStat, CacheIndex, CacheStats, Evicted};
-pub(crate) use storage::CacheTable;

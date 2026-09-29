@@ -63,3 +63,6 @@ pub use search::SearchKind;
 pub use song::Song;
 pub use source::SourceKind;
 pub use url::MediaUrl;
+
+mod store;
+pub use store::StoreValue;

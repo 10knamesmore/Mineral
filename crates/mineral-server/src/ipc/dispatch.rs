@@ -320,11 +320,11 @@ fn action_failure_kind(error: &crate::notify::ScriptError) -> FailureKind {
 }
 
 /// Classifies persistent KV validation separately from storage failures.
-fn store_failure_kind(error: &mineral_persist::Error) -> FailureKind {
+fn store_failure_kind(error: &crate::persistence::Error) -> FailureKind {
     match error {
-        mineral_persist::Error::ReservedKey { .. } | mineral_persist::Error::NotInteger { .. } => {
-            FailureKind::Invalid
-        }
+        crate::persistence::Error::ReservedKey { .. }
+        | crate::persistence::Error::NamespaceMismatch { .. }
+        | crate::persistence::Error::NotInteger { .. } => FailureKind::Invalid,
         _ => FailureKind::Internal,
     }
 }

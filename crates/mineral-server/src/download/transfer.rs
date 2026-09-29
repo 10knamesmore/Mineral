@@ -406,8 +406,8 @@ fn ensure_not_cancelled(cancellation: &CancellationToken) -> Result<(), Error> {
 mod tests {
     use std::sync::Arc;
 
+    use crate::persistence::ServerStore;
     use mineral_model::{AlbumId, AlbumRef, BitRate, Song, SongId, SourceKind};
-    use mineral_persist::ServerStore;
     use mineral_playback::{PlaybackProvider, PlaybackRegistry};
     use mineral_protocol::DownloadId;
     use mineral_test::mock::{UrlChannel, serve_once};

@@ -63,10 +63,10 @@ pub struct PendingRestore {
 ///   结构化行(顺序不定;主键 = 歌单 id);下标溢出 i64(理论不可达)返回 `Err`。
 pub fn to_rows(
     map: &TrackPosMap,
-) -> Result<Vec<mineral_persist::TrackPosRow>, std::num::TryFromIntError> {
+) -> Result<Vec<crate::persistence::TrackPosRow>, std::num::TryFromIntError> {
     map.iter()
         .map(|(playlist, pos)| {
-            Ok(mineral_persist::TrackPosRow {
+            Ok(crate::persistence::TrackPosRow {
                 playlist: playlist.clone(),
                 song: pos.song_id.clone(),
                 index: u64::try_from(pos.index)?,
@@ -84,7 +84,7 @@ pub fn to_rows(
 /// # Return:
 ///   内存表;下标超出 usize(库损坏)返回 `Err`(调用方降级空表)。
 pub fn from_rows(
-    rows: Vec<mineral_persist::TrackPosRow>,
+    rows: Vec<crate::persistence::TrackPosRow>,
 ) -> Result<TrackPosMap, std::num::TryFromIntError> {
     rows.into_iter()
         .map(|row| {

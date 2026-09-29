@@ -24,7 +24,7 @@ use crate::player::PlayerCore;
 pub(crate) enum FavoriteError {
     /// The local favorite store failed.
     #[error("favorite storage failed")]
-    Store(#[from] mineral_persist::Error),
+    Store(#[from] crate::persistence::Error),
 
     /// The read-then-write toggle produced no transition.
     #[error("favorite toggle did not change state")]
@@ -98,7 +98,7 @@ impl PlayerCore {
         id: &SongId,
         loved: bool,
         actor: mineral_stats::Actor,
-    ) -> Result<(), mineral_persist::Error> {
+    ) -> Result<(), crate::persistence::Error> {
         let ns = id.namespace();
         let changed = {
             let _guard = self.inner.favorites_lock.lock().await;

@@ -2933,7 +2933,6 @@ dependencies = [
  "mineral-media",
  "mineral-model",
  "mineral-paths",
- "mineral-persist",
  "mineral-playback",
  "mineral-protocol",
  "mineral-script",
@@ -3032,8 +3031,8 @@ dependencies = [
  "mineral-channel-core",
  "mineral-log",
  "mineral-model",
- "mineral-persist",
  "mineral-playback",
+ "mineral-server",
  "mineral-test",
  "rustc-hash 2.1.2",
  "sha2 0.10.9",
@@ -3051,13 +3050,8 @@ name = "mineral-channel-mineral"
 version = "0.5.8"
 dependencies = [
  "async-trait",
- "color-eyre",
  "mineral-channel-core",
  "mineral-model",
- "mineral-persist",
- "mineral-test",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -3084,8 +3078,8 @@ dependencies = [
  "mineral-log",
  "mineral-model",
  "mineral-paths",
- "mineral-persist",
  "mineral-playback",
+ "mineral-server",
  "mineral-test",
  "num-bigint",
  "num-traits",
@@ -3130,6 +3124,7 @@ dependencies = [
  "mineral-server",
  "mineral-stats",
  "mineral-test",
+ "mineral-tui",
  "nix",
  "rustc-hash 2.1.2",
  "serde",
@@ -3266,17 +3261,11 @@ dependencies = [
 name = "mineral-persist"
 version = "0.5.8"
 dependencies = [
- "async-trait",
  "color-eyre",
  "mineral-log",
- "mineral-model",
- "mineral-paths",
- "mineral-protocol",
- "mineral-test",
  "parking_lot",
  "rustc-hash 2.1.2",
  "sea-orm",
- "sea-orm-migration",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -3386,6 +3375,8 @@ dependencies = [
  "rand 0.9.4",
  "reqwest",
  "rustc-hash 2.1.2",
+ "sea-orm",
+ "sea-orm-migration",
  "serde",
  "serde_json",
  "tempfile",
@@ -3468,6 +3459,7 @@ version = "0.5.8"
 dependencies = [
  "arboard",
  "arc-swap",
+ "async-trait",
  "base64",
  "chrono",
  "color-eyre",
@@ -3504,6 +3496,8 @@ dependencies = [
  "rand 0.9.4",
  "ratatui",
  "rustc-hash 2.1.2",
+ "sea-orm",
+ "sea-orm-migration",
  "serde",
  "serde_json",
  "smallvec",

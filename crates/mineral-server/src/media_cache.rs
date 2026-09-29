@@ -7,8 +7,9 @@
 
 use std::path::PathBuf;
 
+use crate::persistence::ServerStore;
 use mineral_model::{AudioFormat, BitRate, Song, SongId};
-use mineral_persist::{CacheIndex, ServerStore};
+use mineral_persist::CacheIndex;
 
 use crate::playback_instance::PlaybackInstanceId;
 
@@ -38,7 +39,7 @@ impl MediaCache {
         persist: &ServerStore,
         dir: PathBuf,
         capacity: u64,
-    ) -> Result<Self, mineral_persist::Error> {
+    ) -> Result<Self, crate::persistence::Error> {
         // 清掉上次进程遗留的半截 capture(崩溃 / 被 kill 时没下完、也没 harvest 的 .part)。
         let tmp = dir.join("tmp");
         if tmp.is_dir() {
@@ -253,7 +254,7 @@ fn truncate_bytes(s: &str, max: usize) -> &str {
 mod tests {
     use mineral_model::{AlbumId, AlbumRef, AudioFormat, BitRate, Song, SongId, SourceKind};
 
-    use mineral_persist::ServerStore;
+    use crate::persistence::ServerStore;
 
     use crate::playback_instance::PlaybackInstanceId;
 

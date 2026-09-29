@@ -1,11 +1,11 @@
 //! UI 偏好持久化:跨会话保留的客户端态(歌词副轨档等),落 `tui.db` 的 `ui_prefs` 表。
 //!
-//! 与封面缓存共用同一个 [`ClientStore`] 连接池(双开两个池会在 sqlite 文件锁上互撞);
+//! 与封面缓存共用同一个 [`TuiStore`] 连接池(双开两个池会在 sqlite 文件锁上互撞);
 //! 库不可用时整体降级——不读不存、一切走默认值,不拖垮 TUI。
 
 use std::sync::Arc;
 
-use mineral_persist::ClientStore;
+use crate::persistence::TuiStore;
 
 use crate::runtime::state::LyricExtra;
 use crate::runtime::track_pos::{self, TrackPosMap};
@@ -17,7 +17,7 @@ const LYRIC_EXTRA_KEY: &str = "lyric_extra";
 /// UI 偏好句柄:启动读一次初值,运行时改动 fire-and-forget 落盘。
 pub struct UiPrefs {
     /// 共享的客户端库句柄;`None` = 降级禁用(不读不存)。
-    store: Option<Arc<ClientStore>>,
+    store: Option<Arc<TuiStore>>,
 
     /// 启动时读回的歌词副轨档(禁用 / 读失败 / 脏值 = 默认原文档)。
     initial_lyric_extra: LyricExtra,
@@ -34,7 +34,7 @@ impl UiPrefs {
     ///
     /// # Return:
     ///   就绪句柄(读失败不冒泡,对应偏好落默认值)。
-    pub async fn load(store: Option<Arc<ClientStore>>) -> Self {
+    pub async fn load(store: Option<Arc<TuiStore>>) -> Self {
         let mut initial = LyricExtra::default();
         let mut initial_track_pos = TrackPosMap::default();
         if let Some(s) = &store {
@@ -144,7 +144,7 @@ impl UiPrefs {
 ///
 /// # Return:
 ///   就绪句柄;不可用时 `None`。
-pub async fn open_client_store() -> Option<Arc<ClientStore>> {
+pub async fn open_tui_store() -> Option<Arc<TuiStore>> {
     let db = match mineral_paths::tui_db() {
         Ok(db) => db,
         Err(e) => {
@@ -159,7 +159,7 @@ pub async fn open_client_store() -> Option<Arc<ClientStore>> {
         mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "建 tui.db 目录失败,客户端持久化降级");
         return None;
     }
-    match ClientStore::open(&db).await {
+    match TuiStore::open(&db).await {
         Ok(s) => Some(Arc::new(s)),
         Err(e) => {
             mineral_log::warn!(target: "prefs", error = mineral_log::chain(&e), "打开 tui.db 失败,客户端持久化降级");
@@ -172,7 +172,7 @@ pub async fn open_client_store() -> Option<Arc<ClientStore>> {
 mod tests {
     use std::sync::Arc;
 
-    use mineral_persist::ClientStore;
+    use crate::persistence::TuiStore;
 
     use super::{LYRIC_EXTRA_KEY, UiPrefs};
     use crate::runtime::state::LyricExtra;
@@ -195,7 +195,7 @@ mod tests {
     #[tokio::test]
     async fn load_reads_back_persisted_extra() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let store = Arc::new(ClientStore::open(&dir.path().join("tui.db")).await?);
+        let store = Arc::new(TuiStore::open(&dir.path().join("tui.db")).await?);
         store.set_pref(LYRIC_EXTRA_KEY, "romanization").await?;
         let prefs = UiPrefs::load(Some(Arc::clone(&store))).await;
         assert_eq!(prefs.initial_lyric_extra(), LyricExtra::Romanization);
@@ -221,7 +221,7 @@ mod tests {
         use crate::runtime::track_pos::{TrackPos, TrackPosMap};
 
         let dir = tempfile::tempdir()?;
-        let store = Arc::new(ClientStore::open(&dir.path().join("tui.db")).await?);
+        let store = Arc::new(TuiStore::open(&dir.path().join("tui.db")).await?);
         let prefs = UiPrefs::load(Some(Arc::clone(&store))).await;
         assert!(prefs.initial_track_pos().is_empty(), "未写过应为空表");
 
@@ -254,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn save_then_load_round_trips() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let store = Arc::new(ClientStore::open(&dir.path().join("tui.db")).await?);
+        let store = Arc::new(TuiStore::open(&dir.path().join("tui.db")).await?);
         let prefs = UiPrefs::load(Some(Arc::clone(&store))).await;
         prefs.save_lyric_extra(LyricExtra::Translation);
         // fire-and-forget 的 spawn 需要让出执行;轮询直到写入可见。

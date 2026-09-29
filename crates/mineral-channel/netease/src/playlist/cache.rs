@@ -3,9 +3,8 @@
 //! 版本一致时复用 song_meta，缺失详情由歌单加载模块按请求意图补齐。
 //! 预览的轻请求失败时可以重建旧关系；完整请求不能用旧缓存冒充成功。
 
+use mineral_channel_core::store::{CachedPlaylistEntry, NamespaceStore};
 use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SongId, SourceKind};
-use mineral_persist::{CachedPlaylistEntry, ServerStore};
-use rustc_hash::FxHashMap;
 
 /// 版本比对决策:本地缓存能否直接复用(复用已有 metadata)。纯函数,便于单测。
 ///
@@ -37,13 +36,12 @@ fn cache_is_current(cached: Option<i64>, remote: i64) -> bool {
 /// # Return:
 ///   命中且能重建出至少一条 relation 返回 `Some(Vec<PlaylistEntry>)`,否则 `None`。
 pub async fn try_rebuild_if_current(
-    persist: &ServerStore,
+    persist: &dyn NamespaceStore,
     id: &PlaylistId,
     remote_tut: i64,
     remote_track_ids: &[String],
 ) -> Option<Vec<PlaylistEntry>> {
-    let store = persist.scope(SourceKind::NETEASE);
-    let entry = match store.get_playlist_cache(id).await {
+    let entry = match persist.get_playlist_cache(id).await {
         Ok(Some(e)) => e,
         Ok(None) => return None,
         Err(e) => {
@@ -83,9 +81,11 @@ pub async fn try_rebuild_if_current(
 ///
 /// # Return:
 ///   有缓存且能重建出至少一条 relation 返回 `Some(Vec<PlaylistEntry>)`,否则 `None`。
-pub async fn try_load_stale(persist: &ServerStore, id: &PlaylistId) -> Option<Vec<PlaylistEntry>> {
-    let store = persist.scope(SourceKind::NETEASE);
-    let entry = match store.get_playlist_cache(id).await {
+pub async fn try_load_stale(
+    persist: &dyn NamespaceStore,
+    id: &PlaylistId,
+) -> Option<Vec<PlaylistEntry>> {
+    let entry = match persist.get_playlist_cache(id).await {
         Ok(Some(e)) => e,
         Ok(None) => return None,
         Err(e) => {
@@ -101,7 +101,7 @@ pub async fn try_load_stale(persist: &ServerStore, id: &PlaylistId) -> Option<Ve
     }
 }
 
-/// 按来源批量读取 metadata，再按原 relation 顺序重建；缺失只跳过该 index。
+/// 读取本来源 metadata 后按 relation 重建；外来源引用和缺失资料保留为位置缺口。
 ///
 /// # Params:
 ///   - `persist`: 持久化句柄
@@ -109,24 +109,23 @@ pub async fn try_load_stale(persist: &ServerStore, id: &PlaylistId) -> Option<Ve
 ///
 /// # Return:
 ///   重建出的 relation(保留 index 与顺序);全缺时为空 vec。
-async fn rebuild(persist: &ServerStore, entries: &[CachedPlaylistEntry]) -> Vec<PlaylistEntry> {
-    let mut by_source = FxHashMap::<SourceKind, Vec<SongId>>::default();
-    for entry in entries {
-        by_source
-            .entry(entry.song_id.namespace())
-            .or_default()
-            .push(entry.song_id.clone());
-    }
-    let mut metadata = FxHashMap::default();
-    for (source, ids) in by_source {
-        match persist.scope(source).get_meta_batch(&ids).await {
-            Ok(songs) => metadata.extend(songs),
-            Err(error) => {
-                mineral_log::warn!(target: "netease", source = source.name(), songs = ids.len(),
-                    error = mineral_log::chain(&error), "读取歌单 metadata 批次失败");
-            }
+async fn rebuild(
+    persist: &dyn NamespaceStore,
+    entries: &[CachedPlaylistEntry],
+) -> Vec<PlaylistEntry> {
+    let ids = entries
+        .iter()
+        .filter(|entry| entry.song_id.namespace() == persist.source())
+        .map(|entry| entry.song_id.clone())
+        .collect::<Vec<_>>();
+    let metadata = match persist.get_meta_batch(&ids).await {
+        Ok(songs) => songs,
+        Err(error) => {
+            mineral_log::warn!(target: "netease", source = persist.source().name(), songs = ids.len(),
+                error = mineral_log::chain(&error), "读取歌单 metadata 批次失败");
+            return Vec::new();
         }
-    }
+    };
     entries
         .iter()
         .filter_map(|entry| {
@@ -142,8 +141,9 @@ async fn rebuild(persist: &ServerStore, entries: &[CachedPlaylistEntry]) -> Vec<
 
 #[cfg(test)]
 mod tests {
+    use mineral_channel_core::store::CachedPlaylistEntry;
     use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SongId, SourceKind};
-    use mineral_persist::{CachedPlaylistEntry, ServerStore};
+    use mineral_server::ServerStore;
 
     use super::{cache_is_current, try_load_stale, try_rebuild_if_current};
 
@@ -154,7 +154,7 @@ mod tests {
         name: Option<&str>,
         version: Option<i64>,
         entries: &[PlaylistEntry],
-    ) -> mineral_persist::Result<()> {
+    ) -> Result<(), mineral_server::StoreError> {
         for entry in entries {
             persist
                 .scope(entry.song.source())
@@ -174,9 +174,10 @@ mod tests {
             .await
     }
 
-    /// 批量 metadata 读取不得合并 relation；相同裸 ID 的不同来源也必须独立。
+    /// 来源句柄只能重建自己的歌曲；保留重复 relation 和跳过外来源后的 index 缺口。
     #[tokio::test]
-    async fn batch_rebuild_preserves_duplicates_and_source_identity() -> color_eyre::Result<()> {
+    async fn batch_rebuild_preserves_duplicates_without_reading_foreign_sources()
+    -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
         let persist = ServerStore::open(&dir.path().join("test.db")).await?;
         let id = PlaylistId::new(SourceKind::NETEASE, "555");
@@ -195,12 +196,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         seed_cache(&persist, &id, Some("混源歌单"), Some(700), &entries).await?;
-        let rebuilt = try_load_stale(&persist, &id)
+        let rebuilt = try_load_stale(&persist.scope(SourceKind::NETEASE), &id)
             .await
             .ok_or_else(|| color_eyre::eyre::eyre!("已写入歌单应能重建"))?;
         assert_eq!(
-            rebuilt, entries,
-            "各 relation 的坐标、重复次数与歌曲来源都应保持"
+            rebuilt,
+            entries
+                .into_iter()
+                .filter(|entry| entry.song.source() == SourceKind::NETEASE)
+                .collect::<Vec<_>>(),
+            "只重建当前来源，保留坐标和重复次数"
         );
         Ok(())
     }
@@ -238,7 +243,10 @@ mod tests {
 
         // 远端版本一致,但 trackIds 给出新顺序 3,1,2 → 重建应跟远端
         let remote_ids = vec!["10003".to_owned(), "10001".to_owned(), "10002".to_owned()];
-        let Some(rebuilt) = try_rebuild_if_current(&persist, &id, 700, &remote_ids).await else {
+        let Some(rebuilt) =
+            try_rebuild_if_current(&persist.scope(SourceKind::NETEASE), &id, 700, &remote_ids)
+                .await
+        else {
             return Err(color_eyre::eyre::eyre!("版本一致应命中缓存"));
         };
         let got = rebuilt
@@ -266,7 +274,7 @@ mod tests {
         // 远端版本戳变成 800
         let remote_ids = vec!["10001".to_owned()];
         assert!(
-            try_rebuild_if_current(&persist, &id, 800, &remote_ids)
+            try_rebuild_if_current(&persist.scope(SourceKind::NETEASE), &id, 800, &remote_ids)
                 .await
                 .is_none(),
             "版本变更不得复用旧歌单快照"
@@ -281,9 +289,14 @@ mod tests {
         let persist = ServerStore::open(&dir.path().join("test.db")).await?;
         let id = PlaylistId::new(SourceKind::NETEASE, "999");
         assert!(
-            try_rebuild_if_current(&persist, &id, 1, &["x".to_owned()])
-                .await
-                .is_none(),
+            try_rebuild_if_current(
+                &persist.scope(SourceKind::NETEASE),
+                &id,
+                1,
+                &["x".to_owned()]
+            )
+            .await
+            .is_none(),
             "无缓存应 miss"
         );
         Ok(())
@@ -299,7 +312,7 @@ mod tests {
         let entries = PlaylistEntry::enumerate(songs);
         seed_cache(&persist, &id, Some("我的歌单"), Some(700), &entries).await?;
 
-        let Some(rebuilt) = try_load_stale(&persist, &id).await else {
+        let Some(rebuilt) = try_load_stale(&persist.scope(SourceKind::NETEASE), &id).await else {
             return Err(color_eyre::eyre::eyre!("有缓存应能降级重建"));
         };
         let got = rebuilt
@@ -340,7 +353,7 @@ mod tests {
                 ],
             )
             .await?;
-        let Some(rebuilt) = try_load_stale(&persist, &id).await else {
+        let Some(rebuilt) = try_load_stale(&persist.scope(SourceKind::NETEASE), &id).await else {
             return Err(color_eyre::eyre::eyre!("有剩余 metadata 应能重建"));
         };
         assert_eq!(

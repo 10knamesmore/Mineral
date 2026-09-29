@@ -13,7 +13,6 @@ arc-swap = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-log = { workspace = true }
 mineral-model = { workspace = true }
-mineral-persist = { workspace = true }
 mineral-playback = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -28,6 +27,7 @@ uuid = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
+mineral-server = { workspace = true }
 color-eyre = { workspace = true }
 tempfile = "3"
 mineral-test = { workspace = true }

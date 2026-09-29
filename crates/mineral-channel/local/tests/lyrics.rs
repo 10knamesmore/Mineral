@@ -13,12 +13,12 @@ use lofty::{
 use mineral_channel_core::{MusicChannel, PlaylistLoad};
 use mineral_channel_local::LocalLibrary;
 use mineral_model::{LineKind, LyricLine, Playlist, Song, Word};
-use mineral_persist::ServerStore;
+use mineral_server::ServerStore;
 
 /// Opens the same public library boundary used by the daemon.
 fn open(directory: &Path, store: &ServerStore) -> LocalLibrary {
     LocalLibrary::new(
-        store.clone(),
+        std::sync::Arc::new(store.scope(mineral_model::SourceKind::LOCAL)),
         directory.join("covers"),
         vec![directory.join("music")],
     )

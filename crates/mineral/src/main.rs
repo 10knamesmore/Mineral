@@ -107,7 +107,7 @@ pub(crate) fn serve_blocking() -> Result<()> {
         } = loaded;
         let script = mineral_server::ScriptParts::new(vm, host, cmd_tx, cmd_rx, push_tx, push_rx);
         let persist = open_persist().await;
-        let sources = build_sources(persist.clone(), config.sources())?;
+        let sources = build_sources(&persist, config.sources())?;
         mineral_cli::serve_run(
             mineral_server::SourceBackends::builder()
                 .channels(sources.channels)
@@ -132,7 +132,7 @@ pub(crate) fn serve_blocking() -> Result<()> {
 ///
 /// # Return:
 ///   成功返回启用的句柄,失败或路径解析错误返回 disabled 句柄。
-async fn open_persist() -> mineral_persist::ServerStore {
+async fn open_persist() -> mineral_server::ServerStore {
     match mineral_paths::data_dir() {
         Ok(dir) => {
             if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -141,9 +141,9 @@ async fn open_persist() -> mineral_persist::ServerStore {
                     error = mineral_log::chain(&e),
                     "建数据目录失败,持久化降级"
                 );
-                return mineral_persist::ServerStore::disabled();
+                return mineral_server::ServerStore::disabled();
             }
-            match mineral_persist::ServerStore::open(&dir.join("mineral.db")).await {
+            match mineral_server::ServerStore::open(&dir.join("mineral.db")).await {
                 Ok(p) => p,
                 Err(e) => {
                     mineral_log::warn!(
@@ -151,7 +151,7 @@ async fn open_persist() -> mineral_persist::ServerStore {
                         error = mineral_log::chain(&e),
                         "打开持久化数据库失败,降级 disabled"
                     );
-                    mineral_persist::ServerStore::disabled()
+                    mineral_server::ServerStore::disabled()
                 }
             }
         }
@@ -161,7 +161,7 @@ async fn open_persist() -> mineral_persist::ServerStore {
                 error = mineral_log::chain(&e),
                 "定位数据目录失败,持久化降级"
             );
-            mineral_persist::ServerStore::disabled()
+            mineral_server::ServerStore::disabled()
         }
     }
 }
@@ -198,10 +198,10 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
 /// 不阻塞其他源或 daemon。
 ///
 /// # Params:
-///   - `persist`: 持久化句柄,注入各 channel 供登录状态/统计落盘使用。
+///   - `persist`: 服务端存储；为各 channel 注入固定来源的存储句柄。
 ///   - `sources`: 音乐源段配置。
 fn build_sources(
-    persist: mineral_persist::ServerStore,
+    persist: &mineral_server::ServerStore,
     sources: &mineral_config::SourcesConfig,
 ) -> Result<BuiltSources> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
@@ -209,10 +209,10 @@ fn build_sources(
     // 聚合源(全源收藏投影):纯 persist 投影、无凭证依赖,恒注册。放列表首位,
     // 其歌单列表(本地 SQL)最先就绪,聚合收藏歌单自然排 sidebar 顶部。
     channels.push(Arc::new(mineral_channel_mineral::MineralChannel::new(
-        persist.clone(),
+        Arc::new(persist.clone()),
     )));
     let library = Arc::new(mineral_channel_local::LocalLibrary::new(
-        persist.clone(),
+        Arc::new(persist.scope(mineral_model::SourceKind::LOCAL)),
         mineral_paths::data_dir()?.join("local-covers"),
         sources.local().roots().clone(),
     ));
@@ -271,17 +271,22 @@ fn build_bilibili(bilibili: &mineral_config::BilibiliSection) -> Result<SourcePa
 /// 早返回在构造 `NeteaseConfig` 之前 —— config 注入不改未登录降级路径。
 ///
 /// # Params:
-///   - `persist`: 持久化句柄,传入 channel 供登录状态/统计落盘使用。
+///   - `persist`: 服务端存储；只向网易云注入其来源空间。
 ///   - `netease`: 网易云源段配置(timeout / proxy / 并发)。
 fn build_netease(
-    persist: mineral_persist::ServerStore,
+    persist: &mineral_server::ServerStore,
     netease: &mineral_config::NeteaseSection,
 ) -> Result<Option<SourcePair>> {
     let Some(auth) = load_stored()? else {
         return Ok(None);
     };
     let nc = mineral_cli::netease_config_from(netease);
-    let channel = NeteaseChannel::with_credential(&nc, &auth.music_u, auth.user_id, persist)?;
+    let channel = NeteaseChannel::with_credential(
+        &nc,
+        &auth.music_u,
+        auth.user_id,
+        Some(Arc::new(persist.scope(mineral_model::SourceKind::NETEASE))),
+    )?;
     let concrete = Arc::new(channel);
     let channel: Arc<dyn MusicChannel> = concrete.clone();
     let provider: Arc<dyn PlaybackProvider> = concrete;

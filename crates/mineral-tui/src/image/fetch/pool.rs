@@ -3,11 +3,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::persistence::TuiStore;
 use isahc::HttpClient;
 use isahc::config::Configurable;
 use mineral_config::{CoverConfig, CoverDecodePixelsConfig};
 use mineral_model::{MediaUrl, SourceKind};
-use mineral_persist::{CacheIndex, ClientStore};
+use mineral_persist::CacheIndex;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
@@ -38,7 +39,7 @@ impl CoverFetcher {
     pub(crate) async fn spawn(
         cfg: CoverConfig,
         cover_capacity: u64,
-        store: Option<Arc<ClientStore>>,
+        store: Option<Arc<TuiStore>>,
     ) -> Result<Self, isahc::Error> {
         let (tx, rx) = mpsc::unbounded_channel::<CoverRequest>();
         let client = HttpClient::builder()
@@ -82,7 +83,7 @@ impl CoverFetcher {
     ///
     /// # Return:
     ///   就绪的缓存句柄;不可用时 `None`。
-    async fn open_cache(store: Option<Arc<ClientStore>>, capacity: u64) -> Option<Arc<CacheIndex>> {
+    async fn open_cache(store: Option<Arc<TuiStore>>, capacity: u64) -> Option<Arc<CacheIndex>> {
         let store = store?;
         let dir = match mineral_paths::cover_cache_dir() {
             Ok(dir) => dir,

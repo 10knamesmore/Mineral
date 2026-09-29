@@ -1,199 +1,136 @@
-//! 音频与封面缓存索引的实体读写。
+//! Reads and writes a cache table initialized by its database owner.
 
-use sea_orm::sea_query::OnConflict;
-use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, Schema, Set,
-};
+use sea_orm::sea_query::{self, Alias, Expr, ExprTrait, Iden, OnConflict, Query};
+use sea_orm::{ConnectionTrait, DatabaseConnection, FromQueryResult};
 
-use crate::entity::{audio_cache, cover_cache};
-
-/// 缓存索引的用途，决定存储实体。
+/// Names a cache table without assigning an application-specific purpose.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum CacheTable {
-    /// 音频本体缓存。
-    Audio,
+pub(super) struct CacheTable(pub(super) &'static str);
 
-    /// 封面缓存。
-    Cover,
+/// Columns shared by file-cache indexes.
+#[derive(Iden)]
+enum CacheColumn {
+    /// Cache identity.
+    Key,
+
+    /// Path relative to the cache root.
+    Relpath,
+
+    /// File size in bytes.
+    Bytes,
+
+    /// Logical access clock.
+    LastAccess,
 }
 
-/// 从缓存索引读取的一行。
+/// A persisted file-cache entry.
 #[derive(FromQueryResult)]
 pub(super) struct CacheRow {
-    /// 缓存键。
+    /// Cache identity.
     pub key: String,
 
-    /// 相对缓存根目录的文件路径。
+    /// Path relative to the cache root.
     pub relpath: String,
 
-    /// 文件字节数。
+    /// File size in bytes.
     pub bytes: i64,
 
-    /// 最近访问的逻辑时钟。
+    /// Logical access clock.
     pub last_access: i64,
 }
 
 impl CacheTable {
-    /// 为日志提供稳定的缓存用途名称。
+    /// Returns the table name for queries and diagnostics.
     pub(super) fn name(self) -> &'static str {
-        match self {
-            Self::Audio => "audio_cache",
-            Self::Cover => "cover_cache",
-        }
+        self.0
     }
 
-    /// 建立索引表并载入已有记录。
+    /// Loads existing rows; table creation belongs to the database owner.
     pub(super) async fn load(self, db: &DatabaseConnection) -> crate::Result<Vec<CacheRow>> {
-        let schema = Schema::new(DbBackend::Sqlite);
-        let mut table = match self {
-            Self::Audio => schema.create_table_from_entity(audio_cache::Entity),
-            Self::Cover => schema.create_table_from_entity(cover_cache::Entity),
-        };
-        db.execute(table.if_not_exists())
+        let query = Query::select()
+            .columns([
+                CacheColumn::Key,
+                CacheColumn::Relpath,
+                CacheColumn::Bytes,
+                CacheColumn::LastAccess,
+            ])
+            .from(Alias::new(self.0))
+            .to_owned();
+        CacheRow::find_by_statement(db.get_database_backend().build(&query))
+            .all(db)
             .await
             .map_err(|source| crate::Error::Cache {
-                operation: "create table",
-                table: self.name(),
+                operation: "load rows",
+                table: self.0,
+                key: None,
+                source,
+            })
+    }
+
+    /// Replaces one entry without changing the table schema.
+    pub(super) async fn upsert(self, db: &DatabaseConnection, row: CacheRow) -> crate::Result<()> {
+        let query = Query::insert()
+            .into_table(Alias::new(self.0))
+            .columns([
+                CacheColumn::Key,
+                CacheColumn::Relpath,
+                CacheColumn::Bytes,
+                CacheColumn::LastAccess,
+            ])
+            .values([
+                row.key.clone().into(),
+                row.relpath.into(),
+                row.bytes.into(),
+                row.last_access.into(),
+            ])?
+            .on_conflict(
+                OnConflict::column(CacheColumn::Key)
+                    .update_columns([
+                        CacheColumn::Relpath,
+                        CacheColumn::Bytes,
+                        CacheColumn::LastAccess,
+                    ])
+                    .to_owned(),
+            )
+            .to_owned();
+        db.execute(&query)
+            .await
+            .map_err(|source| crate::Error::Cache {
+                operation: "upsert",
+                table: self.0,
+                key: Some(row.key),
+                source,
+            })?;
+        Ok(())
+    }
+
+    /// Deletes one cache identity.
+    pub(super) async fn delete(self, db: &DatabaseConnection, key: &str) -> crate::Result<()> {
+        db.execute(
+            Query::delete()
+                .from_table(Alias::new(self.0))
+                .and_where(Expr::col(CacheColumn::Key).eq(key)),
+        )
+        .await
+        .map_err(|source| crate::Error::Cache {
+            operation: "delete",
+            table: self.0,
+            key: Some(key.to_owned()),
+            source,
+        })?;
+        Ok(())
+    }
+
+    /// Deletes all entries in this cache table.
+    pub(super) async fn clear(self, db: &DatabaseConnection) -> crate::Result<()> {
+        db.execute(Query::delete().from_table(Alias::new(self.0)))
+            .await
+            .map_err(|source| crate::Error::Cache {
+                operation: "clear",
+                table: self.0,
                 key: None,
                 source,
             })?;
-        Ok(match self {
-            Self::Audio => audio_cache::Entity::find()
-                .into_model::<CacheRow>()
-                .all(db)
-                .await
-                .map_err(|source| crate::Error::Cache {
-                    operation: "load rows",
-                    table: self.name(),
-                    key: None,
-                    source,
-                })?,
-            Self::Cover => cover_cache::Entity::find()
-                .into_model::<CacheRow>()
-                .all(db)
-                .await
-                .map_err(|source| crate::Error::Cache {
-                    operation: "load rows",
-                    table: self.name(),
-                    key: None,
-                    source,
-                })?,
-        })
-    }
-
-    /// 覆盖一条缓存记录，保留具名字段映射。
-    pub(super) async fn upsert(self, db: &DatabaseConnection, row: CacheRow) -> crate::Result<()> {
-        let key = row.key.clone();
-        match self {
-            Self::Audio => {
-                audio_cache::Entity::insert(audio_cache::ActiveModel {
-                    key: Set(row.key),
-                    relpath: Set(row.relpath),
-                    bytes: Set(row.bytes),
-                    last_access: Set(row.last_access),
-                })
-                .on_conflict(
-                    OnConflict::column(audio_cache::Column::Key)
-                        .update_columns([
-                            audio_cache::Column::Relpath,
-                            audio_cache::Column::Bytes,
-                            audio_cache::Column::LastAccess,
-                        ])
-                        .to_owned(),
-                )
-                .exec_without_returning(db)
-                .await
-                .map_err(|source| crate::Error::Cache {
-                    operation: "upsert",
-                    table: self.name(),
-                    key: Some(key.clone()),
-                    source,
-                })?;
-            }
-            Self::Cover => {
-                cover_cache::Entity::insert(cover_cache::ActiveModel {
-                    key: Set(row.key),
-                    relpath: Set(row.relpath),
-                    bytes: Set(row.bytes),
-                    last_access: Set(row.last_access),
-                })
-                .on_conflict(
-                    OnConflict::column(cover_cache::Column::Key)
-                        .update_columns([
-                            cover_cache::Column::Relpath,
-                            cover_cache::Column::Bytes,
-                            cover_cache::Column::LastAccess,
-                        ])
-                        .to_owned(),
-                )
-                .exec_without_returning(db)
-                .await
-                .map_err(|source| crate::Error::Cache {
-                    operation: "upsert",
-                    table: self.name(),
-                    key: Some(key.clone()),
-                    source,
-                })?;
-            }
-        }
-        Ok(())
-    }
-
-    /// 删除指定缓存键。
-    pub(super) async fn delete(self, db: &DatabaseConnection, key: &str) -> crate::Result<()> {
-        match self {
-            Self::Audio => {
-                audio_cache::Entity::delete_by_id(key)
-                    .exec(db)
-                    .await
-                    .map_err(|source| crate::Error::Cache {
-                        operation: "delete",
-                        table: self.name(),
-                        key: Some(key.to_owned()),
-                        source,
-                    })?;
-            }
-            Self::Cover => {
-                cover_cache::Entity::delete_by_id(key)
-                    .exec(db)
-                    .await
-                    .map_err(|source| crate::Error::Cache {
-                        operation: "delete",
-                        table: self.name(),
-                        key: Some(key.to_owned()),
-                        source,
-                    })?;
-            }
-        }
-        Ok(())
-    }
-
-    /// 清空此用途的全部索引记录。
-    pub(super) async fn clear(self, db: &DatabaseConnection) -> crate::Result<()> {
-        match self {
-            Self::Audio => {
-                audio_cache::Entity::delete_many()
-                    .exec(db)
-                    .await
-                    .map_err(|source| crate::Error::Cache {
-                        operation: "clear",
-                        table: self.name(),
-                        key: None,
-                        source,
-                    })?;
-            }
-            Self::Cover => {
-                cover_cache::Entity::delete_many()
-                    .exec(db)
-                    .await
-                    .map_err(|source| crate::Error::Cache {
-                        operation: "clear",
-                        table: self.name(),
-                        key: None,
-                        source,
-                    })?;
-            }
-        }
         Ok(())
     }
 }

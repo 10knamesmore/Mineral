@@ -131,7 +131,7 @@ pub(crate) enum Error {
 
     /// The scanned metadata could not be stored.
     #[error("store local library metadata")]
-    Storage(#[from] mineral_persist::Error),
+    Storage(#[from] mineral_channel_core::store::StoreError),
 
     /// The requested identity is absent from this library's catalog.
     #[error("unknown local song {}", id.qualified())]

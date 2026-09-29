@@ -9,7 +9,7 @@ pub(crate) enum SongStatsError {
 
     /// The favorite status could not be read.
     #[error("favorite status unavailable")]
-    Favorite(#[from] mineral_persist::Error),
+    Favorite(#[from] crate::persistence::Error),
 }
 
 /// Server startup, media integration, or IPC accept failure.

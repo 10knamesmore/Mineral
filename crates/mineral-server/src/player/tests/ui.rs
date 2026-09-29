@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::persistence::ServerStore;
 use mineral_channel_core::MusicChannel;
 use mineral_model::SourceKind;
-use mineral_persist::ServerStore;
 use mineral_protocol::PlayMode;
 use mineral_test::song;
 use pretty_assertions::assert_eq;

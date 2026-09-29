@@ -13,7 +13,6 @@ mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-paths        = { workspace = true }
 mineral-log          = { workspace = true }
-mineral-persist      = { workspace = true }
 mineral-playback     = { workspace = true }
 
 # 配置 struct 约定:builder 构造 + getter 读取
@@ -57,6 +56,7 @@ clap   = { workspace = true }
 qrcode = { workspace = true }
 
 [dev-dependencies]
+mineral-server = { workspace = true }
 color-eyre = { workspace = true }
 mineral-config = { workspace = true }
 # 用 openssl 作为加密的"参考实现",在 tests 里和纯 Rust 实现做 byte-for-byte 比对

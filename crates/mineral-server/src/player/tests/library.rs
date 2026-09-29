@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::persistence::ServerStore;
 use async_trait::async_trait;
 use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
 use mineral_model::{Album, AlbumId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
-use mineral_persist::ServerStore;
 use mineral_test::song;
 use pretty_assertions::assert_eq;
 
@@ -443,9 +443,9 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
             liked_ids: None,
             playlists: None,
         }),
-        Arc::new(mineral_channel_mineral::MineralChannel::new(
+        Arc::new(mineral_channel_mineral::MineralChannel::new(Arc::new(
             persist.clone(),
-        )),
+        ))),
     ];
     let core = core_with_channels(
         channels,
@@ -580,9 +580,9 @@ async fn set_favorite_backfills_missing_meta() -> color_eyre::Result<()> {
     let full = with_name(song("lua1"), "From Detail");
     let channels: Vec<Arc<dyn MusicChannel>> = vec![
         Arc::new(DetailChannel::new(SourceKind::NETEASE, vec![full])),
-        Arc::new(mineral_channel_mineral::MineralChannel::new(
+        Arc::new(mineral_channel_mineral::MineralChannel::new(Arc::new(
             persist.clone(),
-        )),
+        ))),
     ];
     let core = core_with_channels(
         channels,
@@ -629,9 +629,9 @@ async fn meta_backfill_covers_all_sources() -> color_eyre::Result<()> {
     let channels: Vec<Arc<dyn MusicChannel>> = vec![
         Arc::new(DetailChannel::new(SourceKind::NETEASE, vec![n_full])),
         Arc::new(DetailChannel::new(SourceKind::BILIBILI, vec![b_full])),
-        Arc::new(mineral_channel_mineral::MineralChannel::new(
+        Arc::new(mineral_channel_mineral::MineralChannel::new(Arc::new(
             persist.clone(),
-        )),
+        ))),
     ];
     let core = core_with_channels(
         channels,

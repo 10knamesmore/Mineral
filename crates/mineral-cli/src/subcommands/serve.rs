@@ -5,7 +5,7 @@
 //! 2. stale socket 检测(已活 daemon → bail;残留 socket 文件 → 删)
 //! 3. bind + Server::spawn + serve
 
-use mineral_persist::ServerStore;
+use mineral_server::ServerStore;
 use mineral_server::{Server, ServerConfig, SourceBackends, resolve_audio_mode};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};

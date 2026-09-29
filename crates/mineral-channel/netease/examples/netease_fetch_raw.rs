@@ -162,16 +162,11 @@ fn build_channel() -> Result<NeteaseChannel> {
     Ok(match load_stored()? {
         Some(auth) => {
             eprintln!("(用已存登录态 user_id={})", auth.user_id.as_str());
-            NeteaseChannel::with_credential(
-                &cfg,
-                &auth.music_u,
-                auth.user_id,
-                mineral_persist::ServerStore::disabled(),
-            )?
+            NeteaseChannel::with_credential(&cfg, &auth.music_u, auth.user_id, None)?
         }
         None => {
             eprintln!("(未登录:匿名访问,仅公开端点可用;如需登录态请先 channel login)");
-            NeteaseChannel::new(&cfg, mineral_persist::ServerStore::disabled())?
+            NeteaseChannel::new(&cfg, None)?
         }
     })
 }

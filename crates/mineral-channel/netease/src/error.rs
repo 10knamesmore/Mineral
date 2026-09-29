@@ -86,7 +86,7 @@ pub enum Error {
     Storage(
         /// 歌单缓存存储错误。
         #[from]
-        mineral_persist::Error,
+        mineral_channel_core::store::StoreError,
     ),
 
     /// 歌单偏移量无法在本机表示。

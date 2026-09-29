@@ -6,6 +6,7 @@ compile_error!("Windows 暂不支持");
 mod app;
 mod components;
 mod image;
+mod persistence;
 mod player_actions;
 mod render;
 mod runtime;
@@ -13,6 +14,10 @@ mod runtime;
 mod test_support;
 mod tui;
 mod view;
+
+/// Offline maintenance of the TUI cover cache.
+pub mod cache;
+pub use persistence::Error as StoreError;
 
 use std::sync::Arc;
 
@@ -24,7 +29,7 @@ use image::ImageEngine;
 use image::fetch::CoverFetcher;
 use image::graphics::TerminalGraphics;
 use runtime::backend::{Backend, BackendBootstrap, ClientBackend, CompletionQueue};
-use runtime::ui::prefs::{UiPrefs, open_client_store};
+use runtime::ui::prefs::{UiPrefs, open_tui_store};
 use tui::Tui;
 
 /// 启动和运行终端客户端时的失败。
@@ -67,7 +72,7 @@ pub async fn run(
     let cfg = Arc::new(config);
     // tui.db 一次打开,封面缓存索引与 UI 偏好共用一个连接池;打不开整体降级
     // (封面不缓存、偏好不存不读),其余照常。
-    let store = open_client_store().await;
+    let store = open_tui_store().await;
     let ui_prefs = UiPrefs::load(store.clone()).await;
     // 封面 fetcher 起不来(isahc / TLS / 证书)不该拖垮整个 TUI —— 降级到禁用态空跑,
     // 与音频无设备降级 null 模式同理。封面不显示,其余功能照常。

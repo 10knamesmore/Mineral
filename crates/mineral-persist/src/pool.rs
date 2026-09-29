@@ -13,7 +13,7 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 ///
 /// # Return:
 ///   就绪连接池;连接失败返回 `Err`。
-pub(crate) async fn connect(db_path: &Path) -> crate::Result<DatabaseConnection> {
+pub async fn connect(db_path: &Path) -> crate::Result<DatabaseConnection> {
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
     let mut options = ConnectOptions::new(url);
     options.max_connections(/*value*/ 1);

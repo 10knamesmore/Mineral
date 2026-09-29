@@ -9,6 +9,9 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+async-trait = { workspace = true }
 arboard              = { workspace = true }
 arc-swap             = { workspace = true }
 base64               = { workspace = true }

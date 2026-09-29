@@ -101,7 +101,7 @@ async fn main() -> color_eyre::Result<()> {
                 &netease_config(),
                 &auth.music_u,
                 auth.user_id,
-                mineral_persist::ServerStore::disabled(),
+                None,
             )?;
             (ch, CredLevel::StoredJson)
         } else {
@@ -110,20 +110,13 @@ async fn main() -> color_eyre::Result<()> {
                 // 2. 环境变量
                 Some(c) if !c.is_empty() => {
                     println!("凭证: 环境变量 NETEASE_MUSIC_U\n");
-                    let ch = NeteaseChannel::with_cookie(
-                        &netease_config(),
-                        c,
-                        mineral_persist::ServerStore::disabled(),
-                    )?;
+                    let ch = NeteaseChannel::with_cookie(&netease_config(), c, None)?;
                     (ch, CredLevel::EnvCookie)
                 }
                 // 3. 匿名
                 _ => {
                     println!("凭证: 无(匿名)\n");
-                    let ch = NeteaseChannel::new(
-                        &netease_config(),
-                        mineral_persist::ServerStore::disabled(),
-                    )?;
+                    let ch = NeteaseChannel::new(&netease_config(), None)?;
                     (ch, CredLevel::Anonymous)
                 }
             }

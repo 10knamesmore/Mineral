@@ -58,7 +58,7 @@ pub async fn run(cli: NeteaseCli, config: &NeteaseConfig) -> crate::Result<()> {
 
 /// `mineral channel netease login` 的主流程:取 unikey、终端渲染二维码、轮询状态、登录成功后写凭证。
 async fn run_login(config: &NeteaseConfig) -> crate::Result<()> {
-    let channel = NeteaseChannel::new(config, mineral_persist::ServerStore::disabled())?;
+    let channel = NeteaseChannel::new(config, None)?;
     let qr = login_qr_get_key(channel.transport()).await?;
     render_qr(&qr.url)?;
     eprintln!("Waiting for the NetEase app to scan and confirm...");

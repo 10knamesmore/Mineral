@@ -261,8 +261,8 @@ fn is_audio_ext(ext: &str) -> bool {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use crate::persistence::ServerStore;
     use mineral_model::{AlbumId, AlbumRef, AudioFormat, BitRate, Song, SongId, SourceKind};
-    use mineral_persist::ServerStore;
     use mineral_playback::DirectLocator;
     use mineral_protocol::PlaybackOrigin;
 

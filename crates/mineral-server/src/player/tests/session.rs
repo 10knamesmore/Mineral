@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::persistence::ServerStore;
 use mineral_model::SongId;
-use mineral_persist::ServerStore;
 use mineral_protocol::PlayMode;
 use mineral_test::song;
 use parking_lot::Mutex;

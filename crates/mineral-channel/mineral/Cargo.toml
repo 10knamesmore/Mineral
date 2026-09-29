@@ -1,6 +1,6 @@
 [package]
 name        = "mineral-channel-mineral"
-description = "跨源聚合 channel(source = mineral):把 persist 全源收藏投影成 synthetic 歌单"
+description = "Mineral 内建来源的 channel：跨来源收藏歌单视图"
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -11,15 +11,8 @@ rust-version.workspace = true
 [dependencies]
 mineral-model        = { workspace = true }
 mineral-channel-core = { workspace = true }
-mineral-persist      = { workspace = true }
 
 async-trait = { workspace = true }
-
-[dev-dependencies]
-color-eyre = { workspace = true }
-tempfile     = "3"
-tokio        = { workspace = true }
-mineral-test = { workspace = true }
 
 [lints]
 workspace = true

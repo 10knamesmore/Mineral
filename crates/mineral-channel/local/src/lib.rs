@@ -9,8 +9,7 @@ mod scan;
 use std::{path::PathBuf, sync::Arc};
 
 use arc_swap::ArcSwapOption;
-use mineral_model::SourceKind;
-use mineral_persist::ServerStore;
+use mineral_channel_core::store::NamespaceStore;
 use tokio::sync::Mutex;
 
 use catalog::Catalog;
@@ -25,7 +24,7 @@ pub struct LocalLibrary {
     load_lock: Mutex<()>,
 
     /// Shared song metadata storage.
-    persist: ServerStore,
+    persist: Arc<dyn NamespaceStore>,
 
     /// Directory for artwork extracted from audio tags.
     cover_dir: PathBuf,
@@ -43,7 +42,7 @@ impl LocalLibrary {
     ///   - `cover_dir`: Extracted artwork directory, separate from audio downloads/cache.
     ///   - `roots`: Startup root paths, including the `~/` shorthand.
     ///
-    pub fn new(persist: ServerStore, cover_dir: PathBuf, roots: Vec<PathBuf>) -> Self {
+    pub fn new(persist: Arc<dyn NamespaceStore>, cover_dir: PathBuf, roots: Vec<PathBuf>) -> Self {
         Self {
             catalog: ArcSwapOption::empty(),
             load_lock: Mutex::new(()),
@@ -91,10 +90,7 @@ impl LocalLibrary {
             .values()
             .map(|file| &file.song)
             .collect::<Vec<_>>();
-        self.persist
-            .scope(SourceKind::LOCAL)
-            .replace_meta_batch(&songs)
-            .await?;
+        self.persist.replace_meta_batch(&songs).await?;
         Ok(catalog)
     }
 }

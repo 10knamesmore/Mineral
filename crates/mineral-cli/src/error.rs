@@ -25,6 +25,14 @@ pub enum Error {
     #[error(transparent)]
     Persist(#[from] mineral_persist::Error),
 
+    /// Daemon functional storage failed.
+    #[error(transparent)]
+    ServerStore(#[from] mineral_server::StoreError),
+
+    /// TUI storage maintenance failed.
+    #[error(transparent)]
+    TuiStore(#[from] mineral_tui::StoreError),
+
     /// 统计数据存储失败。
     #[error(transparent)]
     Stats(#[from] mineral_stats::Error),

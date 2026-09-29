@@ -180,7 +180,7 @@ fn sniff_ext(bytes: &[u8]) -> &'static str {
 mod tests {
     use std::sync::Arc;
 
-    use mineral_persist::ClientStore;
+    use crate::persistence::TuiStore;
 
     use super::{cached_read, cover_file_name, download, sniff_ext};
     use crate::image::fetch::test_util::{jpeg_bytes, png_bytes, temp_dir};
@@ -207,7 +207,7 @@ mod tests {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir)?;
         let files = dir.join("files");
-        let store = ClientStore::open(&dir.join("cover.db")).await?;
+        let store = TuiStore::open(&dir.join("cover.db")).await?;
         let cache = Arc::new(store.cover_cache(files, 1024 * 1024).await?);
         let key = "http://192.0.2.1/cover.jpg";
         cache

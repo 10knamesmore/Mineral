@@ -9,7 +9,8 @@ use std::time::SystemTime;
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
-use mineral_persist::{CacheStats, PlaylistCacheStats};
+use mineral_persist::CacheStats;
+use mineral_server::PlaylistCacheStats;
 
 /// 占用率进度条格数。
 const BAR_WIDTH: u64 = 10;

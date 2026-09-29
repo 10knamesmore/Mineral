@@ -4,7 +4,6 @@ use std::path::Path;
 
 use sea_orm::DatabaseConnection;
 
-use super::CacheTable;
 use sea_orm::{ConnectOptions, Database};
 
 use super::{CacheIndex, Evicted};
@@ -13,7 +12,25 @@ use super::{CacheIndex, Evicted};
 async fn mem_pool() -> color_eyre::Result<DatabaseConnection> {
     let mut options = ConnectOptions::new("sqlite::memory:");
     options.max_connections(/*value*/ 1);
-    Ok(Database::connect(options).await?)
+    let pool = Database::connect(options).await?;
+    use sea_orm::{
+        ConnectionTrait,
+        sea_query::{Alias, ColumnDef, Table},
+    };
+    pool.execute(
+        Table::create()
+            .table(Alias::new("test_cache"))
+            .col(ColumnDef::new(Alias::new("key")).text().primary_key())
+            .col(ColumnDef::new(Alias::new("relpath")).text().not_null())
+            .col(ColumnDef::new(Alias::new("bytes")).big_integer().not_null())
+            .col(
+                ColumnDef::new(Alias::new("last_access"))
+                    .big_integer()
+                    .not_null(),
+            ),
+    )
+    .await?;
+    Ok(pool)
 }
 
 /// 在 `dir` 下造一个内容为 `data` 的源文件(模拟 capture 落盘),返回其路径。
@@ -28,7 +45,7 @@ fn make_src(dir: &Path, name: &str, data: &[u8]) -> color_eyre::Result<std::path
 async fn record_file_then_get() -> color_eyre::Result<()> {
     let d = tempfile::tempdir()?;
     let root = d.path().join("root");
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
+    let idx = CacheIndex::open(mem_pool().await?, "test_cache", root, Some(1_000_000)).await?;
     let src = make_src(d.path(), "cap.part", b"AUDIO")?;
     idx.record_file("ne:1:exhigh", &src, "netease/exhigh/专辑", "晴天.mp3")
         .await?;
@@ -48,19 +65,14 @@ async fn survives_reopen_without_drop() -> color_eyre::Result<()> {
     let root = d.path().join("root");
     let pool = mem_pool().await?;
     {
-        let idx = CacheIndex::open(
-            pool.clone(),
-            CacheTable::Audio,
-            root.clone(),
-            Some(1_000_000),
-        )
-        .await?;
+        let idx =
+            CacheIndex::open(pool.clone(), "test_cache", root.clone(), Some(1_000_000)).await?;
         let src = make_src(d.path(), "cap.part", b"AUDIO")?;
         idx.record_file("ne:1:exhigh", &src, "netease/exhigh/x", "a.mp3")
             .await?;
         // 不 flush、不 drop 即"重开"(同池模拟进程内换实例;真实是新进程读同文件)。
     }
-    let reopened = CacheIndex::open(pool, CacheTable::Audio, root, Some(1_000_000)).await?;
+    let reopened = CacheIndex::open(pool, "test_cache", root, Some(1_000_000)).await?;
     assert!(
         reopened.get("ne:1:exhigh").is_some(),
         "写穿透后重开应仍命中,无需 Drop flush"
@@ -73,7 +85,7 @@ async fn survives_reopen_without_drop() -> color_eyre::Result<()> {
 async fn drift_is_miss() -> color_eyre::Result<()> {
     let d = tempfile::tempdir()?;
     let root = d.path().join("root");
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
+    let idx = CacheIndex::open(mem_pool().await?, "test_cache", root, Some(1_000_000)).await?;
     let src = make_src(d.path(), "cap.part", b"X")?;
     idx.record_file("k", &src, "sub", "a.mp3").await?;
     let Some(path) = idx.get("k") else {
@@ -90,7 +102,7 @@ async fn evicts_lru_over_capacity() -> color_eyre::Result<()> {
     let d = tempfile::tempdir()?;
     let root = d.path().join("root");
     // 容量 10 字节。
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(10)).await?;
+    let idx = CacheIndex::open(mem_pool().await?, "test_cache", root, Some(10)).await?;
     let first = idx
         .record_file("a", &make_src(d.path(), "a", b"12345")?, "s", "a.bin")
         .await?;
@@ -119,7 +131,7 @@ async fn evicts_lru_over_capacity() -> color_eyre::Result<()> {
 async fn dedups_colliding_name() -> color_eyre::Result<()> {
     let d = tempfile::tempdir()?;
     let root = d.path().join("root");
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
+    let idx = CacheIndex::open(mem_pool().await?, "test_cache", root, Some(1_000_000)).await?;
     idx.record_file("k1", &make_src(d.path(), "a", b"one")?, "s", "T.mp3")
         .await?;
     idx.record_file("k2", &make_src(d.path(), "b", b"two")?, "s", "T.mp3")
@@ -139,7 +151,7 @@ async fn record_path_no_evict() -> color_eyre::Result<()> {
     let root = d.path().join("root");
     std::fs::create_dir_all(root.join("sub"))?;
     tokio::fs::write(root.join("sub/x.flac"), b"BIGFLAC").await?;
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, None).await?;
+    let idx = CacheIndex::open(mem_pool().await?, "test_cache", root, None).await?;
     idx.record("ne:1:lossless", "sub/x.flac", 7).await?;
     assert!(idx.get("ne:1:lossless").is_some());
     Ok(())
@@ -161,7 +173,7 @@ async fn disabled_is_null_object() -> color_eyre::Result<()> {
 async fn clear_removes_everything() -> color_eyre::Result<()> {
     let d = tempfile::tempdir()?;
     let root = d.path().join("root");
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
+    let idx = CacheIndex::open(mem_pool().await?, "test_cache", root, Some(1_000_000)).await?;
     idx.record_file("k", &make_src(d.path(), "a", b"hello")?, "s", "a.bin")
         .await?;
     let removed = idx.clear().await?;
@@ -181,7 +193,7 @@ async fn clear_removes_everything() -> color_eyre::Result<()> {
 async fn snapshot_reports_entries_and_capacity() -> color_eyre::Result<()> {
     let d = tempfile::tempdir()?;
     let root = d.path().join("root");
-    let idx = CacheIndex::open(mem_pool().await?, CacheTable::Audio, root, Some(1_000_000)).await?;
+    let idx = CacheIndex::open(mem_pool().await?, "test_cache", root, Some(1_000_000)).await?;
     idx.record_file("k1", &make_src(d.path(), "a", b"123")?, "s", "a.bin")
         .await?;
     idx.record_file("k2", &make_src(d.path(), "b", b"45")?, "s", "b.bin")
@@ -205,5 +217,20 @@ async fn disabled_snapshot_is_empty() -> color_eyre::Result<()> {
     assert_eq!(snap.capacity, None);
     let removed = idx.clear().await?;
     assert!(removed.entries.is_empty());
+    Ok(())
+}
+
+/// Cache opening must not create application tables behind the owner's migration chain.
+#[tokio::test]
+async fn open_requires_owner_initialized_table() -> color_eyre::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let db = Database::connect("sqlite::memory:").await?;
+    assert!(matches!(
+        CacheIndex::open(db, "missing_cache", directory.path().to_path_buf(), None).await,
+        Err(crate::Error::Cache {
+            operation: "load rows",
+            ..
+        })
+    ));
     Ok(())
 }

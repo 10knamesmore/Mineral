@@ -1,6 +1,6 @@
 [package]
 name        = "mineral-persist"
-description = "本地持久化层：server/client 各自的 sqlite 库门面 + 通用文件缓存索引原语"
+description = "SQLite 连接与通用文件缓存机制"
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -11,20 +11,14 @@ rust-version.workspace = true
 [dependencies]
 thiserror   = { workspace = true }
 sea-orm     = { workspace = true }
-sea-orm-migration = { workspace = true }
-async-trait = { workspace = true }
 tokio       = { workspace = true }
 rustc-hash  = { workspace = true }
 parking_lot = { workspace = true }
-mineral-model    = { workspace = true }
-mineral-paths    = { workspace = true }
 mineral-log      = { workspace = true }
-mineral-protocol = { workspace = true }
 
 [dev-dependencies]
 color-eyre  = { workspace = true }
 tempfile     = "3"
-mineral-test = { workspace = true }
 
 [lints]
 workspace = true

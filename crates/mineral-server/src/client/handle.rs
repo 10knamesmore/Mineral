@@ -254,7 +254,7 @@ impl ClientHandle {
         &self,
         id: &SongId,
         key: &str,
-    ) -> Result<mineral_protocol::StoreValue, mineral_persist::Error> {
+    ) -> Result<mineral_protocol::StoreValue, crate::persistence::Error> {
         self.player
             .persist()
             .scope(id.namespace())
@@ -273,7 +273,7 @@ impl ClientHandle {
         id: &SongId,
         key: &str,
         value: &mineral_protocol::StoreValue,
-    ) -> Result<(), mineral_persist::Error> {
+    ) -> Result<(), crate::persistence::Error> {
         self.player
             .persist()
             .scope(id.namespace())

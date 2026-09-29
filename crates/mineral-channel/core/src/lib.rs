@@ -13,6 +13,8 @@ pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps, render_web_url};
 pub use error::{Error, Result};
 pub use page::{Page, PageResult};
 mod playlist;
+/// Source-scoped storage contracts supplied by the daemon.
+pub mod store;
 pub use playlist::{PlaylistDetail, PlaylistLoad};
 use rustc_hash::FxHashSet;
 

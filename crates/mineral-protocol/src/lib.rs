@@ -23,7 +23,6 @@ mod message;
 mod player;
 mod queue_edit;
 mod session;
-mod store;
 mod wire;
 
 pub use codec::{CodecError, Framed, decode, encode, framed, recv, send};
@@ -43,6 +42,7 @@ pub use message::{
     CopyTemplateCtx, CopyTextFailure, PlayQueueError, QueueContextWire, Request, Response,
     SongStatsWire,
 };
+pub use mineral_model::StoreValue;
 pub use mineral_task::ChannelFetchKindTag;
 pub use player::{
     AdvanceKind, CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
@@ -56,5 +56,4 @@ pub use session::{
     SubscriptionTopic, UpdateEnvelope, UpdatePayload, assembly_limits, fragment_download_detail,
     fragment_player_update,
 };
-pub use store::StoreValue;
 pub use wire::{SocketWire, Wire, WireError, WireSink, WireSource};

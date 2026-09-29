@@ -46,10 +46,10 @@ struct Index {
 
 /// 真实后端(启用态)。
 struct Backend {
-    /// sqlite 连接池(daemon 复用 `mineral.db`;client 自开 `tui.db`)。
+    /// Database connection supplied by the cache owner.
     pool: DatabaseConnection,
 
-    /// 缓存用途，映射到对应的持久化实体。
+    /// Table initialized by the cache owner.
     table: CacheTable,
 
     /// 文件根目录;`relpath` 相对它,`get` 返回 `root.join(relpath)`。
@@ -98,22 +98,23 @@ pub struct CacheEntryStat {
 }
 
 impl CacheIndex {
-    /// 在给定连接池上打开(或新建)一张索引表并载入内存镜像 + 启动对账。
+    /// 载入已有索引表并对账；调用方须先创建 key、relpath、bytes、last_access 列。
     ///
     /// # Params:
     ///   - `pool`: sqlite 连接池(调用方持有 / 复用)
-    ///   - `table`: 缓存用途
+    ///   - `table`: 已初始化的索引表名
     ///   - `root`: 文件根目录
     ///   - `capacity`: 容量上限字节;`None` 不驱逐
     ///
     /// # Return:
-    ///   就绪索引;建表 / 载入失败返回 `Err`(调用方可降级到 [`Self::disabled`])。
-    pub(crate) async fn open(
+    ///   就绪索引;载入失败返回 `Err`(调用方可降级到 [`Self::disabled`])。
+    pub async fn open(
         pool: DatabaseConnection,
-        table: CacheTable,
+        table: &'static str,
         root: PathBuf,
         capacity: Option<u64>,
     ) -> crate::Result<Self> {
+        let table = CacheTable(table);
         let rows = table.load(&pool).await?;
 
         let backend = Backend {

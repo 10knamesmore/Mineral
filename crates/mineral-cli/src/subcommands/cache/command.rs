@@ -4,7 +4,8 @@ use std::io::IsTerminal;
 use std::time::SystemTime;
 
 use clap::Subcommand;
-use mineral_persist::{CacheStats, ClientStore, ServerStore};
+use mineral_persist::CacheStats;
+use mineral_server::ServerStore;
 
 use crate::error::{Error, Result};
 
@@ -76,14 +77,12 @@ async fn status(detail: bool) -> Result<()> {
     let audio = build_audio_input(audio_stats);
     let playlist = persist.playlist_cache_stats().await?;
 
-    let cover_stats = ClientStore::open(&mineral_paths::tui_db()?)
-        .await?
-        .cover_cache(
-            mineral_paths::cover_cache_dir()?,
-            *config.tui().cover().cache().disk(),
-        )
-        .await?
-        .snapshot();
+    let cover_stats = mineral_tui::cache::snapshot(
+        &mineral_paths::tui_db()?,
+        mineral_paths::cover_cache_dir()?,
+        *config.tui().cover().cache().disk(),
+    )
+    .await?;
     let cover = CoverInput {
         count: cover_stats.entries.len(),
         total_bytes: cover_stats.total_bytes,
@@ -118,12 +117,9 @@ async fn clean() -> Result<()> {
         .await?
         .clear()
         .await?;
-    let cover = ClientStore::open(&mineral_paths::tui_db()?)
-        .await?
-        .cover_cache(mineral_paths::cover_cache_dir()?, /*capacity*/ 0)
-        .await?
-        .clear()
-        .await?;
+    let cover =
+        mineral_tui::cache::clear(&mineral_paths::tui_db()?, mineral_paths::cover_cache_dir()?)
+            .await?;
 
     let color = std::io::stdout().is_terminal();
     println!("{}", render::render_clean(&audio, &cover, &playlist, color));

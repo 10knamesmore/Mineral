@@ -9,6 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+mineral-tui = { workspace = true }
 clap                    = { workspace = true }
 thiserror               = { workspace = true }
 comfy-table             = { workspace = true }

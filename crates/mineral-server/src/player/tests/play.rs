@@ -3,9 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::persistence::ServerStore;
 use mineral_channel_core::MusicChannel;
 use mineral_model::{AlbumId, AlbumRef, BitRate, PlaybackMediaInfo, Song, SongId, SourceKind};
-use mineral_persist::ServerStore;
 use mineral_playback::{PlaybackProvider, PlaybackRegistry};
 use mineral_protocol::{PlayCursor, PlaybackOrigin, PlayerVersions};
 use mineral_test::mock::{UrlChannel, serve_once};

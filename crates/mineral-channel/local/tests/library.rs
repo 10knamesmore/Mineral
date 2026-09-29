@@ -6,15 +6,15 @@ use color_eyre::eyre::eyre;
 use mineral_channel_core::{MusicChannel, PlaylistLoad};
 use mineral_channel_local::LocalLibrary;
 use mineral_model::{BitRate, Playlist, Song, SongId, SourceKind};
-use mineral_persist::ServerStore;
 use mineral_playback::{OpenOptions, PlaybackProvider, PlaybackRequest};
+use mineral_server::ServerStore;
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 
 /// Opening another channel instance models a daemon restart without a reload API.
 fn open(directory: &Path, store: &ServerStore) -> LocalLibrary {
     LocalLibrary::new(
-        store.clone(),
+        std::sync::Arc::new(store.scope(mineral_model::SourceKind::LOCAL)),
         directory.join("covers"),
         vec![directory.join("music")],
     )
@@ -249,7 +249,11 @@ async fn unavailable_root_can_be_loaded_later() -> color_eyre::Result<()> {
     let temp = tempfile::tempdir()?;
     let store = ServerStore::open(&temp.path().join("mineral.db")).await?;
     let root = temp.path().join("unmounted");
-    let library = LocalLibrary::new(store, temp.path().join("covers"), vec![root.clone()]);
+    let library = LocalLibrary::new(
+        std::sync::Arc::new(store.scope(SourceKind::LOCAL)),
+        temp.path().join("covers"),
+        vec![root.clone()],
+    );
     let Err(mineral_channel_core::Error::Storage { source }) = library.my_playlists().await else {
         return Err(eyre!("expected local storage failure"));
     };

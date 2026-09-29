@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use isahc::cookies::{Cookie, CookieJar};
+use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
 };
@@ -13,12 +14,12 @@ use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
     SourceKind, UserId,
 };
-use mineral_persist::ServerStore;
 use mineral_playback::{
     DirectPreparedPlayback, Error as PlaybackError, PlaybackProvider, PlaybackRequest,
     PreparedPlayback,
 };
 use rustc_hash::FxHashSet;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{ApiCodeError, Error as NeteaseError};
@@ -36,8 +37,8 @@ pub struct NeteaseChannel {
     /// 当前实例绑定的登录用户 uid;`None` 时 `my_playlists` 返回 `NotSupported`。
     user_id: Option<UserId>,
 
-    /// 本地持久化句柄;降级(`ServerStore::disabled()`)时所有读写 no-op,播放不受影响。
-    persist: ServerStore,
+    /// 本地持久化句柄;未提供时跳过缓存读写。
+    persist: Option<Arc<dyn NamespaceStore>>,
 
     /// 歌单曲目请求批次，在 channel 构造时由来源配置注入。
     playlist: crate::playlist::PlaylistLoader,
@@ -48,8 +49,11 @@ impl NeteaseChannel {
     ///
     /// # Params:
     ///   - `config`: HTTP 客户端配置
-    ///   - `persist`: 持久化句柄;传 [`ServerStore::disabled()`] 可跳过本地落盘
-    pub fn new(config: &NeteaseConfig, persist: ServerStore) -> crate::Result<Self> {
+    ///   - `persist`: 持久化句柄;传 `None` 可跳过本地落盘
+    pub fn new(
+        config: &NeteaseConfig,
+        persist: Option<Arc<dyn NamespaceStore>>,
+    ) -> crate::Result<Self> {
         Ok(Self {
             transport: Transport::new(config)?,
             user_id: None,
@@ -68,11 +72,11 @@ impl NeteaseChannel {
     /// # Params:
     ///   - `config`: HTTP 客户端配置
     ///   - `music_u`: 网易云核心登录 cookie 值
-    ///   - `persist`: 持久化句柄;传 [`ServerStore::disabled()`] 可跳过本地落盘
+    ///   - `persist`: 持久化句柄;传 `None` 可跳过本地落盘
     pub fn with_cookie(
         config: &NeteaseConfig,
         music_u: &str,
-        persist: ServerStore,
+        persist: Option<Arc<dyn NamespaceStore>>,
     ) -> crate::Result<Self> {
         Self::build(config, music_u, None, persist)
     }
@@ -83,12 +87,12 @@ impl NeteaseChannel {
     ///   - `config`: HTTP 客户端配置
     ///   - `music_u`: 网易云核心登录 cookie 值
     ///   - `user_id`: 登录用户 uid(`my_playlists` 内部转发给 `user_playlists`)
-    ///   - `persist`: 持久化句柄;传 [`ServerStore::disabled()`] 可跳过本地落盘
+    ///   - `persist`: 持久化句柄;传 `None` 可跳过本地落盘
     pub fn with_credential(
         config: &NeteaseConfig,
         music_u: &str,
         user_id: UserId,
-        persist: ServerStore,
+        persist: Option<Arc<dyn NamespaceStore>>,
     ) -> crate::Result<Self> {
         Self::build(config, music_u, Some(user_id), persist)
     }
@@ -104,7 +108,7 @@ impl NeteaseChannel {
         config: &NeteaseConfig,
         music_u: &str,
         user_id: Option<UserId>,
-        persist: ServerStore,
+        persist: Option<Arc<dyn NamespaceStore>>,
     ) -> crate::Result<Self> {
         let jar = CookieJar::new();
         let url = "https://music.163.com"
@@ -340,7 +344,7 @@ impl MusicChannel for NeteaseChannel {
         load: mineral_channel_core::PlaylistLoad,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
         self.playlist
-            .load(&self.transport, &self.persist, id, load)
+            .load(&self.transport, self.persist.as_deref(), id, load)
             .await
             .map_err(map_err)
     }
@@ -462,7 +466,6 @@ impl PlaybackProvider for NeteaseChannel {
 mod tests {
     use mineral_channel_core::{Error, MusicChannel};
     use mineral_model::{SongId, SourceKind};
-    use mineral_persist::ServerStore;
 
     use crate::NeteaseChannel;
     use crate::config::NeteaseConfig;
@@ -519,7 +522,7 @@ mod tests {
             .proxy(None)
             .timeout_secs(100)
             .build();
-        let channel = NeteaseChannel::new(&config, ServerStore::disabled())?;
+        let channel = NeteaseChannel::new(&config, None)?;
 
         assert!(
             matches!(channel.liked_song_ids().await, Err(Error::NotSupported)),

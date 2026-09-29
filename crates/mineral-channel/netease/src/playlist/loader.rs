@@ -1,9 +1,9 @@
 //! 网易歌单按需加载：浏览逐批检查身份，整张操作分批补齐所有缺失详情。
 
 use futures_util::{StreamExt, stream};
+use mineral_channel_core::store::{CachedPlaylistEntry, NamespaceStore};
 use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
 use mineral_model::{Playlist, PlaylistId, Song, SongId, SourceKind};
-use mineral_persist::{CachedPlaylistEntry, ServerStore};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::PlaylistFetchConfig;
@@ -35,7 +35,7 @@ impl PlaylistLoader {
     pub(crate) async fn load(
         &self,
         transport: &Transport,
-        persist: &ServerStore,
+        persist: Option<&dyn NamespaceStore>,
         id: &PlaylistId,
         intent: PlaylistLoad,
     ) -> crate::Result<PlaylistDetail> {
@@ -58,7 +58,7 @@ impl PlaylistLoader {
 /// 从最新歌单顺序生成结果；完整请求失败时保留已写入的批次，供下次补拉复用。
 async fn fetch(
     transport: &Transport,
-    persist: &ServerStore,
+    persist: Option<&dyn NamespaceStore>,
     config: &PlaylistFetchConfig,
     id: &PlaylistId,
     intent: PlaylistLoad,
@@ -67,7 +67,8 @@ async fn fetch(
         Ok(result) => result.playlist,
         Err(error) => {
             if intent == PlaylistLoad::Preview
-                && let Some(entries) = cache::try_load_stale(persist, id).await
+                && let Some(store) = persist
+                && let Some(entries) = cache::try_load_stale(store, id).await
             {
                 mineral_log::warn!(target: "netease", playlist = %id, error = mineral_log::chain(&error),
                     "歌单预览使用旧缓存，完整性未确认");
@@ -96,9 +97,12 @@ async fn fetch(
         .iter()
         .map(|track| track.id.to_string())
         .collect::<Vec<_>>();
-    let cached = cache::try_rebuild_if_current(persist, id, meta.track_update_time, &order)
-        .await
-        .unwrap_or_default();
+    let cached = match persist {
+        Some(store) => cache::try_rebuild_if_current(store, id, meta.track_update_time, &order)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
     let mut songs = cached
         .into_iter()
         .map(|entry| (entry.song.id.clone(), entry.song))
@@ -127,15 +131,15 @@ async fn fetch(
             song_id: song_id.clone(),
         })
         .collect::<Vec<_>>();
-    let scope = persist.scope(SourceKind::NETEASE);
-    if let Err(error) = scope
-        .put_playlist_cache(
-            id,
-            Some(&meta.name),
-            Some(meta.track_update_time),
-            &relations,
-        )
-        .await
+    if let Some(scope) = persist
+        && let Err(error) = scope
+            .put_playlist_cache(
+                id,
+                Some(&meta.name),
+                Some(meta.track_update_time),
+                &relations,
+            )
+            .await
     {
         mineral_log::warn!(target: "netease", playlist = %id, error = mineral_log::chain(&error), "写入歌单身份顺序失败");
     }
@@ -169,7 +173,9 @@ async fn fetch(
                 "部分歌单身份未返回歌曲详情，保留原始位置缺口");
         }
         let refs = fetched.iter().collect::<Vec<_>>();
-        if let Err(error) = scope.upsert_meta_batch(&refs).await {
+        if let Some(scope) = persist
+            && let Err(error) = scope.upsert_meta_batch(&refs).await
+        {
             mineral_log::warn!(target: "netease", playlist = %id, batch, error = mineral_log::chain(&error), "缓存歌单歌曲详情失败");
         }
         songs.extend(fetched.into_iter().map(|song| (song.id.clone(), song)));

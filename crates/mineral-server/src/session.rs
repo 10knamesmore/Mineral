@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use mineral_persist::SessionSnapshot;
+use crate::persistence::SessionSnapshot;
 
 use crate::player::PlayerCore;
 
@@ -57,7 +57,7 @@ impl PlayerCore {
     ///   上次会话;无历史 / 降级 persist 返回 `Ok(None)`。
     pub(crate) async fn load_session(
         &self,
-    ) -> Result<Option<SessionSnapshot>, mineral_persist::Error> {
+    ) -> Result<Option<SessionSnapshot>, crate::persistence::Error> {
         self.inner.persist.session().load().await
     }
 
