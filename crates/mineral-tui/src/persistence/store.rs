@@ -329,7 +329,9 @@ mod tests {
             index: 4,
             screen_row: 2,
         };
-        store.replace_track_positions(&[position.clone()]).await?;
+        store
+            .replace_track_positions(std::slice::from_ref(&position))
+            .await?;
         let cache = store.cover_cache(root.clone(), 1000).await?;
         cache
             .put_bytes("cover", b"image", "album", "cover.jpg")
