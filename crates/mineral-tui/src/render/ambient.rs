@@ -362,7 +362,8 @@ fn rate_f32(sample_rate: u32) -> f32 {
 ///
 /// 每 cell:各锚点按高斯权重混色(权重归一 `Σw·c / Σw`)→ 按浓度从底色向场色走
 /// → 距屏心越远越向底色收敛(暗角,保边缘区文字可读)。锚点位置 = 锚位 + 摆幅 ×
-/// 漂移时钟正弦;锚点颜色随轮转相位沿色带流动。锚点色一帧算一次,逐 cell 只做权重混合。
+/// 漂移时钟正弦;锚点颜色随轮转相位沿色带流动。锚点色与两轴高斯权重每帧预计算,
+/// 逐 cell 将横纵权重相乘后混色。
 ///
 /// # Params:
 ///   - `area`: 铺场区域(整屏;宽高任一为 0 直接返回)
@@ -446,8 +447,22 @@ pub fn render(
     let veil_span = (vignette.outer() - veil_inner).max(1e-3);
     let sigma = (cfg.sigma() * (1.0 + boost(*depth.sigma()))).max(1e-3);
     let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
+    let horizontal_weights = gaussian_axis_weights(
+        area.width,
+        blobs.iter().map(|blob| blob.x),
+        inv_two_sigma_sq,
+    );
+    let vertical_weights = gaussian_axis_weights(
+        area.height,
+        blobs.iter().map(|blob| blob.y),
+        inv_two_sigma_sq,
+    );
     for cy in 0..area.height {
         let ny = (f32::from(cy) + 0.5) / grid_h;
+        let row_weights = vertical_weights
+            .iter()
+            .skip(usize::from(cy))
+            .step_by(usize::from(area.height));
         for cx in 0..area.width {
             if skip.is_some_and(|hole| {
                 hole.contains(ratatui::layout::Position::new(area.x + cx, area.y + cy))
@@ -456,15 +471,20 @@ pub fn render(
             }
             let nx = (f32::from(cx) + 0.5) / grid_w;
             let (mut wsum, mut r, mut g, mut b) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
-            for blob in &blobs {
-                let (dx, dy) = (nx - blob.x, ny - blob.y);
-                let w = (-(dx * dx + dy * dy) * inv_two_sigma_sq).exp();
+            let column_weights = horizontal_weights
+                .iter()
+                .skip(usize::from(cx))
+                .step_by(usize::from(area.width));
+            for ((blob, horizontal), vertical) in
+                blobs.iter().zip(column_weights).zip(row_weights.clone())
+            {
+                let w = horizontal * vertical;
                 wsum += w;
                 r += blob.r * w;
                 g += blob.g * w;
                 b += blob.b * w;
             }
-            // exp 无零点故有锚点时 wsum 恒正;空锚点表 / 极端下溢退底色。
+            // 空锚点表 / 权重下溢时退底色。
             let field = if wsum > f32::MIN_POSITIVE {
                 (r / wsum, g / wsum, b / wsum)
             } else {
@@ -484,6 +504,25 @@ pub fn render(
             }
         }
     }
+}
+
+/// 按格子中心预计算单轴高斯权重;每个锚点连续存放 `cell_count` 项。
+///
+/// `centers` 为本帧锚点在该轴的屏幕相对坐标,与渲染遍历锚点的顺序一致。
+fn gaussian_axis_weights(
+    cell_count: u16,
+    centers: impl ExactSizeIterator<Item = f32>,
+    inv_two_sigma_sq: f32,
+) -> Vec<f32> {
+    let mut weights = Vec::with_capacity(centers.len() * usize::from(cell_count));
+    let grid_size = f32::from(cell_count);
+    for center in centers {
+        for cell in 0..cell_count {
+            let distance = (f32::from(cell) + 0.5) / grid_size - center;
+            weights.push((-(distance * distance) * inv_two_sigma_sq).exp());
+        }
+    }
+    weights
 }
 
 /// 从渲染色提取 sRGB 分量:氛围场要做颜色数学,仅真彩 `Color::Rgb` 可用
