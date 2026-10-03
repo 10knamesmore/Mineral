@@ -3,6 +3,7 @@
 //! 只持状态;操作它的方法(切档、滚动、回锚)因要跨读 playback/fullscreen/配置,
 //! 留在组合根([`AppState`](crate::runtime::state::AppState))。
 
+use crate::components::layout::browse::lyrics::LyricColors;
 use crate::render::control_press::ControlPress;
 use mineral_model::SongId;
 
@@ -17,6 +18,9 @@ pub struct LyricView {
     /// 切换副歌词时，面板按键提示的底色反馈。
     pub(crate) extra_press: ControlPress,
 
+    /// 两种面板中原文字词的颜色动画，跨播放状态变化保留当前显示色。
+    pub(crate) colors: LyricColors,
+
     /// 全屏歌词手动滚动的「脱离播放」态;`None` = 附着态(渲染跟随播放,逐行时间驱动平滑)。
     pub(crate) scroll: Option<LyricGlide>,
 
@@ -30,6 +34,7 @@ impl LyricView {
         Self {
             extra: LyricExtra::None,
             extra_press: ControlPress::default(),
+            colors: LyricColors::default(),
             scroll: None,
             scroll_song: None,
         }

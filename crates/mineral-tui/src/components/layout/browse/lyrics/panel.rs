@@ -1,11 +1,11 @@
 //! Lyrics 面板:按 [`crate::runtime::state::AppState::current_lines`] 渲染当前行 + 邻近行,
 //! 当前行高亮居中,上下各若干行 dim。无歌词时 fallback "♪ no lyrics"。
 //!
-//! 有逐字歌词时,中心行走字级 wipe 渲染:已唱的字亮入 accent + Bold,
-//! 未唱的字 = strong 档弱化(对实际背景现算)。邻行无论是否有逐字都按整行 dim 渲染。
+//! 有字词时间轴时，按歌词提供的字词跟唱：状态变化触发颜色动画，
+//! 当前单元渐入强调色，唱完渐变为正文色；退出当前行也从当时的颜色淡出。
 //!
-//! `t` 键打开副歌词(翻译 / 罗马音)后,每个可见原文行下方紧跟一条静态副行;
-//! 副行不参与 wipe,恒按 muted 样式渲染。
+//! `t` 键打开副歌词(翻译 / 罗马音)后，每个可见原文行下方紧跟一条副行；
+//! 副行不随播放焦点变色，只保留随距离淡出的层级。
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Margin, Rect};
@@ -13,13 +13,16 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use mineral_model::{LyricLine, Word};
+use mineral_config::LyricTextAlphaConfig;
+use mineral_model::LyricLine;
+
+use super::sweep::LyricPaint;
 
 use crate::components::layout::shared::text::center_bg;
 use crate::render::anim::ease_in_out;
 use crate::render::color::{lerp_color, lerp_permille};
 use crate::render::control_press;
-use crate::render::theme::{Ink, Theme};
+use crate::render::theme::{Ink, Theme, permille_of};
 use crate::runtime::format::format_ms;
 use crate::runtime::playback::SyncTrust;
 use crate::runtime::state::{AppState, LyricExtra};
@@ -75,7 +78,16 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         draw_fallback(frame, inner, ink);
         return;
     };
-    paint_window(frame, inner, window, theme);
+    let mut lyric_paint = state.browse.lyric_view.colors.begin(
+        state.playback.track.as_ref().map(|song| &song.id),
+        state.cfg.tui().lyrics(),
+        motion,
+        window.rows.iter().filter_map(|row| match &row.cell {
+            Cell::Primary { line_idx } => Some(*line_idx),
+            Cell::Secondary { .. } | Cell::Spacer => None,
+        }),
+    );
+    paint_window(frame, inner, window, theme, &mut lyric_paint);
 }
 
 /// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)× 时间轴信任档。两档同步用
@@ -315,8 +327,11 @@ struct WindowInput<'a> {
     /// 当前行在 `lines` 中的索引;`None` = 前奏未进首句 / 全无时间戳。
     cur: Option<usize>,
 
-    /// 当前播放位置(ms),用于逐字 wipe 进度。
+    /// 当前播放位置(ms)，用于判断字词的演唱状态。
     position_ms: u64,
+
+    /// 歌词原文的明暗层级。
+    text_alpha: &'a LyricTextAlphaConfig,
 
     /// 生效的副歌词档(翻译 / 罗马音);`None` = 不显示副行。
     extra: Option<LyricExtra>,
@@ -350,7 +365,7 @@ struct WindowLayout<'a> {
     rows: Vec<WindowRow>,
 
     /// 歌词自身的高亮与逐字进度。
-    ctx: CellCtx,
+    ctx: CellCtx<'a>,
 
     /// 距离淡色的归一化分母。
     denom: u64,
@@ -390,6 +405,7 @@ impl<'a> WindowLayout<'a> {
                 lines,
                 cur,
                 position_ms,
+                text_alpha: state.cfg.tui().lyrics().text_alpha(),
                 extra: state.active_lyric_extra(),
                 motion,
                 fullscreen_line_gap: *state.cfg.tui().lyrics().fullscreen_line_gap(),
@@ -415,6 +431,7 @@ fn layout_window(inner: Rect, input: WindowInput<'_>) -> WindowLayout<'_> {
         lines,
         cur,
         position_ms,
+        text_alpha,
         extra,
         motion,
         fullscreen_line_gap,
@@ -486,6 +503,7 @@ fn layout_window(inner: Rect, input: WindowInput<'_>) -> WindowLayout<'_> {
         focus: manual_focus,
         eased,
         position_ms,
+        text_alpha,
     };
 
     let height = usize::from(inner.height);
@@ -523,7 +541,13 @@ fn layout_window(inner: Rect, input: WindowInput<'_>) -> WindowLayout<'_> {
 }
 
 /// 歌词随窗口滚动，焦点时间固定在中央光标高度。
-fn paint_window(frame: &mut Frame<'_>, inner: Rect, window: &WindowLayout<'_>, theme: &Theme) {
+fn paint_window(
+    frame: &mut Frame<'_>,
+    inner: Rect,
+    window: &WindowLayout<'_>,
+    theme: &Theme,
+    lyric_paint: &mut LyricPaint<'_>,
+) {
     let cursor_y = inner.y + inner.height / 2;
     let cursor_time = window
         .ctx
@@ -535,13 +559,13 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, window: &WindowLayout<'_>, t
     for row in &window.rows {
         let row_bg = center_bg(frame, row.area);
         let line = render_cell(
-            &row.cell,
+            row,
             window.lines,
             window.ctx,
-            row.dist,
             window.denom,
             theme,
             row_bg,
+            lyric_paint,
         );
         frame.render_widget(
             Paragraph::new(line).alignment(Alignment::Center),
@@ -571,7 +595,7 @@ fn paint_window(frame: &mut Frame<'_>, inner: Rect, window: &WindowLayout<'_>, t
 
 /// 渲染一个视觉行所需的高亮上下文(打包以压参数数)。
 #[derive(Clone, Copy)]
-struct CellCtx {
+struct CellCtx<'a> {
     /// 当前行 line index;`None` = 前奏未进首句。
     cur: Option<usize>,
 
@@ -584,49 +608,49 @@ struct CellCtx {
     /// 已缓动进度千分比:当前行淡入程度,上一行按 `1000 - eased` 退场。
     eased: u16,
 
-    /// 当前播放位置(ms),用于逐字 wipe 进度。
+    /// 当前播放位置(ms)，用于判断字词的演唱状态。
     position_ms: u64,
+
+    /// 歌词原文的明暗层级。
+    text_alpha: &'a LyricTextAlphaConfig,
 }
 
 /// 把一个视觉行渲成 [`Line`]:当前行高亮 / wipe,上一行交叉淡出,其余原文行按距中心 dim,
-/// 副歌词行恒 muted,空行渲空。
+/// 副歌词仅随距离弱化，空行渲空。
 fn render_cell<'a>(
-    cell: &'a Cell,
+    row: &'a WindowRow,
     lines: &'a [LyricLine],
-    ctx: CellCtx,
-    dist: u64,
+    ctx: CellCtx<'_>,
     denom: u64,
     theme: &Theme,
     row_bg: Color,
+    lyric_paint: &mut LyricPaint<'_>,
 ) -> Line<'a> {
-    match cell {
+    let dist = row.dist;
+    match &row.cell {
         Cell::Spacer => Line::default(),
         Cell::Secondary { text } => {
-            // 副行永远比原文淡:alpha 从 muted 档随距离衰至 ghost 档,对本行实际背景
-            // 混合(真淡出);拿不到真彩回落静态 overlay→surface0 渐变。斜体作视觉区分。
             let alpha = lerp_permille(
-                theme.text_alpha.muted,
+                theme.text_alpha.faint,
                 theme.text_alpha.ghost,
                 dist.saturating_sub(1),
                 denom,
             );
             let color = theme.text_over(row_bg, alpha).unwrap_or_else(|| {
-                lerp_color(theme.overlay, theme.surface0, dist.saturating_sub(1), denom)
+                lerp_color(
+                    theme.surface1,
+                    theme.surface0,
+                    dist.saturating_sub(1),
+                    denom,
+                )
             });
             Line::from(text.as_str()).style(Style::new().fg(color).add_modifier(Modifier::ITALIC))
         }
         Cell::Primary { line_idx } => {
             let line = lines.get(*line_idx);
-            // 当前行有逐字 → 字级 wipe(未唱起点同 strong 档,天然承担"淡入")。
-            if Some(*line_idx) == ctx.cur
-                && let Some(words) = line.map(|l| l.kind.words()).filter(|w| !w.is_empty())
-            {
-                return render_word_line(words, ctx.position_ms, theme, row_bg);
-            }
-            let text = line.map(|l| l.kind.text().into_owned()).unwrap_or_default();
-            // 其余统一按 emphasis 在距离淡色与 accent 间插值:当前行 e=eased 升入 accent、
-            // 上一行 e=1000-eased 从 accent 退出、脱离态锚定行恒半程(介于 now-playing
-            // 与普通渐暗之间,标记手动浏览焦点)、其它 e=0 即原距离淡色。
+            let words = line.map(|l| l.kind.words()).filter(|w| !w.is_empty());
+            // 其余按 emphasis 在距离淡色与高亮色间插值：当前行淡入、上一行淡出，
+            // 手动浏览焦点保持半程，其它行仅用距离淡色。
             let emphasis = if Some(*line_idx) == ctx.cur {
                 ctx.eased
             } else if Some(*line_idx) == ctx.prev {
@@ -636,29 +660,50 @@ fn render_cell<'a>(
             } else {
                 0
             };
-            // 距中心越远 alpha 越低(strong→ghost),对本行**实际**背景混合——氛围场 /
-            // 亮暗主题下都是真淡出;别换回固定 token 终点,亮主题 + 氛围场会越远越显眼。
+            // 邻行应比当前行未唱部分更淡，避免切行时反而变暗。
             let alpha = lerp_permille(
-                theme.text_alpha.strong,
-                theme.text_alpha.ghost,
+                permille_of(*ctx.text_alpha.neighbor()),
+                permille_of(*ctx.text_alpha.distant()),
                 dist.saturating_sub(1),
                 denom,
             );
             let base = theme.text_over(row_bg, alpha).unwrap_or_else(|| {
-                lerp_color(theme.subtext, theme.surface0, dist.saturating_sub(1), denom)
+                lerp_color(
+                    theme.surface1,
+                    theme.surface0,
+                    dist.saturating_sub(1),
+                    denom,
+                )
             });
-            let color = lerp_color(
-                base,
-                theme.accent,
-                u64::from(emphasis),
-                u64::from(SCROLL_FULL),
-            );
-            let mut style = Style::new().fg(color);
-            // 过半激活才加粗:加粗在 eased 跨半时从上一行交到当前行,避免切换瞬间闪一下。
-            // 恰为半程的焦点行不加粗,与满 accent + Bold 的 now-playing 行拉开层级。
-            if emphasis > SCROLL_FULL / 2 {
-                style = style.add_modifier(Modifier::BOLD);
-            }
+            let mut rendered = if let Some(words) = words {
+                let inactive = if Some(*line_idx) == ctx.focus {
+                    lerp_color(base, theme.text, 1, 2)
+                } else {
+                    base
+                };
+                lyric_paint.line(
+                    *line_idx,
+                    words,
+                    (Some(*line_idx) == ctx.cur).then_some(ctx.position_ms),
+                    inactive,
+                    theme,
+                    row_bg,
+                )
+            } else {
+                let color = lerp_color(
+                    base,
+                    theme.accent,
+                    u64::from(emphasis),
+                    u64::from(SCROLL_FULL),
+                );
+                let mut style = Style::new().fg(color);
+                // 行级歌词过半激活才加粗；字词颜色动画保持字重不变。
+                if emphasis > SCROLL_FULL / 2 {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                let text = line.map(|l| l.kind.text().into_owned()).unwrap_or_default();
+                Line::from(text).style(style)
+            };
             // 脱离态焦点行:文字两侧垫一对淡 `-`(muted 档对本行实际背景混合)作 seek 游标,
             // 提示「Enter 跳到此行」;跟居中文字一起居中故左右对称。当前行 / 上一行不标——
             // 它们已有 now-playing / 交叉淡出线索,与半程焦点行拉开层级。
@@ -669,76 +714,10 @@ fn render_cell<'a>(
                 let dash = Style::new().fg(theme
                     .text_over(row_bg, theme.text_alpha.muted)
                     .unwrap_or(theme.overlay));
-                return Line::from(vec![
-                    Span::styled("-  ", dash),
-                    Span::styled(text, style),
-                    Span::styled("  -", dash),
-                ]);
+                rendered.spans.insert(0, Span::styled("-  ", dash));
+                rendered.spans.push(Span::styled("  -", dash));
             }
-            Line::from(text).style(style)
+            rendered
         }
-    }
-}
-
-/// 按 `position_ms` 把逐字行渲染成字符级渐变 Span 序列(KTV wipe)。
-///
-/// `Word.text` 对中文是单字、对英文是整词,所以在 `Word` 内再按 `text.chars()` 等分
-/// 时间,每个 Unicode 字符独立 lerp 颜色,得到逐字渐变效果。
-fn render_word_line<'a>(
-    words: &'a [Word],
-    position_ms: u64,
-    theme: &Theme,
-    row_bg: Color,
-) -> Line<'a> {
-    // 未唱起点 = strong 档对本行实际背景混合(与 d=1 邻居同亮度);拿不到真彩回落 subtext。
-    let unlit = theme
-        .text_over(row_bg, theme.text_alpha.strong)
-        .unwrap_or(theme.subtext);
-    let mut spans = Vec::<Span<'a>>::new();
-    for w in words {
-        push_char_spans(&mut spans, w, position_ms, theme, unlit);
-    }
-    Line::from(spans)
-}
-
-/// 把一个 `Word` 按字符均分时间,每字符一个 Span,颜色按 char 内进度 lerp。
-fn push_char_spans<'a>(
-    out: &mut Vec<Span<'a>>,
-    word: &'a Word,
-    position_ms: u64,
-    theme: &Theme,
-    unlit: Color,
-) {
-    let n = word.text.chars().count();
-    let Ok(n_u64) = u64::try_from(n) else {
-        return;
-    };
-    if n_u64 == 0 {
-        return;
-    }
-    let total_dur = word.dur_ms.max(1);
-    let mut byte_cursor = 0usize;
-    for (i, ch) in word.text.chars().enumerate() {
-        let Ok(i_u64) = u64::try_from(i) else {
-            return;
-        };
-        let char_start = word.start_ms.saturating_add(i_u64 * total_dur / n_u64);
-        let char_end = word
-            .start_ms
-            .saturating_add((i_u64 + 1) * total_dur / n_u64);
-        let char_dur = char_end.saturating_sub(char_start).max(1);
-        let elapsed = position_ms.saturating_sub(char_start).min(char_dur);
-        // wipe 起点用 unlit(strong 档对实际背景混合,跟 d=1 邻居同亮度)，终点 accent
-        // 跟 lrc 兜底中心行同色；整行 BOLD 提亮。
-        let color = lerp_color(unlit, theme.accent, elapsed, char_dur);
-
-        let next_byte = byte_cursor.saturating_add(ch.len_utf8());
-        let slice = word.text.get(byte_cursor..next_byte).unwrap_or_default();
-        byte_cursor = next_byte;
-
-        out.push(Span::styled(
-            slice,
-            Style::new().fg(color).add_modifier(Modifier::BOLD),
-        ));
     }
 }

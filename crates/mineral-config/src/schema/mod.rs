@@ -51,7 +51,7 @@ pub use download::DownloadConfig;
 pub use envelope::{EnvelopeConfig, HighpassConfig, ShelfConfig};
 pub use keys::{KeyBinding, KeysConfig};
 pub use layout::{FsSpectrumConfig, LayoutConfig, MenuAlign};
-pub use lyrics::LyricsConfig;
+pub use lyrics::{LyricTextAlphaConfig, LyricsConfig};
 pub use minimap::MinimapConfig;
 pub use prefetch::PrefetchConfig;
 pub use queue::{QUEUE_TRANSFORM_FNS, QueueConfig, QueueTransform};

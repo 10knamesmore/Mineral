@@ -257,7 +257,7 @@ impl Theme {
 
 /// 0-1 的 alpha 折千分比(clamp + round)。
 #[allow(clippy::as_conversions)] // reason: 已 clamp 进 0..=1000 且 round,转换语义无损
-fn permille_of(alpha: f32) -> u16 {
+pub(crate) fn permille_of(alpha: f32) -> u16 {
     (alpha.clamp(0.0, 1.0) * 1000.0).round() as u16
 }
 
