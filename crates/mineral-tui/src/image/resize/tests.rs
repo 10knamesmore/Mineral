@@ -72,7 +72,11 @@ fn fitting_preserves_aspect_ratio_and_transparent_padding() {
         let source =
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(source_size.0, source_size.1, pixel));
         assert_eq!(thumbnail(&source, bounds.0, bounds.1).dimensions(), fitted);
-        let canvas = scale_to_pixels(&source, PixelSize::new(bounds.0, bounds.1));
+        let canvas = scale_to_pixels(
+            &source,
+            PixelSize::new(bounds.0, bounds.1),
+            mineral_config::CoverCellFit::Contain,
+        );
         assert_eq!(canvas.dimensions(), bounds);
         for (x, y, value) in canvas.enumerate_pixels() {
             let left = (bounds.0 - fitted.0) / 2;

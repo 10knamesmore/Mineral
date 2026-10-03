@@ -1,4 +1,4 @@
-//! 封面段(挂在 `TuiConfig` 下):抓取 / 缓存 / 并发 + kmeans 取色参数。
+//! 封面段(挂在 `TuiConfig` 下):显示适配、抓取、缓存、并发与 kmeans 取色参数。
 
 use std::num::NonZeroU32;
 
@@ -12,6 +12,9 @@ use crate::schema::de;
 pub struct CoverConfig {
     /// 封面图像协议；Kitty 需要 POSIX 共享内存
     protocol: CoverProtocolMode,
+
+    /// 主封面边缘与字符格的适配；不改变横图、竖图的整体外框，不影响行内缩略图
+    cell_fit: CoverCellFit,
 
     /// 封面下载超时
     http_timeout_secs: u64,
@@ -88,6 +91,22 @@ pub enum CoverProtocolMode {
 
     /// iTerm2
     Iterm2,
+}
+
+/// 主封面按原图比例确定最小字符外框后，如何处理不足一格的边缘。
+#[lua_enum]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum CoverCellFit {
+    /// 裁剪
+    Crop,
+
+    /// 拉伸
+    Stretch,
+
+    /// 保持原图, 留白
+    Contain,
 }
 
 /// 全屏封面转场

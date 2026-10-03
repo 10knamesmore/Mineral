@@ -1,5 +1,6 @@
 //! 定义图片引擎内部的图片身份与终端成品键。
 
+use mineral_config::CoverCellFit;
 use mineral_model::MediaUrl;
 
 /// 图片在终端中的目标像素尺寸。
@@ -51,7 +52,7 @@ pub(crate) enum ImageIdentity {
 /// 一张终端图片成品的缓存身份。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TerminalImageKey {
-    /// Kitty 经 shared memory 发送的源图片；显示尺寸属于 placement。
+    /// 保持原样的 Kitty 源图片；显示尺寸属于 placement。
     Source(ImageIdentity),
 
     /// 行内封面的低清像素或 Kitty 成品，由各自的缓存持有，独立于完整解码图。
@@ -63,13 +64,16 @@ pub(crate) enum TerminalImageKey {
         pixels: PixelSize,
     },
 
-    /// Sixel、iTerm2 或 halfblocks 按目标像素生成的成品。
+    /// 按目标像素与格边适配生成的主封面；Kitty 截边和拉伸也使用独立成品。
     Rasterized {
         /// 原始图片身份。
         identity: ImageIdentity,
 
         /// 目标像素尺寸。
         pixels: PixelSize,
+
+        /// 图片边缘的适配方式；热更后不能复用另一种方式的成品。
+        cell_fit: CoverCellFit,
     },
 }
 
@@ -89,8 +93,17 @@ impl TerminalImageKey {
     /// # Params:
     ///   - `identity`: 原始图片身份
     ///   - `pixels`: 目标像素尺寸
-    pub(crate) const fn rasterized(identity: ImageIdentity, pixels: PixelSize) -> Self {
-        Self::Rasterized { identity, pixels }
+    ///   - `cell_fit`: 本次生成使用的格边适配方式
+    pub(crate) const fn rasterized(
+        identity: ImageIdentity,
+        pixels: PixelSize,
+        cell_fit: CoverCellFit,
+    ) -> Self {
+        Self::Rasterized {
+            identity,
+            pixels,
+            cell_fit,
+        }
     }
 
     /// 返回原始图片身份。
@@ -107,6 +120,14 @@ impl TerminalImageKey {
         match self {
             Self::Source(_) => None,
             Self::Thumbnail { pixels, .. } | Self::Rasterized { pixels, .. } => Some(*pixels),
+        }
+    }
+
+    /// 返回本次编码的格边适配；源图片和行内缩略图始终保持完整比例。
+    pub(crate) const fn cell_fit(&self) -> CoverCellFit {
+        match self {
+            Self::Rasterized { cell_fit, .. } => *cell_fit,
+            Self::Source(_) | Self::Thumbnail { .. } => CoverCellFit::Contain,
         }
     }
 

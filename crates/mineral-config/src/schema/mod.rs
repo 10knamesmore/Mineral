@@ -43,7 +43,7 @@ pub use cache::CacheConfig;
 pub use config::{Config, TuiConfig};
 pub use copy::{COPY_TEMPLATE_FNS, CopyConfig, CopyContext, CopyTemplate};
 pub use cover::{
-    CoverCacheConfig, CoverConfig, CoverDecodePixelsConfig, CoverProtocolMode,
+    CoverCacheConfig, CoverCellFit, CoverConfig, CoverDecodePixelsConfig, CoverProtocolMode,
     CoverTransitionConfig, CoverTransitionStyle, KmeansConfig, ZoomConfig,
 };
 pub use daemon::DaemonConfig;

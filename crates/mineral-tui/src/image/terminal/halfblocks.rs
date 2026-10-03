@@ -3,13 +3,16 @@
 use std::borrow::Borrow;
 
 use image::{DynamicImage, Rgba, RgbaImage};
+use mineral_config::CoverCellFit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::image::geometry::fitted_area;
 use crate::image::key::PixelSize;
-use crate::image::resize::{fitted_pixels, resize_transparent, thumbnail, thumbnail_exact};
+use crate::image::resize::{
+    fitted_pixels, resize_transparent, thumbnail, thumbnail_exact, thumbnail_to_fill,
+};
 use crate::render::color::lerp_color;
 
 /// 一张按目标 cell 网格编码的 halfblocks 图片。
@@ -25,10 +28,12 @@ impl HalfblocksImage {
     ///   - `source`: 已解码原图；转移所有权时在区域采样后立即释放原图
     ///   - `target_pixels`: 终端区域的真实像素尺寸
     ///   - `cells`: 目标 cell 宽高
+    ///   - `cell_fit`: 仅在原图的最小字符外框内处理边缘，不铺满外部预览画布
     pub(super) fn encode(
         source: impl Borrow<DynamicImage>,
         target_pixels: PixelSize,
         cells: (u16, u16),
+        cell_fit: CoverCellFit,
     ) -> Self {
         let width = u32::from(cells.0);
         let height = u32::from(cells.1).saturating_mul(2);
@@ -46,11 +51,18 @@ impl HalfblocksImage {
             cell_pixels,
         );
         let fitted_cells = (area.width, area.height);
-        let sampled = sample_halfblocks(
-            source.borrow(),
-            PixelSize::from_cells(fitted_cells, cell_pixels),
-            fitted_cells,
-        );
+        let bounds = PixelSize::from_cells(fitted_cells, cell_pixels);
+        let sample_width = u32::from(area.width) * 2;
+        let sample_height = u32::from(area.height) * 4;
+        let sampled = match cell_fit {
+            CoverCellFit::Crop => {
+                thumbnail_to_fill(source.borrow(), bounds, sample_width, sample_height).into_rgba8()
+            }
+            CoverCellFit::Stretch => {
+                thumbnail_exact(source.borrow(), sample_width, sample_height).into_rgba8()
+            }
+            _ => sample_halfblocks(source.borrow(), bounds, fitted_cells),
+        };
         drop(source);
         // 只对图片自身的 cell 外框滤波，避免 preview 的大画布把像素漏到外框之外。
         let fitted = resize_transparent(
@@ -151,8 +163,15 @@ pub(in crate::image) fn sample_pixels(
     source: &DynamicImage,
     cells: (u16, u16),
     cell_pixels: (u16, u16),
+    cell_fit: CoverCellFit,
 ) -> RgbaImage {
-    HalfblocksImage::encode(source, PixelSize::from_cells(cells, cell_pixels), cells).pixels
+    HalfblocksImage::encode(
+        source,
+        PixelSize::from_cells(cells, cell_pixels),
+        cells,
+        cell_fit,
+    )
+    .pixels
 }
 
 /// 将透明网格叠到本帧背景；完全留白的 cell 保留原内容。
@@ -219,8 +238,12 @@ mod tests {
                 source_size.1,
                 Rgb([255, 0, 0]),
             ));
-            let image =
-                HalfblocksImage::encode(source, PixelSize::from_cells(cells, cell_pixels), cells);
+            let image = HalfblocksImage::encode(
+                source,
+                PixelSize::from_cells(cells, cell_pixels),
+                cells,
+                mineral_config::CoverCellFit::Contain,
+            );
             assert_eq!(image.pixels.dimensions(), (16, 16));
             assert_eq!(image.resident_bytes(), 16 * 16 * 4);
             let content = image
@@ -251,7 +274,12 @@ mod tests {
         for alpha in [0, 128, 255] {
             let source =
                 DynamicImage::ImageRgba8(RgbaImage::from_pixel(128, 128, Rgba([255, 0, 0, alpha])));
-            let image = HalfblocksImage::encode(source, target, cells);
+            let image = HalfblocksImage::encode(
+                source,
+                target,
+                cells,
+                mineral_config::CoverCellFit::Contain,
+            );
             for blue in [40, 160] {
                 let mut buffer = Buffer::empty(area);
                 buffer.set_style(area, Style::new().bg(Color::Rgb(0, 0, blue)));

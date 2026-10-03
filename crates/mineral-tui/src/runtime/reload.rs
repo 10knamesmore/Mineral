@@ -513,6 +513,92 @@ mod tests {
         Ok(())
     }
 
+    /// 格边策略热更后请求新成品，保留解码图和旧策略缓存；切回时直接命中旧成品。
+    #[test]
+    fn pushed_cover_cell_fit_selects_distinct_cached_variants() -> color_eyre::Result<()> {
+        use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
+        use mineral_config::CoverCellFit;
+        use mineral_model::MediaUrl;
+        use ratatui::{buffer::Buffer, layout::Rect};
+        use std::sync::Arc;
+
+        let mut app = app_with_queue(1, 0)?;
+        app.state.images = ImageEngine::disabled_kitty(Arc::clone(&app.state.cfg));
+        let url = MediaUrl::remote("https://example.com/cell-fit.png")?;
+        let source = Arc::new(crate::test_support::solid_cover(180, 80, 40));
+        app.state
+            .images
+            .cache
+            .insert_test(&url, Arc::clone(&source));
+        let area = Rect::new(0, 0, 20, 10);
+        let render = |images: &ImageEngine| {
+            images.render(
+                ImageContent::Display { url: Some(&url) },
+                area,
+                &mut Buffer::empty(area),
+                ImageRenderPhase::Stable,
+            );
+        };
+        render(&app.state.images);
+        let crop_key = app
+            .state
+            .images
+            .encode_pending
+            .borrow()
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing initial cover encode request"))?;
+        assert_eq!(crop_key.cell_fit(), CoverCellFit::Crop);
+        app.state
+            .images
+            .insert_test_terminal_image(&url, (area.width, area.height));
+        app.state
+            .images
+            .encode_pending
+            .borrow_mut()
+            .remove(&crop_key);
+        let initial_preview_key = app.state.images.preview_key(&url, area);
+
+        for (value, expected) in [
+            ("stretch", CoverCellFit::Stretch),
+            ("contain", CoverCellFit::Contain),
+        ] {
+            let previous = app.state.images.encode_pending.borrow().clone();
+            app.apply_pushed_config(pushed_tree(serde_json::json!({
+                "tui": { "cover": { "cell_fit": value } }
+            }))?);
+            render(&app.state.images);
+            let pending = app.state.images.encode_pending.borrow();
+            let added = pending.difference(&previous).collect::<Vec<_>>();
+            assert_eq!(added.len(), 1);
+            assert!(added.iter().all(|key| key.cell_fit() == expected));
+            assert!(app.state.images.terminal_images.contains(&crop_key));
+            assert_ne!(
+                app.state.images.preview_key(&url, area),
+                initial_preview_key
+            );
+            assert!(
+                app.state
+                    .images
+                    .cache
+                    .get(&url)
+                    .is_some_and(|image| Arc::ptr_eq(image, &source))
+            );
+        }
+        let pending = app.state.images.encode_pending.borrow().clone();
+        app.apply_pushed_config(pushed_tree(serde_json::json!({
+            "tui": { "cover": { "cell_fit": "crop" } }
+        }))?);
+        render(&app.state.images);
+        assert_eq!(*app.state.images.encode_pending.borrow(), pending);
+        assert_eq!(
+            app.state.images.preview_key(&url, area),
+            initial_preview_key
+        );
+        Ok(())
+    }
+
     /// marquee 节奏随推送热更:mode 改 off 后溢出标题恒零相位
     /// (证明 Marquees 用新配置重建了,而非沿用启动折算的快照)。
     #[test]

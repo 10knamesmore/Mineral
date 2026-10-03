@@ -4,7 +4,7 @@
 use crate::schema::{
     AmbientConfig, AmbientTrailConfig, AnchorConfig, AnimationConfig, AudioConfig, BackendKind,
     BackfillSection, BarsConfig, BehaviorConfig, BilibiliSection, CacheConfig, ChannelSearchConfig,
-    Config, CopyConfig, CopyContext, CopyTemplate, CoverCacheConfig, CoverConfig,
+    Config, CopyConfig, CopyContext, CopyTemplate, CoverCacheConfig, CoverCellFit, CoverConfig,
     CoverDecodePixelsConfig, CoverProtocolMode, CoverTransitionConfig, CoverTransitionStyle,
     DaemonConfig, DeepSearchConfig, DeepWeights, DownloadConfig, DriftConfig, DynamicThemeConfig,
     EnvelopeConfig, FilterPlayScope, FsSpectrumConfig, HighpassConfig, KeysConfig, KmeansConfig,
@@ -40,6 +40,7 @@ pub(crate) fn meta_config_lua() -> String {
         TrackPosMemory::LUA_ALIAS,
         FilterPlayScope::LUA_ALIAS,
         CoverProtocolMode::LUA_ALIAS,
+        CoverCellFit::LUA_ALIAS,
         MarqueeMode::LUA_ALIAS,
         SweepStyle::LUA_ALIAS,
         MenuReveal::LUA_ALIAS,

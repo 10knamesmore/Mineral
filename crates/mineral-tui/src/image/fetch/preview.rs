@@ -65,6 +65,7 @@ pub(super) async fn fetch_preview(
     let bytes = load_source(source, &url, client, cache).await?;
     let pixels = key.pixels()?;
     let thumbnail = matches!(&key, TerminalImageKey::Thumbnail { .. });
+    let cell_fit = key.cell_fit();
 
     let result = {
         let cfg = Arc::clone(cfg);
@@ -74,7 +75,7 @@ pub(super) async fn fetch_preview(
                     if thumbnail {
                         TerminalImage::thumbnail_preview(&image, pixels)
                     } else {
-                        TerminalImage::halfblock_preview(image, pixels, cells)
+                        TerminalImage::halfblock_preview(image, pixels, cells, cell_fit)
                     }
                 };
                 if matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Jpeg)) {

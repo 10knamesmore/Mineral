@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use image::DynamicImage;
+use mineral_config::CoverCellFit;
 use mineral_model::MediaUrl;
 use mineral_model::SourceKind;
 use mineral_protocol::AdvanceKind;
@@ -67,11 +68,11 @@ impl PreviewTarget {
     }
 
     /// 为图片身份构造 preview 缓存键。
-    fn key(self, identity: ImageIdentity) -> TerminalImageKey {
+    fn key(self, identity: ImageIdentity, cell_fit: CoverCellFit) -> TerminalImageKey {
         if self.thumbnail {
             TerminalImageKey::thumbnail(identity, self.pixels)
         } else {
-            TerminalImageKey::rasterized(identity, self.pixels)
+            TerminalImageKey::rasterized(identity, self.pixels, cell_fit)
         }
     }
 }
@@ -231,7 +232,13 @@ impl ImageEngine {
             .terminal_backend
             .graphics_for(self.graphics_generation())
             .ok_or_else(|| color_eyre::eyre::eyre!("missing test terminal backend"))?;
-        let image = TerminalImage::encode(&source, Some(pixels), (1, 1), &graphics)?;
+        let image = TerminalImage::encode(
+            &source,
+            Some(pixels),
+            (1, 1),
+            CoverCellFit::Contain,
+            &graphics,
+        )?;
         let bytes = image.resident_bytes();
         self.terminal_images.insert(&key, image, bytes);
         Ok(())
@@ -280,7 +287,7 @@ impl ImageEngine {
         self.workers.encoder.request(request);
     }
 
-    /// 应用新配置；预算变化保留内容，协议变化替换整个 terminal backend。
+    /// 应用新配置；格边适配由缓存键隔离，预算变化保留内容，协议变化替换 terminal backend。
     ///
     /// # Params:
     ///   - `cfg`: 新的有效配置
@@ -288,6 +295,11 @@ impl ImageEngine {
         let image_budget = *cfg.tui().cover().cache().image();
         let preview_budget = *cfg.tui().cover().cache().preview();
         let protocol_budget = *cfg.tui().cover().cache().protocol();
+        let cell_fit = *cfg.tui().cover().cell_fit();
+        if self.cell_fit() != cell_fit {
+            mineral_log::debug!(target: "cover", previous = ?self.cell_fit(), ?cell_fit,
+                "cover cell fit changed; decoded images and cached variants retained");
+        }
         self.cfg = cfg;
         self.set_budgets(image_budget, preview_budget, protocol_budget);
         self.apply_graphics_mode();
@@ -301,6 +313,11 @@ impl ImageEngine {
     /// 返回当前单个终端 cell 的像素宽高。
     pub(crate) fn cell_pixels(&self) -> (u16, u16) {
         self.terminal_backend.cell_pixels()
+    }
+
+    /// 现读主封面的格边适配策略；worker 使用请求键中固定的策略。
+    pub(super) fn cell_fit(&self) -> CoverCellFit {
+        *self.cfg.tui().cover().cell_fit()
     }
 
     /// 返回当前 terminal backend generation。
@@ -324,6 +341,7 @@ impl ImageEngine {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             crate::image::key::PixelSize::from_cells(cells, self.cell_pixels()),
+            self.cell_fit(),
         );
         self.terminal_images
             .insert(&key, TerminalImage::test_halfblocks(), /*bytes*/ 1);
@@ -541,7 +559,7 @@ impl ImageEngine {
 
     /// 返回行内封面复用的低清 preview 键。
     pub(super) fn thumbnail_preview_key(&self, url: &MediaUrl) -> TerminalImageKey {
-        PreviewTarget::thumbnail().key(ImageIdentity::Url(url.clone()))
+        PreviewTarget::thumbnail().key(ImageIdentity::Url(url.clone()), CoverCellFit::Contain)
     }
 
     /// 为 URL 与目标区域构造 preview 缓存键。
@@ -550,7 +568,8 @@ impl ImageEngine {
     ///   - `url`: 图片源 URL
     ///   - `area`: preview 的目标 cell 区域
     pub(crate) fn preview_key(&self, url: &MediaUrl, area: Rect) -> TerminalImageKey {
-        PreviewTarget::from_area(area, self.cell_pixels()).key(ImageIdentity::Url(url.clone()))
+        PreviewTarget::from_area(area, self.cell_pixels())
+            .key(ImageIdentity::Url(url.clone()), self.cell_fit())
     }
 
     /// 返回图片与尺寸是否仍需要生成 preview。
@@ -600,7 +619,7 @@ impl ImageEngine {
                 continue;
             }
             for target in &targets {
-                let key = target.key(ImageIdentity::Url(url.clone()));
+                let key = target.key(ImageIdentity::Url(url.clone()), self.cell_fit());
                 if !self.should_prepare_preview(&url, &key) {
                     continue;
                 }
@@ -613,6 +632,7 @@ impl ImageEngine {
                     cell_height = target.cells.1,
                     pixel_width = target.pixels.width(),
                     pixel_height = target.pixels.height(),
+                    cell_fit = ?key.cell_fit(),
                     "generate cover preview"
                 );
                 if !self
@@ -756,6 +776,7 @@ mod tests {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells(/*cells*/ (4, 4), /*cell_pixels*/ (8, 16)),
+            mineral_config::CoverCellFit::Crop,
         );
         CoverPreviewReady {
             url: url.clone(),

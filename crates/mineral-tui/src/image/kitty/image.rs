@@ -36,7 +36,7 @@ impl KittyImage {
     ///   - `relay`: 终端 relay 形态
     ///
     /// # Return:
-    ///   只按图片身份缓存、显示尺寸由 placement 决定的 Kitty 成品
+    ///   持有本次像素源的 Kitty 成品；主封面原样模式跨尺寸复用，截边／拉伸按目标尺寸缓存
     ///
     /// # Error:
     ///   shared memory 创建或写入失败时返回错误

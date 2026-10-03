@@ -4,6 +4,7 @@ use icy_sixel::{
     DiffusionMethod, MethodForLargest, MethodForRep, PixelFormat, Quality, SixelError, sixel_string,
 };
 use image::DynamicImage;
+use mineral_config::CoverCellFit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -43,7 +44,8 @@ impl SixelImage {
     ///
     /// # Params:
     ///   - `source`: 已解码原图
-    ///   - `pixels`: 目标像素尺寸
+    ///   - `pixels`: 最小字符外框的像素尺寸
+    ///   - `cell_fit`: 在该外框内截边、拉伸或留白
     ///   - `relay`: 终端 relay 形态
     ///
     /// # Return:
@@ -54,9 +56,10 @@ impl SixelImage {
     pub(super) fn encode(
         source: &DynamicImage,
         pixels: PixelSize,
+        cell_fit: CoverCellFit,
         relay: TerminalRelay,
     ) -> Result<Self, Error> {
-        let image = DynamicImage::ImageRgba8(scale_to_pixels(source, pixels)).to_rgb8();
+        let image = DynamicImage::ImageRgba8(scale_to_pixels(source, pixels, cell_fit)).to_rgb8();
         let width = i32::try_from(image.width())?;
         let height = i32::try_from(image.height())?;
         let data = sixel_string(

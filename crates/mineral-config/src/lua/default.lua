@@ -163,6 +163,7 @@ return {
     -- 封面管线:抓取原始压缩字节 → 磁盘缓存 + 低清 preview → 按配置尺寸解码 → k-means 取色。
     cover = {
       protocol = "auto", -- 终端图协议:"auto" 探测协商 | "halfblocks" | "kitty" | "sixel" | "iterm2";Kitty 要求 POSIX shared memory
+      cell_fit = "crop", -- 主封面格边适配:"crop" 居中截边 | "stretch" 微调宽高 | "contain" 原样等比留白;只处理不足一格的边缘,不裁成正方形
       http_timeout_secs = 30, -- 单张封面下载超时,秒
       debounce_ms = 32, -- 列表滚动停稳多久才解码并编码高清真图;期间优先显示真实 preview
       download_workers = 12, -- 封面下载并发 worker 数

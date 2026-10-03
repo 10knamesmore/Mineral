@@ -6,6 +6,7 @@ use std::io::Cursor;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use image::DynamicImage;
+use mineral_config::CoverCellFit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -27,6 +28,7 @@ impl Iterm2Image {
     ///   - `source`: 已解码原图
     ///   - `pixels`: 目标像素尺寸
     ///   - `cells`: 目标 cell 宽高
+    ///   - `cell_fit`: 在最小字符外框内截边、拉伸或留白
     ///   - `relay`: 终端 relay 形态
     ///
     /// # Return:
@@ -38,9 +40,10 @@ impl Iterm2Image {
         source: &DynamicImage,
         pixels: PixelSize,
         cells: (u16, u16),
+        cell_fit: CoverCellFit,
         relay: TerminalRelay,
     ) -> Result<Self, image::ImageError> {
-        let scaled = DynamicImage::ImageRgba8(scale_to_pixels(source, pixels));
+        let scaled = DynamicImage::ImageRgba8(scale_to_pixels(source, pixels, cell_fit));
         let mut cursor = Cursor::new(Vec::<u8>::new());
         scaled.write_to(&mut cursor, image::ImageFormat::Png)?;
         let png = cursor.into_inner();

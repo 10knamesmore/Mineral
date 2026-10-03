@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use image::{DynamicImage, Rgba, RgbaImage};
+use mineral_config::CoverCellFit;
 use mineral_model::MediaUrl;
 use mineral_protocol::AdvanceKind;
 use ratatui::buffer::Buffer;
@@ -235,7 +236,7 @@ impl ImageEngine {
             phase,
             ImageRenderPhase::Resizing | ImageRenderPhase::Offscreen
         ) {
-            render_halfblock_to(buf, target, &image, self.cell_pixels());
+            render_halfblock_to(buf, target, &image, self.cell_pixels(), self.cell_fit());
             return;
         }
         let key = self.terminal_key(identity.clone(), target);
@@ -249,7 +250,7 @@ impl ImageEngine {
         if rendered {
             return;
         }
-        render_halfblock_to(buf, target, &image, self.cell_pixels());
+        render_halfblock_to(buf, target, &image, self.cell_pixels(), self.cell_fit());
         if phase == ImageRenderPhase::Stable {
             self.prepare_image(identity, image, target);
         }
@@ -283,6 +284,7 @@ impl ImageEngine {
             px_w: u32::from(target.width),
             px_h: u32::from(target.height).saturating_mul(2),
             cell_pixels: self.cell_pixels(),
+            cell_fit: self.cell_fit(),
             style: content.style,
             progress_permille: content.progress,
             advance: content.advance,
@@ -304,14 +306,17 @@ impl ImageEngine {
         None
     }
 
-    /// 按当前 backend 构造源图片键或 rasterized 像素键。
+    /// Kitty 原样模式复用源图；其余成品按目标像素和格边策略分别缓存。
     fn terminal_key(&self, identity: ImageIdentity, target: Rect) -> TerminalImageKey {
-        if self.graphics_protocol() == GraphicsProtocol::Kitty {
+        if self.graphics_protocol() == GraphicsProtocol::Kitty
+            && self.cell_fit() == CoverCellFit::Contain
+        {
             TerminalImageKey::source(identity)
         } else {
             TerminalImageKey::rasterized(
                 identity,
                 PixelSize::from_cells((target.width, target.height), self.cell_pixels()),
+                self.cell_fit(),
             )
         }
     }
@@ -328,7 +333,7 @@ impl ImageEngine {
         if self.encode_pending.borrow_mut().insert(key.clone()) {
             mineral_log::debug!(target: "cover", source_width = image.width(), source_height = image.height(),
                 cells = ?(target.width, target.height), cell_pixels = ?self.cell_pixels(),
-                protocol = ?self.graphics_protocol(), "prepare fitted cover image");
+                protocol = ?self.graphics_protocol(), cell_fit = ?self.cell_fit(), "prepare fitted cover image");
             self.request_encode(EncodeRequest {
                 key,
                 generation: self.graphics_generation(),
@@ -357,6 +362,9 @@ struct BlendFrame<'a> {
     /// 终端 cell 的真实像素宽高，动画与协议图使用相同比例。
     cell_pixels: (u16, u16),
 
+    /// 两端封面都在各自的最小字符外框内应用该策略。
+    cell_fit: CoverCellFit,
+
     /// 合成方式。
     style: BlendStyle,
 
@@ -381,6 +389,7 @@ fn compose_transition(frame: BlendFrame<'_>) -> RgbaImage {
         px_w,
         px_h,
         cell_pixels,
+        cell_fit,
         style,
         progress_permille,
         advance,
@@ -390,8 +399,8 @@ fn compose_transition(frame: BlendFrame<'_>) -> RgbaImage {
         u16::try_from(px_w).unwrap_or(u16::MAX),
         u16::try_from(px_h / 2).unwrap_or(u16::MAX),
     );
-    let old = sample_pixels(from, cells, cell_pixels);
-    let new = sample_pixels(to, cells, cell_pixels);
+    let old = sample_pixels(from, cells, cell_pixels, cell_fit);
+    let new = sample_pixels(to, cells, cell_pixels, cell_fit);
     let p = u64::from(progress_permille.min(1000));
     match style {
         BlendStyle::Slide => RgbaImage::from_fn(px_w, px_h, |x, y| {
@@ -517,17 +526,18 @@ fn permille_of_scale(scale: f32) -> u32 {
     (scale.clamp(1.0, 4.0) * 1000.0).round() as u32
 }
 
-/// 按真实终端像素比例完整显示封面；透明留白与本帧背景合成。
+/// 在原图的最小字符外框内应用格边策略；透明像素与本帧背景合成。
 fn render_halfblock_to(
     buf: &mut Buffer,
     area: Rect,
     image: &DynamicImage,
     cell_pixels: (u16, u16),
+    cell_fit: CoverCellFit,
 ) {
     if area.is_empty() {
         return;
     }
-    let pixels = sample_pixels(image, (area.width, area.height), cell_pixels);
+    let pixels = sample_pixels(image, (area.width, area.height), cell_pixels, cell_fit);
     render_pixels(&pixels, area, buf);
 }
 
@@ -562,8 +572,11 @@ mod tests {
         let target = super::fitted_area(area, &image, engine.cell_pixels());
         let encoded = TerminalImage::encode(
             &image,
-            None,
+            engine
+                .terminal_key(ImageIdentity::Url(url.clone()), target)
+                .pixels(),
             (target.width, target.height),
+            engine.cell_fit(),
             &TerminalGraphics::fixed_kitty(engine.cell_pixels()),
         )?;
         let bytes = encoded.resident_bytes();
@@ -633,7 +646,13 @@ mod tests {
         let area = Rect::new(0, 0, 4, 2);
         let mut buf = Buffer::empty(area);
 
-        render_halfblock_to(&mut buf, area, &image, (8, 16));
+        render_halfblock_to(
+            &mut buf,
+            area,
+            &image,
+            (8, 16),
+            mineral_config::CoverCellFit::Contain,
+        );
 
         for y in 0..2u16 {
             for x in 0..4u16 {
@@ -672,7 +691,13 @@ mod tests {
         let area = Rect::new(0, 0, 4, 4);
         let mut buf = Buffer::empty(area);
 
-        render_halfblock_to(&mut buf, area, &image, (4, 16));
+        render_halfblock_to(
+            &mut buf,
+            area,
+            &image,
+            (4, 16),
+            mineral_config::CoverCellFit::Contain,
+        );
 
         let top = buf.cell((0, 0)).ok_or_else(|| eyre!("顶 cell 越界"))?;
         assert_eq!(top.fg, Color::Rgb(220, 0, 0), "顶 cell 上半 = 红");

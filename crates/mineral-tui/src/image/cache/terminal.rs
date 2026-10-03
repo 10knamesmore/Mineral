@@ -1,7 +1,8 @@
 //! 可直接写入终端 cell buffer 的图片成品字节预算 LRU。
 //!
-//! 同一实现由独立实例分别承载协议无关 preview 与当前 terminal backend 成品。Kitty 源图片
-//! 只按图片身份缓存一次；行内缩略图、preview、Sixel、iTerm2 与 halfblocks 按目标像素尺寸并存。
+//! 同一实现由独立实例分别承载协议无关 preview 与当前 terminal backend 成品。Kitty 原样
+//! 模式只按图片身份缓存；截边／拉伸、preview 和其他协议成品按目标像素与格边策略并存。
+//! 行内缩略图保留独立的低清尺寸键。
 //!
 //! 每条字节由编码成品报告，缓存只记账不重算。上一帧实际显示的工作集不被后台预热逐出。
 
@@ -280,6 +281,7 @@ mod tests {
             &TerminalImageKey::rasterized(
                 ImageIdentity::Url(url.clone()),
                 PixelSize::from_cells(dims, (1, 1)),
+                mineral_config::CoverCellFit::Contain,
             ),
             protocol,
             bytes,
@@ -291,6 +293,7 @@ mod tests {
         cache.contains(&TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells(dims, (1, 1)),
+            mineral_config::CoverCellFit::Contain,
         ))
     }
 
@@ -305,6 +308,7 @@ mod tests {
             &TerminalImageKey::rasterized(
                 ImageIdentity::Url(url.clone()),
                 PixelSize::from_cells(dims, (1, 1)),
+                mineral_config::CoverCellFit::Contain,
             ),
             render,
         )

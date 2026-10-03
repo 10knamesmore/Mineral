@@ -1,7 +1,7 @@
 //! Client 端终端图片编码器。
 //!
-//! 渲染线程只提交缓存未命中的请求；worker 在 blocking pool 中为 Kitty 准备原图或
-//! 行内缩略图的 shared memory，为其他协议完成目标尺寸缩放与编码。主循环按 terminal backend
+//! 渲染线程只提交缓存未命中的请求；worker 在 blocking pool 中完成格边适配与编码。
+//! Kitty 原样模式复用原图，截边和拉伸按目标像素编码；行内封面仍使用低清像素。主循环按 terminal backend
 //! generation 接收成品；编码期间渲染路径继续使用 halfblock，不等待后台任务。
 
 use std::sync::Arc;
@@ -140,9 +140,15 @@ async fn encode_blocking(req: EncodeRequest, backend: &TerminalBackend) -> Optio
     } = req;
     let graphics = backend.graphics_for(generation)?;
     let pixels = key.pixels();
+    let cell_fit = key.cell_fit();
     let encoded = tokio::task::spawn_blocking(move || {
-        let terminal_image =
-            TerminalImage::encode(&image, pixels, (target.width, target.height), &graphics)?;
+        let terminal_image = TerminalImage::encode(
+            &image,
+            pixels,
+            (target.width, target.height),
+            cell_fit,
+            &graphics,
+        )?;
         let bytes = terminal_image.resident_bytes();
         Result::<_, super::terminal::EncodeError>::Ok((terminal_image, bytes))
     })
@@ -199,6 +205,7 @@ mod tests {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells((target.width, target.height), (8, 16)),
+            mineral_config::CoverCellFit::Contain,
         );
         encoder.request(EncodeRequest {
             key: key.clone(),

@@ -1,7 +1,8 @@
 //! 使用 CPU SIMD 采样封面，统一精确尺寸、等比适配、居中裁剪与透明补边。
 
-use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
+use fast_image_resize::{CropBox, FilterType, ResizeAlg, ResizeOptions, Resizer};
 use image::{DynamicImage, Rgba, RgbaImage};
+use mineral_config::CoverCellFit;
 
 use crate::image::key::PixelSize;
 
@@ -29,7 +30,7 @@ pub(in crate::image) fn resize_exact(
     width: u32,
     height: u32,
 ) -> DynamicImage {
-    sample(source, width, height, SamplingFilter::Display)
+    sample(source, width, height, SamplingFilter::Display, None)
 }
 
 /// 对带透明补边的画布执行 alpha 加权缩放，保留边缘颜色。
@@ -38,7 +39,7 @@ pub(in crate::image) fn resize_transparent(
     width: u32,
     height: u32,
 ) -> DynamicImage {
-    sample(source, width, height, SamplingFilter::Transparent)
+    sample(source, width, height, SamplingFilter::Transparent, None)
 }
 
 /// 按 Box 核采样到精确尺寸，供低清预览和取色使用。
@@ -52,7 +53,28 @@ pub(in crate::image) fn thumbnail_exact(
     width: u32,
     height: u32,
 ) -> DynamicImage {
-    sample(source, width, height, SamplingFilter::Thumbnail)
+    sample(source, width, height, SamplingFilter::Thumbnail, None)
+}
+
+/// 按字符外框的物理比例居中截边，再采样到低清网格；网格宽高不参与裁剪比例计算。
+///
+/// # Params:
+///   - `source`: 已解码原图
+///   - `bounds`: 最小字符外框的真实像素尺寸
+///   - `width` / `height`: 输出采样网格的宽高
+pub(in crate::image) fn thumbnail_to_fill(
+    source: &DynamicImage,
+    bounds: PixelSize,
+    width: u32,
+    height: u32,
+) -> DynamicImage {
+    sample(
+        source,
+        width,
+        height,
+        SamplingFilter::Thumbnail,
+        Some(bounds),
+    )
 }
 
 /// 等比采样到目标边界内；不补边，目标比源图大时允许放大。
@@ -90,12 +112,33 @@ pub(in crate::image) fn resize_to_fill(
     scaled.crop_imm(left, top, width, height)
 }
 
-/// 等比适配到真实终端像素尺寸，居中并补透明边；供 Sixel 和 iTerm2 编码使用。
+/// 按格边策略适配到最小字符外框的物理像素尺寸，供终端图片编码使用。
 ///
 /// # Params:
 ///   - `source`: 已解码图片
-///   - `pixels`: 包含留白的完整输出画布尺寸
-pub(in crate::image) fn scale_to_pixels(source: &DynamicImage, pixels: PixelSize) -> RgbaImage {
+///   - `pixels`: 最小字符外框的完整像素尺寸，不是整个封面槽
+///   - `cell_fit`: 居中截边、微调宽高或保持原样留白
+pub(in crate::image) fn scale_to_pixels(
+    source: &DynamicImage,
+    pixels: PixelSize,
+    cell_fit: CoverCellFit,
+) -> RgbaImage {
+    match cell_fit {
+        CoverCellFit::Crop => {
+            return sample(
+                source,
+                pixels.width(),
+                pixels.height(),
+                SamplingFilter::Display,
+                Some(pixels),
+            )
+            .into_rgba8();
+        }
+        CoverCellFit::Stretch => {
+            return resize_exact(source, pixels.width(), pixels.height()).into_rgba8();
+        }
+        _ => {}
+    }
     let (width, height) = proportional_dimensions(source, pixels.width(), pixels.height(), false);
     let resized = resize_exact(source, width, height).into_rgba8();
     let mut canvas = RgbaImage::from_pixel(pixels.width(), pixels.height(), Rgba([0, 0, 0, 0]));
@@ -117,8 +160,15 @@ pub(in crate::image) fn scale_to_pixels(source: &DynamicImage, pixels: PixelSize
 ///   - `width`: 输出像素宽度
 ///   - `height`: 输出像素高度
 ///   - `filter`: 双线性显示采样或 Box 预览采样
-fn sample(source: &DynamicImage, width: u32, height: u32, filter: SamplingFilter) -> DynamicImage {
-    if source.width() == width && source.height() == height {
+///   - `crop_to`: 要铺满的真实像素比例；`None` 表示采样全部原图
+fn sample(
+    source: &DynamicImage,
+    width: u32,
+    height: u32,
+    filter: SamplingFilter,
+    crop_to: Option<PixelSize>,
+) -> DynamicImage {
+    if crop_to.is_none() && source.width() == width && source.height() == height {
         return source.clone();
     }
     let mut output = DynamicImage::new(width, height, source.color());
@@ -126,18 +176,30 @@ fn sample(source: &DynamicImage, width: u32, height: u32, filter: SamplingFilter
         SamplingFilter::Display | SamplingFilter::Transparent => FilterType::Bilinear,
         SamplingFilter::Thumbnail => FilterType::Box,
     };
-    let options = ResizeOptions::new()
+    let mut options = ResizeOptions::new()
         .resize_alg(ResizeAlg::Convolution(fast_filter))
         .use_alpha(matches!(filter, SamplingFilter::Transparent));
+    if let Some(bounds) = crop_to {
+        let crop = CropBox::fit_src_into_dst_size(
+            source.width(),
+            source.height(),
+            bounds.width(),
+            bounds.height(),
+            None,
+        );
+        options = options.crop(crop.left, crop.top, crop.width, crop.height);
+    }
 
     let mut fast_resizer = Resizer::new();
     if let Err(error) = fast_resizer.resize(source, &mut output, &options) {
         mineral_log::warn!(target: "cover", %error,
             source_width = source.width(), source_height = source.height(),
-            width, height, pixel_format = ?source.color(), ?filter,
+            width, height, pixel_format = ?source.color(), ?filter, ?crop_to,
             cpu = ?fast_resizer.cpu_extensions(), "cover pixel sampling failed; falling back to image");
 
         drop(output);
+        let cropped = crop_to.map(|bounds| resize_to_fill(source, bounds.width(), bounds.height()));
+        let source = cropped.as_ref().unwrap_or(source);
 
         output = match (filter, source.color()) {
             // image 的整数缩略图算法对浮点通道也加舍入偏移，会抬高原有亮度。
