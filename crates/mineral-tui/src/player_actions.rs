@@ -233,6 +233,11 @@ impl App {
     /// 执行 PopMenu 确认的动作(队列操作转 client;复制走系统剪贴板)。
     pub(crate) fn run_menu_action(&mut self, action: MenuAction) {
         match action {
+            MenuAction::SaveQueue => self.open_save_queue_prompt(),
+            MenuAction::RenamePlaylist { id, name } => self.open_rename_playlist_prompt(id, name),
+            MenuAction::DeletePlaylist(id) => self
+                .client
+                .playlist_operation(mineral_protocol::PlaylistOp::Delete { id }),
             MenuAction::Play {
                 queue,
                 target,

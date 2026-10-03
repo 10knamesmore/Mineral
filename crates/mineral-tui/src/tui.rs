@@ -10,8 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::Command;
 use crossterm::event::{
-    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -63,7 +64,8 @@ impl Tui {
             io::stdout(),
             EnterAlternateScreen,
             EnableMouseCapture,
-            EnableFocusChange
+            EnableFocusChange,
+            EnableBracketedPaste
         )?;
         // kitty keyboard protocol:让 Shift+arrow / Ctrl+组合键 都带显式 modifier 上来。
         // 不开的话 kitty 默认把 Shift+Left 当裸 Left 报,丢了 SHIFT modifier
@@ -144,7 +146,8 @@ fn restore_terminal(title_pushed: &Arc<AtomicBool>) -> io::Result<()> {
             io::stdout(),
             LeaveAlternateScreen,
             DisableMouseCapture,
-            DisableFocusChange
+            DisableFocusChange,
+            DisableBracketedPaste
         )?;
     }
     Ok(())

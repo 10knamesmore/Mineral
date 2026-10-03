@@ -50,6 +50,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::QueueInsertNext { .. } => Recorded("queue_ops"),
         Request::QueueAppend { .. } => Recorded("queue_ops"),
         Request::QueueEdit { .. } => Recorded("queue_ops"),
+        Request::Playlist { .. } => Recorded("playlist_ops"),
         Request::ChannelCaps => NotAnEvent("读:channel 能力查询"),
         Request::CyclePlayMode => Recorded("mode_changes"),
         Request::SetPlayMode(..) => Recorded("mode_changes"),
@@ -156,7 +157,9 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
             "PlayerCore::record_love_change(set_favorite / toggle_favorite / sync import 共用)"
         }
         BehaviorEvent::QueueOp { .. } => "ClientHandle 的 play_queue / insert_next / append",
-        BehaviorEvent::PlaylistOp { .. } => "playlist 写 task 终态(events.rs)",
+        BehaviorEvent::PlaylistOp { .. } => {
+            "playlist 写 task 终态(events.rs) 与 playlists::playlist_operation"
+        }
         BehaviorEvent::Fetch { .. } => "channel_fetch 终态(events.rs)",
         BehaviorEvent::Download { .. } => "download.rs record_download(三种结局)",
         BehaviorEvent::CopyRender { .. } => "ipc dispatch 的 RenderCopyTemplate 慢路径",

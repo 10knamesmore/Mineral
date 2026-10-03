@@ -241,6 +241,11 @@ async fn handle_request(
             Ok(()) => mineral_protocol::OperationResult::Applied,
             Err(error) => dispatch::failure(&error, dispatch::audio_failure_kind(&error)),
         },
+        Request::Playlist { op } => match client.playlist_operation(op).await {
+            Ok(Some(id)) => dispatch::query(mineral_protocol::Response::PlaylistSaved { id }),
+            Ok(None) => mineral_protocol::OperationResult::Applied,
+            Err(error) => dispatch::failure(&error, error.kind()),
+        },
         Request::QueueEdit { op } => dispatch::execute_queue_edit(client, op).await,
         other => {
             let is_shutdown = matches!(other, Request::Shutdown);

@@ -9,6 +9,7 @@ mod menus;
 mod nav;
 mod page;
 mod player_sync;
+pub(crate) mod playlists;
 mod push_events;
 mod queue_edit;
 mod spectrum_feed;

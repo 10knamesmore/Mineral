@@ -2,7 +2,7 @@
 
 use mineral_model::{Song, SongId};
 use rustc_hash::FxHashMap;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Select};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Select};
 
 use crate::persistence::db::namespace::NamespaceStore;
 use crate::persistence::db::rows::SongArtistRow;
@@ -27,16 +27,28 @@ impl NamespaceStore {
         for id in ids {
             self.check_source(id.namespace())?;
         }
-        let mut songs = FxHashMap::default();
-        let Some(pool) = self.pool().filter(|_| !ids.is_empty()) else {
-            return Ok(songs);
+        let Some(pool) = self.pool() else {
+            return Ok(FxHashMap::default());
         };
+        self.get_meta_batch_on(pool, ids).await
+    }
+
+    /// 使用调用方的连接读取元数据，使歌单关系与歌曲资料属于同一事务视图。
+    pub(crate) async fn get_meta_batch_on(
+        &self,
+        connection: &impl ConnectionTrait,
+        ids: &[SongId],
+    ) -> crate::persistence::Result<FxHashMap<SongId, Song>> {
+        for id in ids {
+            self.check_source(id.namespace())?;
+        }
+        let mut songs = FxHashMap::default();
         let started = std::time::Instant::now();
         let ns = self.namespace();
         for batch in ids.chunks(READ_BATCH_IDS) {
             let rows = metadata_query(ns)
                 .filter(song_meta::Column::SongValue.is_in(batch.iter().map(SongId::value)))
-                .all(pool)
+                .all(connection)
                 .await
                 .map_err(|source| crate::persistence::Error::Record {
                     operation: "批量读取 song_meta",
@@ -45,7 +57,7 @@ impl NamespaceStore {
                 })?;
             let artists = artists_query(ns)
                 .filter(song_artists::Column::SongValue.is_in(batch.iter().map(SongId::value)))
-                .all(pool)
+                .all(connection)
                 .await
                 .map_err(|source| crate::persistence::Error::Record {
                     operation: "批量读取 song_artists",

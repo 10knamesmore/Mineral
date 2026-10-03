@@ -1,9 +1,11 @@
 //! 歌曲元数据与艺人集合的事务批量写入。
 
 use mineral_model::{MediaUrl, Song};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sea_orm::sea_query::{self, Expr, Func, Iden, OnConflict};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
+};
 
 use crate::persistence::db::namespace::NamespaceStore;
 use crate::persistence::entity::{song_artists, song_meta};
@@ -12,6 +14,48 @@ use crate::persistence::entity::{song_artists, song_meta};
 const BATCH_ROWS: usize = 100;
 
 impl NamespaceStore {
+    /// 保存歌单时只补入缺失的共享元数据，旧队列不得覆盖来源已更新的资料。
+    /// 歌曲资料和歌单关系由调用方在同一事务中提交。
+    pub(crate) async fn insert_missing_meta_batch_on(
+        &self,
+        connection: &impl ConnectionTrait,
+        songs: &[&Song],
+    ) -> crate::persistence::Result<()> {
+        for song in songs {
+            self.check_song(song)?;
+        }
+        let ns = self.namespace();
+        for batch in songs.chunks(BATCH_ROWS) {
+            let existing = song_meta::Entity::find()
+                .select_only()
+                .column(song_meta::Column::SongValue)
+                .filter(song_meta::Column::Namespace.eq(ns))
+                .filter(
+                    song_meta::Column::SongValue.is_in(batch.iter().map(|song| song.id.value())),
+                )
+                .into_tuple::<String>()
+                .all(connection)
+                .await
+                .map_err(|source| crate::persistence::Error::Record {
+                    operation: "查询歌单歌曲已有元数据",
+                    record: ns.to_owned(),
+                    source,
+                })?
+                .into_iter()
+                .collect::<FxHashSet<_>>();
+            let missing = batch
+                .iter()
+                .copied()
+                .filter(|song| !existing.contains(song.id.value()))
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                write_metadata(connection, ns, &missing).await?;
+                replace_artists(connection, ns, &missing).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Replace one source's complete song projection, including absent fields and artists.
     pub async fn replace_meta_batch(&self, songs: &[&Song]) -> crate::persistence::Result<()> {
         for song in songs {

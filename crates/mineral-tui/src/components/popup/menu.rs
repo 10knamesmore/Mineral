@@ -27,6 +27,21 @@ use crate::runtime::state::{AppState, OverlayReveal};
 /// 菜单确认后产出、由 App 执行的动作。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MenuAction {
+    /// 保存整个播放队列。
+    SaveQueue,
+
+    /// 改名时预填打开菜单时的名称。
+    RenamePlaylist {
+        /// 目标歌单身份。
+        id: mineral_model::PlaylistId,
+
+        /// 输入框预填文本。
+        name: String,
+    },
+
+    /// 删除指定自建歌单。
+    DeletePlaylist(mineral_model::PlaylistId),
+
     /// 执行一次队列结构编辑(queue 浮层操作菜单的落地动作)。
     QueueEdit(mineral_protocol::QueueOp),
 

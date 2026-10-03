@@ -188,6 +188,7 @@ impl App {
                 }),
             ),
             MenuItem::keyed('d', "Download", MenuAction::Download(Box::new(song))),
+            MenuItem::keyed('s', "Save queue as playlist", MenuAction::SaveQueue),
             MenuItem::keyed('u', "Undo last edit", MenuAction::QueueEdit(QueueOp::Undo)),
             MenuItem::keyed(
                 'a',
@@ -281,7 +282,28 @@ impl App {
             }
             EntityRef::Album(album) => container_action_items(ContainerRef::Album(album.clone())),
             EntityRef::Playlist(playlist) => {
-                container_action_items(ContainerRef::Playlist(playlist.clone()))
+                let mut items = container_action_items(ContainerRef::Playlist(playlist.clone()));
+                if playlist.actions.rename {
+                    items.push(MenuItem::keyed(
+                        'r',
+                        "Rename",
+                        MenuAction::RenamePlaylist {
+                            id: playlist.id.clone(),
+                            name: playlist.name.clone(),
+                        },
+                    ));
+                }
+                if playlist.actions.delete {
+                    items.push(
+                        MenuItem::keyed(
+                            'x',
+                            "Delete",
+                            MenuAction::DeletePlaylist(playlist.id.clone()),
+                        )
+                        .destructive(),
+                    );
+                }
+                items
             }
             EntityRef::Artist(artist) => {
                 container_action_items(ContainerRef::Artist(artist.clone()))

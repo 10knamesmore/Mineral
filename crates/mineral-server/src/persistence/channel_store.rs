@@ -6,7 +6,7 @@ use mineral_channel_core::store::{
     StoreError, StoreResult,
 };
 use mineral_model::{
-    AlbumId, ArtistId, Envelope, PlaylistId, Song, SongId, SourceKind, StoreValue,
+    AlbumId, ArtistId, Envelope, Playlist, PlaylistId, Song, SongId, SourceKind, StoreValue,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -128,6 +128,14 @@ impl ChannelStore for NamespaceStore {
 
 #[async_trait::async_trait]
 impl LibraryStore for ServerStore {
+    async fn user_playlists(&self) -> StoreResult<Vec<Playlist>> {
+        Self::user_playlists(self).await.map_err(Into::into)
+    }
+
+    async fn user_playlist(&self, id: &PlaylistId) -> StoreResult<Option<Playlist>> {
+        Self::user_playlist(self, id).await.map_err(Into::into)
+    }
+
     async fn loved_songs(&self) -> StoreResult<Vec<Song>> {
         Self::loved_songs(self).await.map_err(Into::into)
     }

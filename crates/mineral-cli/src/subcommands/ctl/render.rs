@@ -12,8 +12,11 @@ use crate::error::{Error, Result};
 use super::outcome::{FailureReason, State};
 
 /// 命令专属的结构化字段(同一时刻至多一个)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Payload {
+    /// 新建歌单的完整身份。
+    PlaylistId(String),
+
     /// `volume` 的目标百分比。
     VolumePct(u8),
 
@@ -147,10 +150,11 @@ impl Report {
             State::Unknown { detail } => (None, None, Some(detail.as_str())),
             State::Applied | State::Accepted => (None, None, None),
         };
-        let (volume_pct, position_ms) = match self.payload {
-            Some(Payload::VolumePct(pct)) => (Some(pct), None),
-            Some(Payload::PositionMs(ms)) => (None, Some(ms)),
-            None => (None, None),
+        let (volume_pct, position_ms, playlist_id) = match &self.payload {
+            Some(Payload::VolumePct(pct)) => (Some(*pct), None, None),
+            Some(Payload::PositionMs(ms)) => (None, Some(*ms), None),
+            Some(Payload::PlaylistId(id)) => (None, None, Some(id.as_str())),
+            None => (None, None, None),
         };
         let envelope = Envelope {
             command: self.command,
@@ -160,6 +164,7 @@ impl Report {
             detail,
             volume_pct,
             position_ms,
+            playlist_id,
         };
         serde_json::to_string(&envelope)
     }
@@ -168,6 +173,10 @@ impl Report {
 /// 一行 JSON 信封的字段。
 #[derive(Serialize)]
 struct Envelope<'a> {
+    /// 保存成功的歌单身份。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playlist_id: Option<&'a str>,
+
     /// 子命令路径。
     command: &'a str,
 

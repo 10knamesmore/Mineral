@@ -82,6 +82,27 @@ impl ClientBackend {
 }
 
 impl Backend for ClientBackend {
+    fn playlist_operation(&self, op: mineral_protocol::PlaylistOp) {
+        match op.clone() {
+            mineral_protocol::PlaylistOp::SaveQueue { name } => {
+                self.spawn_pending(self.client.save_queue_as_playlist(name), move |outcome| {
+                    Completion::Playlist {
+                        op,
+                        outcome: outcome.map(|_| ()),
+                    }
+                })
+            }
+            mineral_protocol::PlaylistOp::Rename { id, name } => self
+                .spawn_pending(self.client.rename_playlist(id, name), move |outcome| {
+                    Completion::Playlist { op, outcome }
+                }),
+            mineral_protocol::PlaylistOp::Delete { id } => self
+                .spawn_pending(self.client.delete_playlist(id), move |outcome| {
+                    Completion::Playlist { op, outcome }
+                }),
+        }
+    }
+
     fn audio_outputs(&self) {
         self.spawn_pending(self.client.audio_outputs(), Completion::AudioOutputs);
     }

@@ -122,8 +122,7 @@ impl LineInput {
         self.text.chars().count()
     }
 
-    /// 测试构造:一次性灌入整段文本、光标落词尾。
-    #[cfg(test)]
+    /// 预填整段文本，光标落在末尾。
     pub(crate) fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.cursor = self.char_count();

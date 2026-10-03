@@ -3,6 +3,17 @@
 /// A failed storage operation.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// 用户要求的持久写入无法在禁用存储上执行。
+    #[error("playlist storage is disabled")]
+    Disabled,
+
+    /// 自建歌单已不存在。
+    #[error("playlist {id} not found")]
+    PlaylistNotFound {
+        /// 请求的歌单身份。
+        id: mineral_model::PlaylistId,
+    },
+
     /// A SQLite operation failed.
     #[error("{operation} failed")]
     Database {

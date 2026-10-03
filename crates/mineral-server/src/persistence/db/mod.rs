@@ -12,3 +12,5 @@ pub(crate) mod time;
 
 pub use namespace::NamespaceStore;
 pub use session::{SessionSnapshot, SessionStore};
+
+mod user_playlists;

@@ -16,7 +16,9 @@ use mineral_protocol::{
 
 use crate::error::Result;
 
-use super::command::{CtlArgs, CtlCommand, QueueCommand, SeekSpec, VolumeSpec, format_position};
+use super::command::{
+    CtlArgs, CtlCommand, PlaylistCommand, QueueCommand, SeekSpec, VolumeSpec, format_position,
+};
 use super::outcome::{
     FailureReason, SkipReason, State, failed_state, state_from_outcome, unknown_state,
 };
@@ -117,6 +119,13 @@ async fn execute(socket_path: &Path, cmd: CtlCommand) -> Report {
 async fn dispatch(client: &Client, cmd: CtlCommand) -> Report {
     let path = cmd.path();
     match cmd {
+        CtlCommand::Playlist { cmd } => {
+            let pending = match cmd {
+                PlaylistCommand::Rename { id, name } => client.rename_playlist(id, name),
+                PlaylistCommand::Delete { id } => client.delete_playlist(id),
+            };
+            report(path, "playlist updated", await_pending(pending).await)
+        }
         CtlCommand::PlayPause => play_pause(client, path).await,
         CtlCommand::Pause => report(path, "paused", client.pause().await),
         CtlCommand::Resume => report(path, "resumed", client.resume().await),
@@ -261,6 +270,20 @@ async fn volume_relative(client: &Client, path: &'static str, delta: i16) -> Rep
 async fn dispatch_queue(client: &Client, cmd: QueueCommand) -> Report {
     let path = cmd.path();
     match cmd {
+        QueueCommand::Save { name } => {
+            match await_pending(client.save_queue_as_playlist(name)).await {
+                Outcome::Applied(id) | Outcome::Accepted(id) => {
+                    Report::new(path, id.qualified(), State::Applied)
+                        .with_payload(Payload::PlaylistId(id.qualified()))
+                }
+                Outcome::Failed { kind, detail } => {
+                    Report::new(path, String::new(), failed_state(kind, &detail))
+                }
+                Outcome::Unknown { reason } => {
+                    Report::new(path, String::new(), unknown_state(reason))
+                }
+            }
+        }
         QueueCommand::Transform { label, at } => queue_transform(client, path, &label, at).await,
         QueueCommand::Undo => queue_edit_report(path, client.queue_edit(QueueOp::Undo).await),
     }
@@ -529,5 +552,20 @@ mod tests {
         assert_eq!(clamp_volume(50, 5), 55);
         assert_eq!(clamp_volume(50, -5), 45);
         assert_eq!(clamp_volume(50, i16::MAX), 100, "荒谬增量也落在端点");
+    }
+}
+
+/// 等待一次提交，不自动重发结果未知的创建操作。
+async fn await_pending<T>(
+    pending: std::result::Result<
+        mineral_client::operation::Pending<T>,
+        mineral_client::operation::SubmitError,
+    >,
+) -> Outcome<T> {
+    match pending {
+        Ok(pending) => pending.outcome().await,
+        Err(error) => Outcome::Unknown {
+            reason: error.into(),
+        },
     }
 }

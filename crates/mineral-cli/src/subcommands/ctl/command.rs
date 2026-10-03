@@ -10,6 +10,10 @@ use mineral_protocol::PlayMode;
 /// 控制命令的位置和音量参数解析失败。
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
+    /// 歌单身份必须包含来源和来源内 ID。
+    #[error("playlist id must have the form source:id")]
+    PlaylistId,
+
     /// 时间格式不符合可接受的段数。
     #[error("时长 `{raw}` 用法:SS / MM:SS / H:MM:SS 或 <n>s|m|h")]
     TimeFormat {
@@ -115,6 +119,13 @@ pub struct CtlArgs {
 /// daemon 控制命令(都不需要歌曲身份)。
 #[derive(Subcommand, Debug, Clone)]
 pub enum CtlCommand {
+    /// manage saved Mineral playlists
+    Playlist {
+        /// playlist subcommand
+        #[command(subcommand)]
+        cmd: PlaylistCommand,
+    },
+
     /// toggle between pause and resume (skipped when there is no current track)
     PlayPause,
 
@@ -176,6 +187,7 @@ impl CtlCommand {
             Self::Seek { .. } => "seek",
             Self::Volume { .. } => "volume",
             Self::Queue { cmd } => cmd.path(),
+            Self::Playlist { cmd } => cmd.path(),
         }
     }
 }
@@ -183,6 +195,12 @@ impl CtlCommand {
 /// `ctl queue` 下的编辑命令。
 #[derive(Subcommand, Debug, Clone)]
 pub enum QueueCommand {
+    /// save the entire queue as a new Mineral playlist
+    Save {
+        /// name of the new playlist
+        name: String,
+    },
+
     /// apply a named transform registered in `queue.transforms`
     Transform {
         /// transform label from the effective config
@@ -201,6 +219,7 @@ impl QueueCommand {
     /// JSON `command` 字段值(子命令路径)。
     pub(super) fn path(&self) -> &'static str {
         match self {
+            Self::Save { .. } => "queue save",
             Self::Transform { .. } => "queue transform",
             Self::Undo => "queue undo",
         }
@@ -545,4 +564,47 @@ mod tests {
             "queue transform"
         );
     }
+}
+
+/// 自建歌单管理命令，按完整来源身份定位。
+#[derive(Subcommand, Debug, Clone)]
+pub enum PlaylistCommand {
+    /// rename a saved playlist
+    Rename {
+        /// qualified playlist id (source:id)
+        #[arg(value_parser = parse_playlist_id)]
+        id: mineral_model::PlaylistId,
+
+        /// new playlist name
+        name: String,
+    },
+
+    /// delete a saved playlist, keeping songs and playback intact
+    Delete {
+        /// qualified playlist id (source:id)
+        #[arg(value_parser = parse_playlist_id)]
+        id: mineral_model::PlaylistId,
+    },
+}
+
+impl PlaylistCommand {
+    /// JSON 信封中的命令路径。
+    pub(super) fn path(&self) -> &'static str {
+        match self {
+            Self::Rename { .. } => "playlist rename",
+            Self::Delete { .. } => "playlist delete",
+        }
+    }
+}
+
+/// CLI 接受完整身份，避免同名歌单定位歧义。
+fn parse_playlist_id(raw: &str) -> Result<mineral_model::PlaylistId, ParseError> {
+    let (source, value) = raw
+        .split_once(':')
+        .filter(|(source, value)| !source.is_empty() && !value.is_empty())
+        .ok_or(ParseError::PlaylistId)?;
+    Ok(mineral_model::PlaylistId::new(
+        mineral_model::SourceKind::from_name(source),
+        value,
+    ))
 }

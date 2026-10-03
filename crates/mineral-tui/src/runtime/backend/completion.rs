@@ -10,6 +10,15 @@ use mineral_protocol::{CopyTextFailure, QueueEditOutcome, ScriptBind};
 /// 操作完成事件(daemon 结论回流到 UI)。
 #[derive(Debug)]
 pub(crate) enum Completion {
+    /// 歌单操作的结构化结果。
+    Playlist {
+        /// 已提交的操作，用于生成对应反馈。
+        op: mineral_protocol::PlaylistOp,
+
+        /// daemon 结论。
+        outcome: Outcome<()>,
+    },
+
     /// CPAL device list or structured failure.
     AudioOutputs(Outcome<Vec<mineral_audio::OutputDevice>>),
 

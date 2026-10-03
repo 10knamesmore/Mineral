@@ -11,3 +11,6 @@ pub(crate) mod song_favorites;
 pub(crate) mod song_kv;
 pub(crate) mod song_meta;
 pub(crate) mod song_stats;
+
+pub(crate) mod user_playlist_entries;
+pub(crate) mod user_playlists;

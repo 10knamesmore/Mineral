@@ -7,6 +7,7 @@ mod daemon;
 mod downloads;
 mod library;
 mod playback;
+mod playlists;
 mod queue;
 mod scripts;
 mod state;

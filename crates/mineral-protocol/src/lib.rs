@@ -21,6 +21,7 @@ mod handshake;
 mod key;
 mod message;
 mod player;
+mod playlist;
 mod queue_edit;
 mod session;
 mod wire;
@@ -48,6 +49,7 @@ pub use player::{
     AdvanceKind, CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
     QueueSync, Repeat, SegmentVersion,
 };
+pub use playlist::PlaylistOp;
 pub use queue_edit::{QueueAnchor, QueueEditOutcome, QueueOp, QueuePos};
 pub use session::{
     CloseReason, DOWNLOAD_DETAIL_PART_ROWS, DownloadDetailDelta, DownloadDetailUpdate, FailureKind,

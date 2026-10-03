@@ -84,6 +84,9 @@ pub(crate) enum OverlayResponse {
 
     /// 产生一个意图,交 App 执行(浮层自身不持有 App)。
     Do(OverlayAction),
+
+    /// 提交成功：先关闭当前浮层，再由 App 执行意图。
+    CloseAndDo(OverlayAction),
 }
 
 /// 浮层产生、由 App 执行的意图。
@@ -93,6 +96,12 @@ pub(crate) enum OverlayResponse {
 /// 与主 keymap 统一的是 dispatch 入口与动作概念,非枚举合一。
 #[derive(Clone)]
 pub(crate) enum OverlayAction {
+    /// 提交已填好参数的歌单操作。
+    Playlist(mineral_protocol::PlaylistOp),
+
+    /// 显示由前端生成的错误提示，不关闭当前浮层。
+    FlashError(String),
+
     /// Selects a CPAL device or system default routing.
     SelectAudioOutput(mineral_audio::OutputTarget),
 
@@ -271,11 +280,11 @@ pub(crate) fn render_overlay<O: Overlay>(
         (None, Some(d)) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
         (None, None) => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
     };
+    if base.width < 4 || base.height < 3 {
+        return;
+    }
     if scale >= FULL_SCALE {
         // 完全展开:整 cell 外框 + 内容。
-        if base.width < 4 || base.height < 3 {
-            return;
-        }
         frame.render_widget(Clear, base);
         let block = overlay.block(ctx, theme, focused);
         let inner = block.inner(base);
@@ -525,8 +534,8 @@ fn draw_center_reveal(frame: &mut Frame<'_>, base: Rect, scale: u16, off: &Buffe
     let full_h_e = u32::from(base.height) * 8;
     let cur_w_e = full_w_e * u32::from(scale) / u32::from(FULL_SCALE);
     let cur_h_e = full_h_e * u32::from(scale) / u32::from(FULL_SCALE);
-    // 太小画不出有意义的面板,跳过这一帧。
-    if cur_w_e < 4 * 8 || cur_h_e < 3 * 8 {
+    // 中间帧允许不足一行；完整面板的最小尺寸已由 render_overlay 检查。
+    if cur_w_e == 0 || cur_h_e == 0 {
         return;
     }
 

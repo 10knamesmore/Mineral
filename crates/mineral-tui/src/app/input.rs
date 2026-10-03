@@ -3,6 +3,7 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse};
+use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::render::anim::Transition;
 use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
 use crate::runtime::keymap::{Keymap, chord_from_event};
@@ -16,6 +17,18 @@ impl App {
     pub(super) fn handle_event(&mut self, ev: &Event) {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+            Event::Paste(text) => {
+                if self.transition.is_some() {
+                    return;
+                }
+                if let Some(prompt) = self.overlays.text_prompt_mut() {
+                    prompt.paste(text);
+                } else if self.overlays.len() == 0 && self.state.in_text_input() {
+                    for c in text.chars().filter(|c| !c.is_control()) {
+                        self.handle_key(&KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+                    }
+                }
+            }
             Event::Resize(..) => {
                 self.state.browse.list_expansion.get_mut().invalidate();
                 self.state.images.refresh_cell_pixels();
@@ -55,7 +68,10 @@ impl App {
         // 用户绑定)、压过浮层(确认 / queue 开着也直接退);唯独让位文本输入——
         // 文本输入态的大写 Q 是字符,不是退出意图(含 channel-search 搜索框)。只看
         // `Char('Q')` 不看 modifier:部分终端报大写字符时不附带 SHIFT。
-        if !self.state.in_text_input() && key.code == KeyCode::Char('Q') {
+        if !self.state.in_text_input()
+            && !self.overlays.in_text_input()
+            && key.code == KeyCode::Char('Q')
+        {
             self.stop_daemon_on_quit = true;
             // 还停在 Library 内就退出:位置没经过「返回」记录,这里补记。放在转场
             // 起点而非收尾——fire-and-forget 落盘借收缩动画的时长完成,收尾才写
@@ -69,12 +85,16 @@ impl App {
         // 与 behavior 步长),浮层不认或未命中再走浮层裸键;无浮层走全局 dispatch。
         let action = chord_from_event(key).and_then(|c| self.keymap.lookup(c));
 
-        // 活跃浮层(栈顶未退场)优先吃键。Consumed 吞掉、Pass 半穿透给全局、Do 交意图执行。
+        // 活跃浮层(栈顶未退场)优先吃键；关闭并执行时先退场，避免重复提交。
         if let Some(resp) = self.overlays.dispatch_key(key, action, &self.state) {
             match resp {
                 OverlayResponse::Consumed => {}
                 OverlayResponse::Pass => self.handle_overlay_passthrough(key),
                 OverlayResponse::Do(overlay_action) => self.run_overlay_action(overlay_action),
+                OverlayResponse::CloseAndDo(overlay_action) => {
+                    self.overlays.close_top();
+                    self.run_overlay_action(overlay_action);
+                }
             }
             return;
         }
@@ -206,6 +226,13 @@ impl App {
                 self.remember_track_pos();
                 self.transition = Some(Transition::collapsing(self.transition_ticks()));
             }
+            OverlayAction::Playlist(op) => {
+                mineral_log::debug!(target: "tui", operation = ?op, "submitting playlist operation");
+                self.client.playlist_operation(op);
+            }
+            OverlayAction::FlashError(text) => self
+                .notifications
+                .flash(tinted_text_item(text, TextTint::Error)),
             OverlayAction::SelectAudioOutput(target) => self.client.set_audio_output(target),
             OverlayAction::CloseTop => self.overlays.close_top(),
             OverlayAction::StopDownload(id) => {

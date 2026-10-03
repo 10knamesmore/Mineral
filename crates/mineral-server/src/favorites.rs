@@ -252,18 +252,7 @@ impl PlayerCore {
         }
     }
 
-    /// 收藏集变化后重合成聚合歌单(mineral 源)并重推,两条出口各司其职:
-    ///
-    /// - **曲目集合**走 [`TaskEvent::PlaylistDetailFetched`]:client 直接替换 `library.tracks`,
-    ///   正在看聚合歌单时收藏行实时增删。
-    /// - **歌单列表(track_count)**走 [`PlayerCore::library_concluded`](crate::library) 的出口
-    ///   管线,与其它源同路合并成 `LibrarySnapshot`——sidebar 计数只认这条刷新。**不能**直推
-    ///   `PlaylistsFetched`:那是 scheduler 内部事件,client 侧 apply 按约定丢弃(等价 no-op)。
-    ///
-    /// 读 persist + 推 detail 全程持 [`Inner::favorites_lock`](crate::player):并发收藏写下,各
-    /// refresh 依次读当时 persist 态、按获锁序推 detail,最后获锁者读到最终态并最后推,detail
-    /// 收敛。(持锁只做本地 SQL,无网络。)列表 count 经出口管线异步落地,与其它源同款最终一致。
-    /// 未注册聚合 channel(裁剪构建 / 纯 mock 测试核)时静默跳过。
+    /// 收藏集变化后重合成聚合歌单(mineral 源)并重推
     pub(crate) async fn refresh_aggregate_favorites(&self) {
         let Some(channel) = self.channel_for(SourceKind::MINERAL) else {
             return;
@@ -282,26 +271,26 @@ impl PlayerCore {
                     return;
                 }
             };
-            for p in &playlists {
-                match channel
-                    .playlist_detail(&p.id, mineral_channel_core::PlaylistLoad::Complete)
-                    .await
-                {
-                    Ok(playlist) => {
-                        self.notify().task_event(TaskEvent::PlaylistDetailFetched {
-                            id: p.id.clone(),
-                            detail: Box::new(playlist),
-                            load: mineral_channel_core::PlaylistLoad::Complete,
-                        });
-                    }
-                    Err(e) => {
-                        mineral_log::debug!(
-                            target: "favorites",
-                            playlist = p.id.qualified(),
-                            error = mineral_log::chain(&e),
-                            "聚合歌单 detail 重合成失败,跳过该张"
-                        );
-                    }
+            // this is a special one , so use the specific channel
+            let id = mineral_channel_mineral::favorites_playlist_id();
+            match channel
+                .playlist_detail(&id, mineral_channel_core::PlaylistLoad::Complete)
+                .await
+            {
+                Ok(playlist) => {
+                    self.notify().task_event(TaskEvent::PlaylistDetailFetched {
+                        id,
+                        detail: Box::new(playlist),
+                        load: mineral_channel_core::PlaylistLoad::Complete,
+                    });
+                }
+                Err(e) => {
+                    mineral_log::debug!(
+                        target: "favorites",
+                        playlist = id.qualified(),
+                        error = mineral_log::chain(&e),
+                        "聚合收藏歌单详情重建失败，跳过详情推送"
+                    );
                 }
             }
             playlists

@@ -4,6 +4,16 @@ use typed_builder::TypedBuilder;
 
 use crate::{collection::PlaylistEntry, ids::PlaylistId, source::SourceKind, url::MediaUrl};
 
+/// 当前客户端可请求的歌单管理操作。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistActions {
+    /// 允许改名。
+    pub rename: bool,
+
+    /// 允许删除。
+    pub delete: bool,
+}
+
 /// 一个歌单及其曲目。
 ///
 /// 构造走 [`Playlist::builder`](Playlist::builder)(`#[non_exhaustive]`);读取走 getter。
@@ -15,6 +25,10 @@ pub struct Playlist {
 
     /// 歌单名。
     pub name: String,
+
+    /// 服务端提供的操作资格；执行时仍由服务端校验。
+    #[builder(default)]
+    pub actions: PlaylistActions,
 
     /// 简介,拿不到给空。
     #[builder(default)]

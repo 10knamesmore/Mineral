@@ -27,6 +27,8 @@ pub(crate) struct BackendBootstrap {
 
 /// TUI 后端端口。
 pub(crate) trait Backend: Send + Sync {
+    /// 保存或管理歌单，结论进入完成队列。
+    fn playlist_operation(&self, op: mineral_protocol::PlaylistOp);
     /// Queries output devices and delivers the result through the completion queue.
     fn audio_outputs(&self);
 

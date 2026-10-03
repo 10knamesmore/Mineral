@@ -106,6 +106,34 @@ impl App {
     /// 应用一条完成事件。
     fn apply_completion(&mut self, completion: Completion) {
         match completion {
+            Completion::Playlist { op, outcome } => {
+                use mineral_protocol::{FailureKind, PlaylistOp};
+                log_completion_failure(&outcome, "playlist operation");
+                let message = match &outcome {
+                    Outcome::Applied(()) | Outcome::Accepted(()) => match op {
+                        PlaylistOp::SaveQueue { .. } => "Playlist saved",
+                        PlaylistOp::Rename { .. } => "Playlist renamed",
+                        PlaylistOp::Delete { .. } => "Playlist deleted",
+                    },
+                    Outcome::Failed { kind, .. } => match kind {
+                        FailureKind::Invalid => "Check the playlist name and queue",
+                        FailureKind::NotFound => "Playlist no longer exists",
+                        FailureKind::Unavailable => "Playlist operation unavailable",
+                        FailureKind::Conflict => "Playlist changed elsewhere",
+                        FailureKind::Internal => "Could not update playlist",
+                    },
+                    Outcome::Unknown { .. } => {
+                        "Playlist result unknown; check the library before retrying"
+                    }
+                };
+                let tint = if outcome.is_success() {
+                    TextTint::Normal
+                } else {
+                    TextTint::Error
+                };
+                self.notifications
+                    .flash(tinted_text_item(message.to_owned(), tint));
+            }
             Completion::AudioOutputs(outcome) => {
                 if let Some(popup) = self.overlays.audio_settings_mut() {
                     popup.apply_devices(outcome, &self.state);

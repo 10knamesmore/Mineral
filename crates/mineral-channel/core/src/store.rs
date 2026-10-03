@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use mineral_model::{
-    AlbumId, ArtistId, CollectionIndex, Envelope, PlaylistId, Song, SongId, SourceKind, StoreValue,
+    AlbumId, ArtistId, CollectionIndex, Envelope, Playlist, PlaylistId, Song, SongId, SourceKind,
+    StoreValue,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -139,6 +140,12 @@ pub trait NamespaceStore: Send + Sync {
 /// Provides library operations across sources.
 #[async_trait]
 pub trait LibraryStore: Send + Sync {
+    /// Lists user-created playlist headers without loading songs.
+    async fn user_playlists(&self) -> StoreResult<Vec<Playlist>>;
+
+    /// Reads a user-created playlist with its ordered song snapshots.
+    async fn user_playlist(&self, id: &PlaylistId) -> StoreResult<Option<Playlist>>;
+
     /// Lists favorites with available song metadata, newest first, retaining each song’s source.
     async fn loved_songs(&self) -> StoreResult<Vec<Song>>;
 

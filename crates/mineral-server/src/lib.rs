@@ -29,6 +29,7 @@ mod persistence;
 mod playback;
 mod playback_instance;
 mod player;
+mod playlists;
 mod props;
 mod publisher;
 mod queue;

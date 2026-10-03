@@ -8,6 +8,9 @@ pub(crate) struct ServerMigrator;
 #[async_trait::async_trait]
 impl MigratorTrait for ServerMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(super::m20260906_server::Migration)]
+        vec![
+            Box::new(super::m20260906_server::Migration),
+            Box::new(super::m20260930_user_playlists::Migration),
+        ]
     }
 }

@@ -433,10 +433,15 @@ async fn toggle_favorite_persists_locally_even_when_remote_unsupported() -> colo
 /// toggle 后聚合收藏歌单(mineral 源)被重合成并重推:曲目集合走 `PlaylistDetailFetched`
 /// (正在看聚合歌单的 client 实时增删),sidebar 计数走 client **认得**的 `LibrarySnapshot`
 /// (经 library_concluded 出口管线,而非被 client no-op 丢弃的 `PlaylistsFetched`)。
+/// 自建歌单保留在列表中，但不重推其曲目详情。
 #[tokio::test(flavor = "multi_thread")]
 async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let persist = ServerStore::open(&dir.path().join("t.db")).await?;
+    let track = song("agg1");
+    let saved_id = persist
+        .create_user_playlist("Saved", std::slice::from_ref(&track))
+        .await?;
     let channels: Vec<Arc<dyn MusicChannel>> = vec![
         Arc::new(RecordingChannel {
             calls: Arc::default(),
@@ -453,7 +458,6 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         /*music_dir*/ None,
         MediaCache::disabled(),
     )?;
-    let track = song("agg1");
     let mut rx = core.notify().subscribe();
     core.toggle_favorite(&track, mineral_stats::Actor::User)
         .await?;
@@ -474,18 +478,21 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         events.extend(drain_hub_task_events(&mut rx));
     }
 
-    let detail = events
+    let favorites_id = mineral_channel_mineral::favorites_playlist_id();
+    let details = events
         .iter()
-        .rev()
-        .find_map(|e| match e {
-            mineral_task::TaskEvent::PlaylistDetailFetched { id, detail, .. }
-                if id.namespace() == SourceKind::MINERAL =>
-            {
-                Some(&detail.playlist)
+        .filter_map(|e| match e {
+            mineral_task::TaskEvent::PlaylistDetailFetched { id, detail, .. } => {
+                Some((id, &detail.playlist))
             }
             _ => None,
         })
-        .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应重推聚合歌单 detail"))?;
+        .collect::<Vec<_>>();
+    assert_eq!(
+        details.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![&favorites_id]
+    );
+    let detail = details[0].1;
     assert_eq!(detail.entries.len(), 1);
     assert_eq!(
         detail.entries.first().map(|entry| &entry.song.id),
@@ -505,9 +512,10 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
         .ok_or_else(|| color_eyre::eyre::eyre!("toggle 后应产出 LibrarySnapshot"))?;
     let fav = snapshot
         .iter()
-        .find(|p| p.id.namespace() == SourceKind::MINERAL)
+        .find(|p| p.id == favorites_id)
         .ok_or_else(|| color_eyre::eyre::eyre!("快照应含 mineral 聚合歌单"))?;
     assert_eq!(fav.track_count, 1, "sidebar 计数跟随收藏数");
+    assert!(snapshot.iter().any(|p| p.id == saved_id));
     Ok(())
 }
 

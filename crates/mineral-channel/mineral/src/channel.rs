@@ -17,8 +17,7 @@ pub fn favorites_playlist_id() -> PlaylistId {
     PlaylistId::new(SourceKind::MINERAL, "favorites")
 }
 
-/// 内建 channel:source 为 [`SourceKind::MINERAL`],把跨来源收藏
-/// 投影成一张 `Favorites` 歌单。
+/// Mineral 歌单适配器，读取跨来源 Favorites 与用户保存的歌单。
 ///
 /// 搜索 / 详情一律 `NotSupported`——歌单里每首歌的 id 保留**原源** namespace,
 /// 播放按 id 路由到对应 Playback provider,本 channel 不参与播放资源解析。
@@ -107,7 +106,16 @@ impl MusicChannel for MineralChannel {
     }
 
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
-        Ok(vec![self.build_favorites(/*with_songs*/ false).await?])
+        let mut playlists = vec![self.build_favorites(/*with_songs*/ false).await?];
+        playlists.extend(
+            self.library
+                .user_playlists()
+                .await
+                .map_err(|source| Error::Storage {
+                    source: Box::new(source),
+                })?,
+        );
+        Ok(playlists)
     }
 
     async fn playlist_detail(
@@ -115,8 +123,19 @@ impl MusicChannel for MineralChannel {
         id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
-        if *id != favorites_playlist_id() {
+        if id.namespace() != SourceKind::MINERAL {
             return Err(Error::NotSupported);
+        }
+        if *id != favorites_playlist_id() {
+            return self
+                .library
+                .user_playlist(id)
+                .await
+                .map_err(|source| Error::Storage {
+                    source: Box::new(source),
+                })?
+                .map(mineral_channel_core::PlaylistDetail::complete)
+                .ok_or(Error::NotFound);
         }
         self.build_favorites(/*with_songs*/ true)
             .await

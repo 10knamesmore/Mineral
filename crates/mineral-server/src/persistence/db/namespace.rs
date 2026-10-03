@@ -11,6 +11,7 @@ use crate::persistence::ServerStore;
 use crate::persistence::entity::{
     playlist_cache, playlist_entries, song_artists, song_favorites, song_meta,
 };
+use crate::persistence::store::next_favorite_entry_time;
 use mineral_channel_core::store::{CachedPlaylistEntry, PlaylistCacheEntry};
 
 /// 绑定单一来源 namespace 的结构态视图。降级 ServerStore 下所有方法 no-op/空。
@@ -131,6 +132,7 @@ impl NamespaceStore {
     }
 
     /// 按状态 transition 设/取消一首歌的 favorite membership。降级 no-op。
+    /// 新收藏在事务内取得晚于现有记录的时间；同状态写入不改变原来的顺序。
     ///
     /// # Params:
     ///   - `id`: 歌曲 id
@@ -145,10 +147,18 @@ impl NamespaceStore {
         };
         trace!(target: "persist", song = id.value(), loved, "set_loved");
         let changed = if loved {
-            song_favorites::Entity::insert(song_favorites::ActiveModel {
+            let tx = db
+                .begin()
+                .await
+                .map_err(|source| crate::persistence::Error::Database {
+                    operation: "开启收藏写入事务",
+                    source,
+                })?;
+            let entered_at = next_favorite_entry_time(&tx).await?;
+            let changed = song_favorites::Entity::insert(song_favorites::ActiveModel {
                 namespace: Set(self.namespace().to_owned()),
                 song_value: Set(id.value().to_owned()),
-                entered_at: Set(crate::persistence::db::time::now_ms()),
+                entered_at: Set(entered_at),
             })
             .on_conflict(
                 OnConflict::columns([
@@ -158,13 +168,20 @@ impl NamespaceStore {
                 .do_nothing()
                 .to_owned(),
             )
-            .exec_without_returning(db)
+            .exec_without_returning(&tx)
             .await
             .map_err(|source| crate::persistence::Error::Record {
                 operation: "写收藏",
                 record: id.value().to_owned(),
                 source,
-            })?
+            })?;
+            tx.commit()
+                .await
+                .map_err(|source| crate::persistence::Error::Database {
+                    operation: "提交收藏写入事务",
+                    source,
+                })?;
+            changed
         } else {
             song_favorites::Entity::delete_by_id((
                 self.namespace().to_owned(),

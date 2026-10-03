@@ -57,7 +57,7 @@ pub use ids::{AlbumId, ArtistId, PlaylistId, SongId, UserId};
 pub use lyrics::{
     LineKind, LyricLine, Lyrics, Word, current_line, has_timed, has_words, parse_lrc, to_lrc_string,
 };
-pub use playlist::Playlist;
+pub use playlist::{Playlist, PlaylistActions};
 pub use refs::{AlbumRef, ArtistRef};
 pub use search::SearchKind;
 pub use song::Song;

@@ -137,18 +137,7 @@ impl Harness {
             std::fs::create_dir_all(&cfg_dir).wrap_err("create config dir")?;
             std::fs::write(cfg_dir.join("config.lua"), src).wrap_err("seed config.lua")?;
         }
-        let child = Command::new(env!("CARGO_BIN_EXE_mineral"))
-            .arg("serve")
-            .env("XDG_CACHE_HOME", root.join("cache"))
-            .env("XDG_CONFIG_HOME", root.join("config"))
-            .env("XDG_DATA_HOME", root.join("data"))
-            .env("MINERAL_SOCKET_DIR", &sock_dir)
-            .env("MINERAL_AUDIO_NULL", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .wrap_err("spawn `mineral serve`")?;
+        let child = spawn_daemon(&root, &sock_dir)?;
         let socket = sock_dir.join("mineral.sock");
         Ok(Self {
             child,
@@ -504,5 +493,291 @@ async fn missing_daemon_is_unknown() -> color_eyre::Result<()> {
         "人读结论走 stderr:{}",
         human.stderr
     );
+    Ok(())
+}
+
+/// 重启测试复用相同数据目录。
+fn spawn_daemon(root: &std::path::Path, sock_dir: &std::path::Path) -> color_eyre::Result<Child> {
+    let child = Command::new(env!("CARGO_BIN_EXE_mineral"))
+        .arg("serve")
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("MINERAL_SOCKET_DIR", sock_dir)
+        .env("MINERAL_AUDIO_NULL", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .wrap_err("spawn `mineral serve`")?;
+    Ok(child)
+}
+
+/// 从实际订阅中读取歌单列表，等待指定的提交结果可见。
+async fn wait_playlists(
+    client: &Client,
+    ready: impl Fn(&[mineral_model::Playlist]) -> bool,
+) -> color_eyre::Result<Vec<mineral_model::Playlist>> {
+    timeout(WAIT, async {
+        loop {
+            for event in client.mirror().drain_events() {
+                if let mineral_protocol::Event::Task(task) = event
+                    && let mineral_task::TaskEvent::LibrarySnapshot { playlists } = *task
+                    && ready(&playlists)
+                {
+                    return playlists;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .wrap_err("wait for saved playlist library")
+}
+
+/// 从实际 channel 详情请求读回持久曲目。
+async fn fetch_playlist(
+    client: &Client,
+    id: &mineral_model::PlaylistId,
+) -> color_eyre::Result<mineral_model::Playlist> {
+    let pending = client.submit(
+        mineral_protocol::Request::SubmitTask(
+            mineral_task::TaskKind::ChannelFetch(mineral_task::ChannelFetchKind::PlaylistDetail {
+                id: id.clone(),
+                load: mineral_channel_core::PlaylistLoad::Complete,
+            }),
+            mineral_task::Priority::User,
+        ),
+        |_, _| mineral_client::operation::Outcome::Applied(()),
+    )?;
+    assert!(pending.outcome().await.is_success());
+    timeout(WAIT, async {
+        loop {
+            for event in client.mirror().drain_events() {
+                if let mineral_protocol::Event::Task(task) = event
+                    && let mineral_task::TaskEvent::PlaylistDetailFetched {
+                        id: fetched,
+                        detail,
+                        ..
+                    } = *task
+                    && &fetched == id
+                {
+                    return detail.playlist;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .wrap_err("wait for saved playlist details")
+}
+
+/// CLI 与 Client 共用真实 daemon，保存跨源重复队列并跨重启管理。
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_playlists_survive_restart_and_preserve_queue() -> color_eyre::Result<()> {
+    use mineral_client::operation::Outcome;
+    use mineral_model::{PlaylistId, SongId, SourceKind};
+    use mineral_protocol::{FailureKind, Subscription};
+    let mut h = Harness::spawn("saved-playlists", None)?;
+    h.wait_ready()?;
+    let client = h.connect("playlist-observer").await?;
+    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Events(Subscription::Task));
+    client.wait_subscriptions_ready(WAIT).await;
+    let empty = h.ctl(&["--json", "queue", "save", "Empty"])?;
+    assert_eq!(empty.status.code(), Some(1));
+    assert_eq!(field(&empty.json()?, "kind")?, "invalid");
+    let a = mineral_test::song("a");
+    let b = Song::builder()
+        .id(SongId::new(SourceKind::BILIBILI, "b"))
+        .name("跨源".to_owned())
+        .build();
+    let queue = vec![a.clone(), b.clone(), a.clone()];
+    assert!(
+        client
+            .submit(
+                mineral_protocol::Request::QueueAppend {
+                    songs: queue.clone(),
+                    context: QueueContextWire::Manual
+                },
+                |result, _| match result {
+                    mineral_protocol::OperationResult::Applied => Outcome::Applied(()),
+                    _ => Outcome::Failed {
+                        kind: FailureKind::Internal,
+                        detail: "append rejected".to_owned()
+                    },
+                }
+            )?
+            .outcome()
+            .await
+            .is_success()
+    );
+    wait_until("queue append", || queue_ids(&client).len() == 3).await?;
+    let before = queue_ids(&client);
+    let blank = h.ctl(&["--json", "queue", "save", "   "])?;
+    assert_eq!(blank.status.code(), Some(1));
+    let saved = h.ctl(&["--json", "queue", "save", " Favorites "])?;
+    assert_eq!(saved.status.code(), Some(0), "{}", saved.stderr);
+    let qualified = field(&saved.json()?, "playlist_id")?.to_owned();
+    let id = PlaylistId::new(
+        SourceKind::MINERAL,
+        qualified
+            .strip_prefix("mineral:")
+            .ok_or_else(|| color_eyre::eyre::eyre!("wrong playlist namespace"))?,
+    );
+    let duplicate = client
+        .save_queue_as_playlist("Favorites".to_owned())?
+        .outcome()
+        .await
+        .into_success()
+        .ok_or_else(|| color_eyre::eyre::eyre!("second save failed"))?;
+    assert_ne!(id, duplicate);
+    let playlists = wait_playlists(&client, |all| {
+        all.iter().any(|p| p.id == id) && all.iter().any(|p| p.id == duplicate)
+    })
+    .await?;
+    assert!(
+        playlists
+            .iter()
+            .any(|p| p.id == id && p.actions.rename && p.actions.delete && p.name == "Favorites")
+    );
+    assert!(
+        playlists
+            .iter()
+            .any(|p| p.id.value() == "favorites" && !p.actions.rename && !p.actions.delete)
+    );
+    let detail = fetch_playlist(&client, &id).await?;
+    assert_eq!(
+        detail
+            .entries
+            .iter()
+            .map(|e| e.song.clone())
+            .collect::<Vec<_>>(),
+        queue
+    );
+    assert_eq!(queue_ids(&client), before);
+    // 来源资料更新后，歌单按 ID 读取新值，播放队列仍保留当前内容。
+    let mut updated = a.clone();
+    updated.name = "Updated catalog title".to_owned();
+    updated.duration_ms = Some(240_000);
+    assert!(
+        client
+            .toggle_love(updated.clone())?
+            .outcome()
+            .await
+            .is_success()
+    );
+    let latest_queue = vec![updated.clone(), b, updated];
+    wait_playlists(&client, |all| {
+        all.iter().any(|p| p.id == id)
+            && all
+                .iter()
+                .any(|p| p.id.value() == "favorites" && p.track_count == 1)
+    })
+    .await?;
+    // 再保存旧队列只建立成员关系，不得把共享资料改回旧值。
+    let saved_again = client
+        .save_queue_as_playlist("Current metadata".to_owned())?
+        .outcome()
+        .await
+        .into_success()
+        .ok_or_else(|| color_eyre::eyre::eyre!("save with existing metadata failed"))?;
+    for saved_id in [&id, &duplicate, &saved_again] {
+        let detail = fetch_playlist(&client, saved_id).await?;
+        assert_eq!(
+            detail
+                .entries
+                .into_iter()
+                .map(|entry| entry.song)
+                .collect::<Vec<_>>(),
+            latest_queue
+        );
+    }
+    assert_eq!(queue_ids(&client), before);
+    for protected in [
+        PlaylistId::new(SourceKind::MINERAL, "favorites"),
+        PlaylistId::new(SourceKind::NETEASE, id.value()),
+    ] {
+        assert!(matches!(
+            client
+                .rename_playlist(protected.clone(), "Denied".to_owned())?
+                .outcome()
+                .await,
+            Outcome::Failed {
+                kind: FailureKind::Unavailable,
+                ..
+            }
+        ));
+        assert!(matches!(
+            client.delete_playlist(protected)?.outcome().await,
+            Outcome::Failed {
+                kind: FailureKind::Unavailable,
+                ..
+            }
+        ));
+    }
+    let renamed = h.ctl(&["--json", "playlist", "rename", &qualified, "通勤"])?;
+    assert_eq!(renamed.status.code(), Some(0), "{}", renamed.stderr);
+    wait_playlists(&client, |all| {
+        all.iter().any(|p| p.id == id && p.name == "通勤")
+    })
+    .await?;
+    h.stop_daemon()?;
+    h.child.wait()?;
+    drop(client);
+    h.child = spawn_daemon(&h.root, &h.sock_dir)?;
+    h.wait_ready()?;
+    let client = h.connect("playlist-after-restart").await?;
+    client.subscribe(SubscriptionTopic::Events(Subscription::Task));
+    client.subscribe(SubscriptionTopic::Player);
+    client.wait_subscriptions_ready(WAIT).await;
+    wait_playlists(&client, |all| {
+        all.iter().any(|p| p.id == id && p.name == "通勤")
+    })
+    .await?;
+    let detail = fetch_playlist(&client, &id).await?;
+    assert_eq!(
+        detail
+            .entries
+            .iter()
+            .map(|e| e.song.clone())
+            .collect::<Vec<_>>(),
+        latest_queue
+    );
+    assert!(
+        client
+            .play_queue(
+                queue.clone(),
+                1,
+                QueueContextWire::Playlist {
+                    id: id.clone(),
+                    name: Some(detail.name)
+                }
+            )?
+            .outcome()
+            .await
+            .is_success()
+    );
+    wait_until("saved playlist playback queue", || {
+        queue_ids(&client).len() == 3
+    })
+    .await?;
+    let deleted = h.ctl(&["--json", "playlist", "delete", &qualified])?;
+    assert_eq!(deleted.status.code(), Some(0), "{}", deleted.stderr);
+    wait_playlists(&client, |all| {
+        !all.iter().any(|p| p.id == id) && all.iter().any(|p| p.id == duplicate)
+    })
+    .await?;
+    assert_eq!(queue_ids(&client), before);
+    let favorites =
+        fetch_playlist(&client, &PlaylistId::new(SourceKind::MINERAL, "favorites")).await?;
+    assert!(favorites.entries.iter().any(|e| e.song.id == a.id));
+    assert!(matches!(
+        client.delete_playlist(id)?.outcome().await,
+        Outcome::Failed {
+            kind: FailureKind::NotFound,
+            ..
+        }
+    ));
     Ok(())
 }

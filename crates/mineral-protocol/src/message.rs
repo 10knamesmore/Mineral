@@ -138,6 +138,12 @@ pub struct SongStatsWire {
 #[derive(Clone, Debug, Serialize, Deserialize, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum Request {
+    /// 保存或管理用户歌单。
+    Playlist {
+        /// 要执行的歌单操作。
+        op: crate::PlaylistOp,
+    },
+
     // ---- 播放控制 ----
     /// 暂停。
     Pause,
@@ -344,6 +350,12 @@ pub enum Request {
 /// Server → Client 应答。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    /// 保存成功后的独立歌单身份。
+    PlaylistSaved {
+        /// 新创建的 Mineral 歌单身份。
+        id: PlaylistId,
+    },
+
     /// CPAL output devices returned by [`Request::AudioOutputs`].
     AudioOutputs(Vec<mineral_audio::OutputDevice>),
 

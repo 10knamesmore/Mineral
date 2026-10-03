@@ -2,6 +2,7 @@
 
 use mineral_channel_core::PlaylistLoad;
 use mineral_task::TaskEvent;
+use rustc_hash::FxHashSet;
 
 use super::AppState;
 use crate::runtime::view_model::PlaylistView;
@@ -16,13 +17,34 @@ impl AppState {
             TaskEvent::LibrarySnapshot { playlists } => {
                 self.browse.list_expansion.get_mut().invalidate();
                 let position = self.playlist_list_position();
-                // 合并快照整表替换:跨源顺序由 server 唯一权威(curate 出口
-                // 变换后),client 不自行按源拼接。
-                self.library.playlists = playlists
+                let mut incoming_ids = FxHashSet::default();
+                // 保留 server 的快照顺序；ID 索引只用于判断旧歌单是否仍在列表中。
+                let incoming_playlists = playlists
                     .iter()
-                    .cloned()
-                    .map(|data| PlaylistView { data })
-                    .collect();
+                    .map(|data| {
+                        incoming_ids.insert(&data.id);
+                        PlaylistView { data: data.clone() }
+                    })
+                    .collect::<Vec<_>>();
+                let mut has_removed_playlists = false;
+                for old in &self.library.playlists {
+                    let id = &old.data.id;
+                    if incoming_ids.contains(id) {
+                        continue;
+                    }
+                    has_removed_playlists = true;
+                    self.library.tracks.remove(id);
+                    self.library.tracks_requested.remove(id);
+                    if self.browse.nav.opened_playlist.as_ref() == Some(id) {
+                        self.browse.nav.opened_playlist = None;
+                        self.browse.nav.pending_track_restore = None;
+                        self.browse.view.switch_to(super::View::Playlists);
+                    }
+                }
+                if has_removed_playlists {
+                    self.library.tracks_generation = self.library.tracks_generation.wrapping_add(1);
+                }
+                self.library.playlists = incoming_playlists;
                 self.restore_playlist_list_position(position);
             }
             // server 已聚合进 LibrarySnapshot,理论不会到 client。defensive:跳过。

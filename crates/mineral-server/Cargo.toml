@@ -27,6 +27,7 @@ mineral-playback     = { workspace = true }
 mineral-protocol     = { workspace = true }
 mineral-stats        = { workspace = true }
 mineral-task         = { workspace = true }
+mineral-channel-mineral = { workspace = true }
 
 bytes          = { workspace = true }
 arc-swap       = { workspace = true }
@@ -47,7 +48,6 @@ url           = { workspace = true }
 uuid          = { workspace = true }
 
 [dev-dependencies]
-mineral-channel-mineral = { workspace = true }
 color-eyre       = { workspace = true }
 insta             = { workspace = true }
 mineral-test      = { workspace = true }

@@ -22,3 +22,6 @@ pub(crate) use help::chip_text;
 pub(crate) use menu::{ContainerRef, MenuAction, MenuItem, PopMenu};
 pub(crate) use placement::Placement;
 pub(crate) use stack::{OverlayKind, OverlayStack};
+
+mod text_prompt;
+pub(crate) use text_prompt::TextPrompt;

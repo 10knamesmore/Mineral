@@ -47,7 +47,7 @@ async fn my_playlists_is_single_synthetic() -> color_eyre::Result<()> {
 }
 
 /// playlist_detail:favorites id 出全曲目(entered_at DESC,同批按 namespace/value 稳定),
-/// relation 从 0 连续编号且源 namespace 保留;其他 id 一律 NotSupported。
+/// relation 从 0 连续编号且源 namespace 保留;不存在的 Mineral 歌单返回 NotFound。
 #[tokio::test]
 async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<()> {
     let (_dir, store) = store_with_favorites().await?;
@@ -91,7 +91,7 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
         matches!(
             ch.playlist_detail(&other, mineral_channel_core::PlaylistLoad::Complete)
                 .await,
-            Err(Error::NotSupported)
+            Err(Error::NotFound)
         ),
         "未知 id 不臆造歌单"
     );

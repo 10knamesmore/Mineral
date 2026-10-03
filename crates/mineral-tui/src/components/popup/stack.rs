@@ -27,6 +27,9 @@ const INSTANT_TICKS: u16 = 1;
 
 /// 一种具体浮层。闭集 enum + 手动转发 trait 方法(强类型、无 `dyn`、契合内部结构化)。
 pub(crate) enum OverlayKind {
+    /// 通用单行输入。
+    TextPrompt(super::text_prompt::TextPrompt),
+
     /// Runtime output device selection and active stream format.
     AudioSettings(AudioSettingsOverlay),
 
@@ -92,6 +95,7 @@ impl OverlayKind {
 impl Overlay for OverlayKind {
     fn chrome(&self) -> Chrome {
         match self {
+            Self::TextPrompt(o) => o.chrome(),
             Self::AudioSettings(o) => o.chrome(),
             Self::Queue(o) => o.chrome(),
             Self::Downloads(o) => o.chrome(),
@@ -104,6 +108,7 @@ impl Overlay for OverlayKind {
 
     fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
         match self {
+            Self::TextPrompt(o) => o.block(ctx, theme, focused),
             Self::AudioSettings(o) => o.block(ctx, theme, focused),
             Self::Queue(o) => o.block(ctx, theme, focused),
             Self::Downloads(o) => o.block(ctx, theme, focused),
@@ -116,6 +121,7 @@ impl Overlay for OverlayKind {
 
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         match self {
+            Self::TextPrompt(o) => o.render_content(buf, inner, ctx, theme),
             Self::AudioSettings(o) => o.render_content(buf, inner, ctx, theme),
             Self::Queue(o) => o.render_content(buf, inner, ctx, theme),
             Self::Downloads(o) => o.render_content(buf, inner, ctx, theme),
@@ -135,6 +141,7 @@ impl Overlay for OverlayKind {
         theme: &Theme,
     ) {
         match self {
+            Self::TextPrompt(o) => o.render_border(buf, area, inner, ctx, theme),
             Self::AudioSettings(o) => o.render_border(buf, area, inner, ctx, theme),
             Self::Queue(o) => o.render_border(buf, area, inner, ctx, theme),
             Self::Downloads(o) => o.render_border(buf, area, inner, ctx, theme),
@@ -147,6 +154,7 @@ impl Overlay for OverlayKind {
 
     fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
         match self {
+            Self::TextPrompt(o) => o.on_key(key, ctx),
             Self::AudioSettings(o) => o.on_key(key, ctx),
             Self::Queue(o) => o.on_key(key, ctx),
             Self::Downloads(o) => o.on_key(key, ctx),
@@ -159,6 +167,7 @@ impl Overlay for OverlayKind {
 
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
         match self {
+            Self::TextPrompt(o) => o.on_action(action, ctx),
             Self::AudioSettings(o) => o.on_action(action, ctx),
             Self::Queue(o) => o.on_action(action, ctx),
             Self::Downloads(o) => o.on_action(action, ctx),
@@ -207,6 +216,20 @@ pub(crate) struct OverlayStack {
 }
 
 impl OverlayStack {
+    /// 栈顶输入框独占键盘与粘贴事件。
+    pub(crate) fn text_prompt_mut(&mut self) -> Option<&mut super::text_prompt::TextPrompt> {
+        match &mut self.active_top_mut()?.kind {
+            OverlayKind::TextPrompt(prompt) => Some(prompt),
+            _ => None,
+        }
+    }
+    /// 栈顶是否独占文本输入。
+    pub(crate) fn in_text_input(&self) -> bool {
+        self.active_top_index()
+            .and_then(|index| self.stack.get(index))
+            .is_some_and(|top| matches!(top.kind, OverlayKind::TextPrompt(_)))
+    }
+
     /// Returns the open Audio settings popup to receive device query and switch results.
     pub(crate) fn audio_settings_mut(&mut self) -> Option<&mut AudioSettingsOverlay> {
         self.stack

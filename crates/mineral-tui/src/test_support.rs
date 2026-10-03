@@ -198,6 +198,9 @@ pub(crate) fn state_with_lrc_only() -> color_eyre::Result<AppState> {
 /// 未模拟的操作为空操作;构造 [`App`] 时无需连接 daemon。
 #[derive(Default)]
 pub(crate) struct TestClient {
+    /// 记录经 App 提交的歌单操作。
+    pub(crate) playlist_operations: Arc<Mutex<Vec<mineral_protocol::PlaylistOp>>>,
+
     /// `request_daemon_shutdown` 调用计数(Shift+Q「退出并停止 daemon」路径断言用)。
     pub(crate) daemon_shutdowns: Arc<AtomicUsize>,
 
@@ -267,6 +270,12 @@ pub(crate) type QueueContextLog =
 pub(crate) type QueueEditLog = Arc<Mutex<Vec<mineral_protocol::QueueOp>>>;
 
 impl Backend for TestClient {
+    fn playlist_operation(&self, op: mineral_protocol::PlaylistOp) {
+        if let Ok(mut operations) = self.playlist_operations.lock() {
+            operations.push(op);
+        }
+    }
+
     fn audio_outputs(&self) {
         self.completions()
             .push(crate::runtime::backend::Completion::AudioOutputs(

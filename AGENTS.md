@@ -4,7 +4,9 @@ Mineral 是一个多源, C-S 架构音乐播放器(tui as a client)
 
 目前只有我一个人开发, 只要这句话还存在, mineral就属于pre release 迭代期间, **禁止考虑任何持久化兼容**, 允许破坏更新, 一切设计不应该被`向后兼容`捆住手脚
 
-埋点sql走 migration(我个人使用使用希望), 其他的不管是sql/json文件/路径契约都是可以重建的, 如果有充足的理由证明破坏更新后是更好的设计, 直接做, 本地文件可以rm
+埋点sql走 migration, 其他的不管是sql/json文件/路径契约都是可以重建的, 如果有充足的理由证明破坏更新后是更好的设计, 直接做, 本地文件可以rm
+
+数据库使用结构化列和关系，禁止存储或处理 JSON。
 
 测试运行器是 **cargo-nextest**(需 `cargo install cargo-nextest cargo-insta`);`cargo t` / `td` / `snap` 是 `.cargo/config.toml` 里的 alias。
 

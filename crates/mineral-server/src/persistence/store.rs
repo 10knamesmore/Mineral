@@ -21,7 +21,7 @@ use mineral_persist::CacheIndex;
 
 /// 持久化服务句柄。廉价 clone(内部 `Arc`)。
 ///
-/// 打开失败时降级为 [`ServerStore::disabled`]:所有写静默成功、所有读返回空,
+/// 打开失败时降级为 [`ServerStore::disabled`]:缓存与收藏写入丢弃、读取返回空；自建歌单写入报不可用,
 /// 调用方(channel / server)无需特判,播放照常。
 #[derive(Clone)]
 pub struct ServerStore {
@@ -43,7 +43,7 @@ enum Backend {
     /// 真实 sqlite 连接池。
     Sqlite(DatabaseConnection),
 
-    /// 降级:写丢弃、读空。
+    /// 降级：可重建数据写入丢弃，自建歌单写入报错。
     Disabled,
 }
 
@@ -64,10 +64,10 @@ impl ServerStore {
         })
     }
 
-    /// 降级句柄:不落盘、读空、写丢弃。
+    /// 降级句柄：读取为空，自建歌单写入报错，其余写入丢弃。
     ///
     /// # Return:
-    ///   一个永远成功但无副作用的 [`ServerStore`]。
+    ///   不访问磁盘的 [`ServerStore`]。
     pub fn disabled() -> Self {
         warn!(target: "persist", "持久化降级为 no-op(disabled)");
         Self {
@@ -127,7 +127,7 @@ impl ServerStore {
     }
 
     /// 全部源的 loved 歌曲(join meta 重建),按 `entered_at` 降序(最新收藏在顶),
-    /// 同毫秒收藏以 `(namespace, song_value)` 破平局,顺序稳定不随库文件重排。
+    /// 同一导入批次共用时间，以 `(namespace, song_value)` 破平局，顺序稳定不随库文件重排。
     ///
     /// loved 但缺 meta 的行**跳过**——聚合视图与其曲目计数保持同口径,不出现「有行但
     /// 没名字」的占位。缺 meta 是常态:sync 导入的远端红心先只有 id,meta 随浏览补全。
@@ -292,21 +292,7 @@ impl ServerStore {
                 operation: "开启 Favorites import 事务",
                 source,
             })?;
-        let latest = song_favorites::Entity::find()
-            .select_only()
-            .expr(song_favorites::Column::EnteredAt.max())
-            .into_tuple::<Option<i64>>()
-            .one(&tx)
-            .await
-            .map_err(|source| crate::persistence::Error::Database {
-                operation: "读取 Favorites 最新进入时间",
-                source,
-            })?
-            .flatten();
-        let now = crate::persistence::db::time::now_ms();
-        let entered_at = latest
-            .map(|value| value.saturating_add(1))
-            .map_or(now, |next| next.max(now));
+        let entered_at = next_favorite_entry_time(&tx).await?;
         let mut inserted = Vec::<SongId>::new();
         for id in ordered {
             let result = song_favorites::Entity::insert(song_favorites::ActiveModel {
@@ -428,6 +414,28 @@ impl ServerStore {
             })?;
         Ok(PlaylistCacheStats { playlists, tracks })
     }
+}
+
+/// 为新收藏或整批导入分配晚于现有记录的时间；调用方在同一事务内完成插入。
+/// 同毫秒的连续操作也按加入先后排序，批次内共用返回值。
+pub(super) async fn next_favorite_entry_time(
+    tx: &sea_orm::DatabaseTransaction,
+) -> crate::persistence::Result<i64> {
+    let latest = song_favorites::Entity::find()
+        .select_only()
+        .expr(song_favorites::Column::EnteredAt.max())
+        .into_tuple::<Option<i64>>()
+        .one(tx)
+        .await
+        .map_err(|source| crate::persistence::Error::Database {
+            operation: "读取 Favorites 最新进入时间",
+            source,
+        })?
+        .flatten();
+    let now = crate::persistence::db::time::now_ms();
+    Ok(latest
+        .map(|value| value.saturating_add(1))
+        .map_or(now, |next| next.max(now)))
 }
 
 #[cfg(test)]
@@ -654,6 +662,17 @@ mod tests {
         scope.upsert_meta(&a).await?;
         scope.upsert_meta(&b).await?;
         assert!(scope.set_loved(&a.id, true).await?);
+        // 让现有时间领先时钟，验证新收藏置顶不依赖两次操作间的毫秒推进。
+        let pool = p
+            .pool()
+            .ok_or_else(|| color_eyre::eyre::eyre!("测试库应有 pool"))?;
+        let entered_at = crate::persistence::db::time::now_ms() + 60_000;
+        song_favorites::Entity::update_many()
+            .col_expr(song_favorites::Column::EnteredAt, Expr::value(entered_at))
+            .filter(song_favorites::Column::Namespace.eq(a.id.namespace().name()))
+            .filter(song_favorites::Column::SongValue.eq(a.id.value()))
+            .exec(pool)
+            .await?;
         assert!(scope.set_loved(&b.id, true).await?);
         assert!(
             !scope.set_loved(&a.id, true).await?,

@@ -24,6 +24,14 @@ pub struct ClientHandle {
 }
 
 impl ClientHandle {
+    /// 在有序请求路径保存或管理歌单。
+    pub(crate) async fn playlist_operation(
+        &self,
+        op: mineral_protocol::PlaylistOp,
+    ) -> Result<Option<mineral_model::PlaylistId>, crate::playlists::Error> {
+        self.player.playlist_operation(op).await
+    }
+
     /// Queries devices on the dedicated audio thread.
     pub(crate) async fn audio_outputs(
         &self,
