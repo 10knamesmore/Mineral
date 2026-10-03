@@ -41,7 +41,7 @@ mineral-server       = { workspace = true }
 mineral-task         = { workspace = true }
 nix                  = { workspace = true }
 rand                 = { workspace = true }
-ratatui              = { workspace = true }
+ratatui              = { workspace = true, features = ["unstable-backend-writer"] }
 rustc-hash           = { workspace = true }
 unicode-width        = { workspace = true }
 nucleo-matcher       = { workspace = true }

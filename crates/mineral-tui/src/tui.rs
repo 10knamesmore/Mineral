@@ -4,7 +4,7 @@
 //! 必然恢复终端,即使发生 panic(我们在 enter 时安装了一个 chained panic hook)。
 
 use std::fmt;
-use std::io::{self, Stdout};
+use std::io::{self, BufWriter, Stdout};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,7 +27,7 @@ use ratatui::layout::Position;
 /// 终端 backend 的 RAII 持有者。
 pub struct Tui {
     /// ratatui 的终端 backend(crossterm),Drop 时自动还原。
-    terminal: Terminal<CrosstermBackend<Stdout>>,
+    terminal: Terminal<CrosstermBackend<BufWriter<Stdout>>>,
 
     /// 进 alternate screen **前**捕获的原屏幕光标位置(通常是拉起 mineral 的 shell
     /// 提示符处),供整屏 expand/collapse 以其为缩放锚点。无 TTY / DSR 查询失败时为 `None`。
@@ -41,7 +41,7 @@ pub struct Tui {
 impl Tui {
     /// 创建 backend(暂未进入 raw mode)。
     pub fn new() -> io::Result<Self> {
-        let backend = CrosstermBackend::new(io::stdout());
+        let backend = CrosstermBackend::new(BufWriter::with_capacity(64 * 1024, io::stdout()));
         let terminal = Terminal::new(backend)?;
         Ok(Self {
             terminal,
@@ -103,6 +103,7 @@ impl Tui {
 
     /// 退出 alternate screen + raw mode,并 pop 标题栈(若之前 push 过)。多次调用幂等。
     pub fn exit(&mut self) -> io::Result<()> {
+        self.discard_pending_output();
         restore_terminal(&self.title_pushed)?;
         self.terminal.show_cursor()?;
         Ok(())
@@ -121,10 +122,21 @@ impl Tui {
         self.terminal.try_draw(f)?;
         Ok(())
     }
+
+    /// 丢弃未完成帧，避免 BufWriter 在终端恢复后析构时补写到 shell。
+    fn discard_pending_output(&mut self) {
+        // panic hook 可能已恢复终端；不能在此 flush。后续仅有光标恢复命令，直接写出。
+        let pending = std::mem::replace(
+            self.terminal.backend_mut().writer_mut(),
+            BufWriter::with_capacity(0, io::stdout()),
+        );
+        let _ = pending.into_parts();
+    }
 }
 
 impl Drop for Tui {
     fn drop(&mut self) {
+        self.discard_pending_output();
         let _ = restore_terminal(&self.title_pushed);
     }
 }
