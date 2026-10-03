@@ -1,4 +1,4 @@
-//! 字词分别渐入强调色、退为已唱色；暂停与 seek 不会截断颜色交接。
+//! 字词分别渐入提亮的强调色、退为已唱色；暂停与 seek 不会截断颜色交接。
 
 use std::cell::{RefCell, RefMut};
 use std::time::Instant;
@@ -86,6 +86,19 @@ impl LyricColors {
 }
 
 impl LyricPaint<'_> {
+    /// 整行和逐字跟唱共用浅强调色；非 RGB 主题保留原强调色。
+    pub(super) fn highlight(&self, theme: &Theme) -> Color {
+        match theme.accent {
+            Color::Rgb(..) => lerp_color(
+                theme.accent,
+                Color::Rgb(255, 255, 255),
+                u64::from(permille_of(*self.cfg.highlight_white_mix())),
+                1000,
+            ),
+            color => color,
+        }
+    }
+
     /// 当前行按未唱、正在唱、已唱选择目标色；非当前行退到邻行色，仍保留逐单元动画。
     pub(super) fn line<'a>(
         &mut self,
@@ -100,15 +113,17 @@ impl LyricPaint<'_> {
         let unlit = theme
             .text_over(row_bg, permille_of(*self.cfg.text_alpha().unsung()))
             .unwrap_or(theme.overlay);
+        let sung = theme
+            .text_over(row_bg, permille_of(*self.cfg.text_alpha().sung()))
+            .unwrap_or(theme.text);
+        let highlight = self.highlight(theme);
         let mut spans = Vec::<Span<'a>>::with_capacity(words.len());
         for (word_index, word) in words.iter().enumerate() {
             let end_ms = word.start_ms.saturating_add(word.dur_ms);
             let (target, transition) = match position_ms {
                 None => (inactive, ColorTransition::LineChange),
-                Some(position) if position >= end_ms => (theme.text, ColorTransition::Release),
-                Some(position) if position >= word.start_ms => {
-                    (theme.accent, ColorTransition::Attack)
-                }
+                Some(position) if position >= end_ms => (sung, ColorTransition::Release),
+                Some(position) if position >= word.start_ms => (highlight, ColorTransition::Attack),
                 Some(_) => (unlit, ColorTransition::LineChange),
             };
             let key = WordKey {

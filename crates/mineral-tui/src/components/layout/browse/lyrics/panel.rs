@@ -2,7 +2,7 @@
 //! 当前行高亮居中,上下各若干行 dim。无歌词时 fallback "♪ no lyrics"。
 //!
 //! 有字词时间轴时，按歌词提供的字词跟唱：状态变化触发颜色动画，
-//! 当前单元渐入强调色，唱完渐变为正文色；退出当前行也从当时的颜色淡出。
+//! 当前单元渐入提亮的强调色，唱完退为较暗的正文色；退出当前行也从当时的颜色淡出。
 //!
 //! `t` 键打开副歌词(翻译 / 罗马音)后，每个可见原文行下方紧跟一条副行；
 //! 副行不随播放焦点变色，只保留随距离淡出的层级。
@@ -692,7 +692,7 @@ fn render_cell<'a>(
             } else {
                 let color = lerp_color(
                     base,
-                    theme.accent,
+                    lyric_paint.highlight(theme),
                     u64::from(emphasis),
                     u64::from(SCROLL_FULL),
                 );

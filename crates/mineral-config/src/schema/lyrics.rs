@@ -11,6 +11,9 @@ pub struct LyricsConfig {
     /// 字词唱完后退为已唱正文色的时长（毫秒）；各词独立，0 为立即切换
     release_ms: u64,
 
+    /// 歌词强调色混入白色的比例（0–1），用于提亮并降低饱和度
+    highlight_white_mix: f32,
+
     /// 歌词原文的明暗层级
     text_alpha: LyricTextAlphaConfig,
 
@@ -33,9 +36,12 @@ pub struct LyricsConfig {
     overshoot_max_permille: u32,
 }
 
-/// 歌词原文不透明度，范围 0–1；已唱用正文色，正在唱用强调色。
+/// 歌词原文对实际背景的不透明度，范围 0–1；正在唱单独使用提亮的强调色。
 #[config_section]
 pub struct LyricTextAlphaConfig {
+    /// 当前行已经唱完的部分
+    sung: f32,
+
     /// 当前行尚未唱到的部分
     unsung: f32,
 
