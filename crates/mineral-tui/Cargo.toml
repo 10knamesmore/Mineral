@@ -16,6 +16,7 @@ arboard              = { workspace = true }
 arc-swap             = { workspace = true }
 base64               = { workspace = true }
 chrono               = { workspace = true }
+compact_str          = { workspace = true }
 crossterm            = { workspace = true }
 fast_image_resize    = { workspace = true }
 futures-util         = { workspace = true }

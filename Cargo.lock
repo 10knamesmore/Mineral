@@ -3463,6 +3463,7 @@ dependencies = [
  "base64",
  "chrono",
  "color-eyre",
+ "compact_str",
  "crossterm 0.29.0",
  "fast_image_resize",
  "futures-util",

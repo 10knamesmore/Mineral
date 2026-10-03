@@ -1,5 +1,6 @@
 //! 把 Kitty unicode placeholder placement 写入 ratatui cell buffer。
 
+use compact_str::CompactString;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -29,12 +30,13 @@ pub(super) fn render_inline(area: Rect, buffer: &mut Buffer, image_id: u32) -> u
     for row in 0..height {
         for column in 0..width {
             if let Some(cell) = buffer.cell_mut((area.x + column, area.y + row)) {
-                cell.set_symbol(&format!(
-                    "{PLACEHOLDER}{}{}{}",
-                    diacritic(row),
-                    diacritic(column),
-                    diacritic(u16::from(high)),
-                ));
+                // 四个字符最多占 16 字节
+                let mut symbol = CompactString::with_capacity(16);
+                symbol.push(PLACEHOLDER);
+                symbol.push(diacritic(row));
+                symbol.push(diacritic(column));
+                symbol.push(diacritic(u16::from(high)));
+                cell.set_symbol(symbol.as_str());
                 cell.set_style(
                     Style::new()
                         .fg(Color::Rgb(red, green, blue))
