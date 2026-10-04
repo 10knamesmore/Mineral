@@ -71,9 +71,9 @@ pub(super) async fn fetch_preview(
         let cfg = Arc::clone(cfg);
         let preview = tokio::task::spawn_blocking(
             move || -> Result<PreviewResult, crate::image::decode::Error> {
-                let sample = |image| {
+                let sample = |image: &DynamicImage| {
                     if thumbnail {
-                        TerminalImage::thumbnail_preview(&image, pixels)
+                        TerminalImage::thumbnail_preview(image, pixels)
                     } else {
                         TerminalImage::halfblock_preview(image, pixels, cells, cell_fit)
                     }
@@ -81,7 +81,7 @@ pub(super) async fn fetch_preview(
                 if matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Jpeg)) {
                     // JPEG 走低档位 IDCT 缩小解码,preview 很便宜;显示图仍需单独 decode,不带 full。
                     let image = crate::image::decode::preview(&bytes, cells)?;
-                    let (preview, resident) = sample(image);
+                    let (preview, resident) = sample(&image);
                     return Ok(PreviewResult {
                         preview,
                         resident,
@@ -93,7 +93,7 @@ pub(super) async fn fetch_preview(
                 let image = crate::image::decode::display(&bytes, cfg.decode_pixels())?;
                 let palette = extract_palette(&image, cfg.kmeans());
                 let fingerprint = CoverFingerprint::of(&image);
-                let (preview, resident) = sample(image.clone());
+                let (preview, resident) = sample(&image);
                 Ok(PreviewResult {
                     preview,
                     resident,

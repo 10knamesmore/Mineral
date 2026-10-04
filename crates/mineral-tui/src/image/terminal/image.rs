@@ -52,7 +52,7 @@ impl TerminalImage {
     /// 生成与终端协议无关的低清 halfblock preview 及其常驻字节数。
     ///
     /// # Params:
-    ///   - `source`: 已解码原图，区域采样完成后释放完整像素缓冲
+    ///   - `source`: 已解码原图
     ///   - `pixels`: preview 对应的目标像素尺寸
     ///   - `cells`: preview 对应的目标 cell 宽高
     ///   - `cell_fit`: 该 preview 缓存键对应的格边适配方式
@@ -60,7 +60,7 @@ impl TerminalImage {
     /// # Return:
     ///   halfblock preview 与 RGBA 像素缓冲字节数
     pub(crate) fn halfblock_preview(
-        source: DynamicImage,
+        source: &DynamicImage,
         pixels: PixelSize,
         cells: (u16, u16),
         cell_fit: CoverCellFit,
