@@ -1,4 +1,49 @@
 # Changelog
+## [0.5.9] — 2026-10-04
+
+### Features
+
+- Compact transport and add transient feedback ([`b4e2508`](https://github.com/10knamesmore/Mineral/commit/b4e2508816985e3375f9ff755b9879c6031ef7ae))
+
+- Add shared press feedback to controls ([`fe84ebd`](https://github.com/10knamesmore/Mineral/commit/fe84ebdc5b32aae3d655aecdbfc3f8c9cc490518))
+
+- Add runtime output device selection ([`4d7b243`](https://github.com/10knamesmore/Mineral/commit/4d7b243c539a9ed46a6342479b2a604c7f2e6ffe))
+
+- Add library playback and timed lyrics ([`93ae9f3`](https://github.com/10knamesmore/Mineral/commit/93ae9f30485f8fe58914f4c714f057bc376a82be))
+
+- Fullscreen show lyric cursor time ([`a5e8187`](https://github.com/10knamesmore/Mineral/commit/a5e8187fb85d978ff7378547ea7c34989d801db6))
+
+- Save queues and manage user playlists ([`dc83cf2`](https://github.com/10knamesmore/Mineral/commit/dc83cf21ff62a230c9afb207b8ecd40ee0791386))
+
+- Animate lyric words ([`e2b45cc`](https://github.com/10knamesmore/Mineral/commit/e2b45cce5a2eb198a4e9075635f133bcc6a0bf8e))
+
+- Align cover images with terminal cells ([`2b25941`](https://github.com/10knamesmore/Mineral/commit/2b259410e8db708570745a62c19bd97c9cdb725e))
+
+- Soften progress tracks and accent the playhead ([`2914bbe`](https://github.com/10knamesmore/Mineral/commit/2914bbead40e473ba61b7c10d0338716fd6137a9))
+
+### Bug Fixes
+
+- Dylint ([`ecd9b74`](https://github.com/10knamesmore/Mineral/commit/ecd9b7463b88dfbffca162dc0c85f3dada6bca11))
+
+- Synchronize terrain ridge scrolling ([`e8163f4`](https://github.com/10knamesmore/Mineral/commit/e8163f4083defea36077e07d9285b59af8096063))
+
+- Resolve persistence Clippy warnings ([`80f5746`](https://github.com/10knamesmore/Mineral/commit/80f574619dc146f59d8f5d9a74ca50be0e924e9e))
+
+- Improve lyric highlight contrast ([`2f0928c`](https://github.com/10knamesmore/Mineral/commit/2f0928c9d4ab56a5447c287bd3c59725e13369dc))
+
+- Share complete checks on latest stable ([`c63e8ad`](https://github.com/10knamesmore/Mineral/commit/c63e8ad08f9b04b8f2e0c11c15f1e93f5a6ed1dc))
+
+### Performance
+
+- Buffer terminal output ([`09843da`](https://github.com/10knamesmore/Mineral/commit/09843daae19f0397897a333cd81b0ff722ae4dec))
+
+- Inline kitty placeholder strings ([`5bd0b3f`](https://github.com/10knamesmore/Mineral/commit/5bd0b3f0a328fc759fb52c43dfb6f64bff1d9542))
+
+- Precompute separable ambient Gaussian weights ([`c4bb914`](https://github.com/10knamesmore/Mineral/commit/c4bb9149323ba9dc607450a20c4f9afcfd58a7b2))
+
+- Borrow images when generating cover previews ([`930f41c`](https://github.com/10knamesmore/Mineral/commit/930f41c3c531db2cb48a53ecf92bda2c325f385e))
+
+- Retain canvas and centralize component caching ([`40494d0`](https://github.com/10knamesmore/Mineral/commit/40494d059be6310e9b928d5d3c0d5b40ba5fbc99))
 ## [0.5.8] — 2026-09-20
 
 ### Features
