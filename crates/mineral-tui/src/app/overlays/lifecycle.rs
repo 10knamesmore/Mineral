@@ -78,9 +78,10 @@ impl OverlayStack<AppOverlay> {
     ) {
         let mut cx = crate::components::frame::PrepareCx {
             frame: super::input::environment(ctx, theme).frame,
-            images: crate::image::ImageNeeds::new(ctx.images.ready()),
+            images: crate::image::ImageNeeds::new(ctx.resources.images.ready()),
             motion: crate::runtime::scroll::list::ScrollMotion::Frozen,
-            image_phase: if !ctx.browse.fullscreen.settled() || !ctx.channel_search.active.settled()
+            image_phase: if !ctx.ui.browse.fullscreen.settled()
+                || !ctx.ui.channel_search.active.settled()
             {
                 crate::image::ImageRenderPhase::Resizing
             } else {
@@ -92,7 +93,7 @@ impl OverlayStack<AppOverlay> {
         self.prepare(
             area,
             ctx.cfg.tui().layout(),
-            ctx.browse.fullscreen.on(),
+            ctx.ui.browse.fullscreen.on(),
             |content, layout| {
                 let inner = content
                     .block(&inputs, theme, layout.focused)
@@ -100,7 +101,7 @@ impl OverlayStack<AppOverlay> {
                 content.prepare(inner, &inputs, &mut cx, layout.reveal);
             },
         );
-        ctx.images.reconcile(cx.images.finish());
+        ctx.resources.images.reconcile(cx.images.finish());
     }
 
     /// 组合每层的只读视图并提交到目标 buffer。

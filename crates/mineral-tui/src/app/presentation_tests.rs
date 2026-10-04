@@ -13,8 +13,8 @@ fn presentation_state_does_not_depend_on_paint_count() -> color_eyre::Result<()>
     let mut outcomes = Vec::new();
     for paints in [0, 1, 2] {
         let mut app = app_with_long_library(120, 0)?;
-        app.state.browse.view.retempo(1);
-        app.state.browse.view.tick();
+        app.state.ui.browse.view.retempo(1);
+        app.state.ui.browse.view.tick();
         let area = Rect::new(0, 0, 120, 40);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))?;
         app.prepare_view(area, start, false);
@@ -26,7 +26,7 @@ fn presentation_state_does_not_depend_on_paint_count() -> color_eyre::Result<()>
             for _ in 0..paints {
                 terminal.draw(|frame| crate::view::draw(frame, &app.frame_view()))?;
             }
-            let list = &app.state.browse.tracks.scroll;
+            let list = app.state.ui.browse.tracks.scroll();
             positions.push((
                 list.scroll_target(),
                 list.offset(120, 10),
@@ -44,25 +44,28 @@ fn presentation_state_does_not_depend_on_paint_count() -> color_eyre::Result<()>
         }
         app.dispatch(Action::BackOrClearSearch);
         assert!(
-            app.state.browse.tracks.expansion.active.is_some(),
+            app.state.ui.browse.tracks.expansion().active.is_some(),
             "清除筛选所需的旧视图由准备入口保留"
         );
-        let restored = app.state.browse.tracks.scroll.sel();
+        let restored = app.state.ui.browse.tracks.scroll().sel();
         let smaller = Rect::new(0, 0, 80, 24);
         app.handle_event(&Event::Resize(smaller.width, smaller.height));
         app.prepare_view(smaller, start + Duration::from_millis(240), false);
-        assert!(app.state.browse.tracks.expansion.active.is_none());
+        assert!(app.state.ui.browse.tracks.expansion().active.is_none());
         app.dispatch(Action::MoveSelection(SelectionMove::Down(1)));
         app.prepare_view(smaller, start + Duration::from_millis(256), true);
         outcomes.push((
             positions,
             restored,
-            app.state.browse.tracks.scroll.sel(),
-            app.state.browse.tracks.scroll.scroll_target(),
-            app.state.frame_area,
+            app.state.ui.browse.tracks.scroll().sel(),
+            app.state.ui.browse.tracks.scroll().scroll_target(),
+            app.state.ui.frame_area,
         ));
     }
-    assert_eq!(outcomes[0], outcomes[1]);
-    assert_eq!(outcomes[1], outcomes[2]);
+    let [without_paint, once, twice] = outcomes.as_slice() else {
+        color_eyre::eyre::bail!("缺少绘制零次、一次或两次的执行结果");
+    };
+    assert_eq!(without_paint, once);
+    assert_eq!(once, twice);
     Ok(())
 }

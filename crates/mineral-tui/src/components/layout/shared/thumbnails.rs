@@ -73,7 +73,6 @@ pub(crate) fn snapshot_thumbnails<'a>(
 /// 选择列表封面阶段；离屏冻结优先于形变与选中变化防抖。
 ///
 /// # Params:
-///   - `state`: 现读全屏、页面过渡及 `cover.debounce_ms` 配置
 ///   - `motion`: 本帧列表是否在离屏合成或瞬态布局中冻结
 ///   - `last_sel_change`: 当前列表所属页面的选中变化时间，browse 与 detail 各自提供
 pub(crate) fn thumbnail_phase(

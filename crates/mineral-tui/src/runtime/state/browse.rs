@@ -95,29 +95,44 @@ impl BrowsePage {
 
     /// 数据或尺寸改变后，两份旧显示输入均失效。
     pub(crate) fn invalidate_expansions(&mut self) {
-        self.playlists.expansion.invalidate();
-        self.tracks.expansion.invalidate();
+        self.playlists.invalidate();
+        self.tracks.invalidate();
     }
 
     /// 输入立即接管正在展开的列表。
     pub(crate) fn interrupt_expansions(&mut self) {
-        self.playlists.expansion.interrupt();
-        self.tracks.expansion.interrupt();
+        self.playlists.interrupt();
+        self.tracks.interrupt();
     }
 
     /// 当前接受按键的列表查询；离屏面板应直接读取自己的搜索状态。
     pub fn active_search(&self) -> &SearchState {
         match self.view.current() {
-            View::Playlists => &self.playlists.search,
-            View::Library => &self.tracks.search,
+            View::Playlists => self.playlists.search(),
+            View::Library => self.tracks.search(),
         }
     }
 
-    /// 修改当前列表的查询，不影响另一层保留的搜索。
-    pub fn active_search_mut(&mut self) -> &mut SearchState {
+    /// 测试直接装配保留的查询；生产输入交给具体列表。
+    #[cfg(test)]
+    pub(crate) fn active_search_mut(&mut self) -> &mut SearchState {
         match self.view.current() {
-            View::Playlists => &mut self.playlists.search,
-            View::Library => &mut self.tracks.search,
+            View::Playlists => self.playlists.test_search_mut(),
+            View::Library => self.tracks.test_search_mut(),
+        }
+    }
+
+    /// 当前打开歌单对应的窄列表输入。
+    pub(crate) fn track_input<'a>(
+        &self,
+        model: BrowseModel<'a>,
+    ) -> crate::components::layout::browse::sidebar::library::TrackInput<'a> {
+        let playlist = self.opened_playlist(model);
+        crate::components::layout::browse::sidebar::library::TrackInput {
+            playlist,
+            tracks: playlist.and_then(|playlist| model.library.tracks.get(&playlist.data.id)),
+            generation: model.library.tracks_generation,
+            playing: None,
         }
     }
 
@@ -137,10 +152,8 @@ impl BrowsePage {
         let tick_ms = *anim.frame_tick_ms();
         let trail = anim.ambient_trail();
         self.playlists
-            .expansion
             .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
         self.tracks
-            .expansion
             .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
         self.view
             .retempo(ticks16_from_ms(*anim.sweep_ms(), tick_ms));
@@ -178,7 +191,7 @@ impl BrowsePage {
         model: BrowseModel<'a>,
     ) -> Option<&'a PlaylistView> {
         self.filtered_playlists(model)
-            .get(self.playlists.scroll.sel())
+            .get(self.playlists.scroll().sel())
             .copied()
     }
 
@@ -242,7 +255,7 @@ impl BrowsePage {
         model: BrowseModel<'_>,
     ) -> Option<LibraryQueueProjection> {
         let filtered = self.filtered_tracks(model);
-        let filtered_target = self.tracks.scroll.sel();
+        let filtered_target = self.tracks.scroll().sel();
         let selected_index = filtered.get(filtered_target)?.data.index;
         if model
             .cfg

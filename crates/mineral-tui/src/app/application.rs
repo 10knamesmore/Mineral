@@ -161,12 +161,12 @@ impl App {
         let window_title = WindowTitle::new(tui_cfg.window_title());
         let mut state = AppState::new(cfg, images);
         // 各源能力声明:连接后自举一次进镜像,UI 据此画入口。
-        state.caps = bootstrap.channel_caps.into_iter().collect();
+        state.models.caps = bootstrap.channel_caps.into_iter().collect();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
-        state.browse.lyrics.extra = ui_prefs.initial_lyric_extra();
+        state.ui.browse.lyrics.extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
-        state.browse.nav.track_pos = ui_prefs.initial_track_pos().clone();
+        state.ui.browse.nav.track_pos = ui_prefs.initial_track_pos().clone();
         let notice_hint = Self::compose_notice_hint(&keymap);
         Self {
             should_quit: false,

@@ -12,20 +12,21 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
     let mut app = crate::test_support::app_with_queue(1, 0)?;
     let now = Instant::now();
     let anim = app.state.cfg.tui().animation();
-    app.state.transport.on_action(
+    app.state.ui.transport.on_action(
         Action::NudgeVolume(VolumeDelta(5)),
         PlayMode::Sequential,
         anim,
         now,
     );
     app.state
+        .ui
         .transport
         .on_action(Action::CyclePlayMode, PlayMode::Sequential, anim, now);
-    app.state.transport.on_seek(anim);
+    app.state.ui.transport.on_seek(anim);
     for _ in 0..6 {
-        app.state.transport.tick(PlayMode::RepeatAll, anim, now);
+        app.state.ui.transport.tick(PlayMode::RepeatAll, anim, now);
     }
-    let before = app.state.transport.clone();
+    let before = app.state.ui.transport.clone();
     let tree = mineral_config::merge_tree(
         mineral_config::default_tree()?,
         serde_json::json!({
@@ -37,7 +38,7 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
         }),
     );
     app.apply_pushed_config(BusValue::from_json(tree));
-    let after = &app.state.transport;
+    let after = &app.state.ui.transport;
     assert_eq!(after.heading(), before.heading());
     assert_eq!(after.mode_caption(), before.mode_caption());
     assert_eq!(after.controls_opacity(), before.controls_opacity());
@@ -65,22 +66,24 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
     let mut old_speed = before;
     old_speed.tick(PlayMode::RepeatAll, old_cfg.tui().animation(), now);
     app.state
+        .ui
         .transport
         .tick(PlayMode::RepeatAll, app.state.cfg.tui().animation(), now);
-    assert!(app.state.transport.controls_opacity() > before_opacity);
-    assert!(app.state.transport.controls_opacity() < old_speed.controls_opacity());
-    assert!(app.state.transport.mode_caption().1 > before_reveal);
-    assert!(app.state.transport.mode_caption().1 < old_speed.mode_caption().1);
-    assert!(app.state.transport.mode.width.current() > before_width);
-    assert!(app.state.transport.mode.width.current() < old_speed.mode.width.current());
+    assert!(app.state.ui.transport.controls_opacity() > before_opacity);
+    assert!(app.state.ui.transport.controls_opacity() < old_speed.controls_opacity());
+    assert!(app.state.ui.transport.mode_caption().1 > before_reveal);
+    assert!(app.state.ui.transport.mode_caption().1 < old_speed.mode_caption().1);
+    assert!(app.state.ui.transport.mode.width.current() > before_width);
+    assert!(app.state.ui.transport.mode.width.current() < old_speed.mode.width.current());
     let after_press = app
         .state
+        .ui
         .transport
         .button(ControlButton::Mode)
         .press_strength;
     assert!(after_press < before_press);
     assert!(after_press > old_speed.button(ControlButton::Mode).press_strength);
-    let after_elapsed_press = app.state.transport.elapsed_press_strength();
+    let after_elapsed_press = app.state.ui.transport.elapsed_press_strength();
     assert!(after_elapsed_press < before_elapsed_press);
     assert!(after_elapsed_press > old_speed.elapsed_press_strength());
     Ok(())

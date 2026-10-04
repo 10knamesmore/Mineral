@@ -26,14 +26,14 @@ fn seek_keys_send_targets_without_predicting_position() -> color_eyre::Result<()
         (KeyCode::Right, KeyModifiers::SHIFT, 90_000),
     ] {
         let (mut app, seeks) = crate::test_support::app_in_fullscreen_seek_probe()?;
-        app.state.playback.position_ms = 60_000;
+        app.state.models.playback.position_ms = 60_000;
         let event = Event::Key(KeyEvent::new(key, modifiers));
         app.handle_event(&event);
         assert_eq!(
             seeks.lock().ok().as_deref().map(Vec::as_slice),
             Some([target].as_slice())
         );
-        assert_eq!(app.state.playback.position_ms, 60_000);
+        assert_eq!(app.state.models.playback.position_ms, 60_000);
         for _ in 0..6 {
             app.state.tick_frame();
         }
@@ -42,7 +42,7 @@ fn seek_keys_send_targets_without_predicting_position() -> color_eyre::Result<()
             seeks.lock().ok().as_deref().map(Vec::as_slice),
             Some([target, target].as_slice())
         );
-        assert_eq!(app.state.playback.position_ms, 60_000);
+        assert_eq!(app.state.models.playback.position_ms, 60_000);
     }
     Ok(())
 }
@@ -70,8 +70,8 @@ fn first_control_key_executes_once_and_waits_for_confirmation() -> color_eyre::R
         for _ in 0..30 {
             app.state.tick_frame();
         }
-        assert!(!app.state.playback.playing);
-        assert_eq!(app.state.playback.mode, PlayMode::Sequential);
+        assert!(!app.state.models.playback.playing);
+        assert_eq!(app.state.models.playback.mode, PlayMode::Sequential);
     }
     Ok(())
 }
@@ -120,7 +120,7 @@ fn remapped_actions_and_consumed_text_follow_existing_routing() -> color_eyre::R
 #[test]
 fn volume_and_mode_update_after_backend_confirmation() -> color_eyre::Result<()> {
     let (mut app, volumes) = crate::test_support::app_with_queue_volume_probed(1, 0)?;
-    app.state.playback.volume_pct = 50;
+    app.state.models.playback.volume_pct = 50;
     press(&mut app, '+');
     press(&mut app, 'm');
     assert_eq!(
@@ -130,9 +130,10 @@ fn volume_and_mode_update_after_backend_confirmation() -> color_eyre::Result<()>
             .and_then(|values| values.last().copied()),
         Some(55)
     );
-    assert_eq!(app.state.playback.volume_pct, 50);
-    assert_eq!(app.state.playback.mode, PlayMode::Sequential);
+    assert_eq!(app.state.models.playback.volume_pct, 50);
+    assert_eq!(app.state.models.playback.mode, PlayMode::Sequential);
     app.state
+        .models
         .playback
         .apply_audio_snapshot(mineral_audio::AudioSnapshot {
             volume_pct: 55,
@@ -143,8 +144,8 @@ fn volume_and_mode_update_after_backend_confirmation() -> color_eyre::Result<()>
         play_mode: PlayMode::RepeatOne,
         ..Default::default()
     });
-    assert_eq!(app.state.playback.volume_pct, 55);
-    assert_eq!(app.state.playback.mode, PlayMode::RepeatOne);
-    assert!(app.state.playback.playing);
+    assert_eq!(app.state.models.playback.volume_pct, 55);
+    assert_eq!(app.state.models.playback.mode, PlayMode::RepeatOne);
+    assert!(app.state.models.playback.playing);
     Ok(())
 }

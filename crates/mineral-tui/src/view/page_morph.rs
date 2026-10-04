@@ -182,7 +182,7 @@ fn disappearing_status(frame: &mut Frame<'_>, from: Rect, to: Rect, raw: u16, ap
     transition::content(frame, Some(&source), None, to, raw, app.env.theme);
 }
 
-/// 播放信息只绘制一次，不吃页面透明度，也不在两个宽度间反复查询同一个 marquee 槽。
+/// 播放信息只绘制一次，不吃页面透明度，也使用自己的标题滚动状态。
 fn persistent_transport(frame: &mut Frame<'_>, area: Rect, app: &FrameView<'_>) {
     let theme = app.env.theme;
     transition::clear_symbols(frame.buffer_mut(), area);

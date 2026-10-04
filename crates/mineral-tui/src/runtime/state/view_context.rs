@@ -49,9 +49,9 @@ pub enum PageKind {
 impl AppState {
     /// 把应用动画与滚动状态折算为图片引擎需要的互斥渲染阶段。
     pub(crate) fn image_render_phase(&self) -> crate::image::ImageRenderPhase {
-        if !self.browse.fullscreen.settled()
-            || !self.channel_search.active.settled()
-            || !(self.browse.view.at_min() || self.browse.view.at_max())
+        if !self.ui.browse.fullscreen.settled()
+            || !self.ui.channel_search.active.settled()
+            || !(self.ui.browse.view.at_min() || self.ui.browse.view.at_max())
         {
             crate::image::ImageRenderPhase::Resizing
         } else if self.is_scrolling() {
@@ -63,20 +63,21 @@ impl AppState {
 
     /// 终端是否持有输入焦点。从 [`Self::dim`] 反读(变灰 = 未聚焦);上报 daemon 用。
     pub fn focused(&self) -> bool {
-        !self.dim.on()
+        !self.ui.dim.on()
     }
 
     /// 是否处于文本输入态:本地 `/` 模糊 typing,或 channel-search 搜索框(prompt 焦点)。
     /// 全局逃生口 / 单键快捷在此让位字符输入——输入态的按键是文本,不是命令。
     pub(crate) fn in_text_input(&self) -> bool {
-        self.browse.active_search().typing
-            || (self.channel_search.active.on() && self.channel_search.focus == SearchFocus::Prompt)
+        self.ui.browse.active_search().typing
+            || (self.ui.channel_search.active.on()
+                && self.ui.channel_search.focus == SearchFocus::Prompt)
     }
 
     /// 当前激活的页(见 [`PageKind`]):Search 模态优先,否则归 Browse。供 `handle_key` 顶层
     /// 路由分流到对应 Page 实现;子模式细分仍读 [`Self::active_layer`]。
     pub(crate) fn page_kind(&self) -> PageKind {
-        if self.channel_search.active.on() {
+        if self.ui.channel_search.active.on() {
             PageKind::Search
         } else {
             PageKind::Browse
@@ -85,11 +86,11 @@ impl AppState {
 
     /// 当前活跃的布局层(见 [`ActiveLayer`])。浮层栈在其之上,由调用方单独裁决。
     pub(crate) fn active_layer(&self) -> ActiveLayer {
-        if self.channel_search.active.on() {
+        if self.ui.channel_search.active.on() {
             ActiveLayer::SearchSession
-        } else if self.browse.active_search().typing {
+        } else if self.ui.browse.active_search().typing {
             ActiveLayer::DeepSearch
-        } else if self.browse.fullscreen.on() {
+        } else if self.ui.browse.fullscreen.on() {
             ActiveLayer::Fullscreen
         } else {
             ActiveLayer::Browse
@@ -101,12 +102,12 @@ impl AppState {
     /// 时间戳按活跃 surface 取:search 布局态看搜索面板的选中变化,否则看 browse 列表的
     /// ——两边各自维护,防抖只对当前正在滚的那个面板生效。
     pub fn is_scrolling(&self) -> bool {
-        let last_sel_change = if self.channel_search.active.on() {
-            self.channel_search.last_sel_change
+        let last_sel_change = if self.ui.channel_search.active.on() {
+            self.ui.channel_search.last_sel_change
         } else {
-            self.browse.nav.last_sel_change
+            self.ui.browse.nav.last_sel_change
         };
-        self.frame_now.saturating_duration_since(last_sel_change)
+        self.ui.frame_now.saturating_duration_since(last_sel_change)
             < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
     }
 }

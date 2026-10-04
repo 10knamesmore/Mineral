@@ -25,41 +25,43 @@ impl crate::app::App {
     pub(crate) fn sync_cover_palette(&mut self) {
         let cur = self
             .state
+            .models
             .player
             .current
             .as_ref()
             .and_then(|s| s.cover_url.clone());
         let Some(url) = cur else {
-            if self.state.images.spectrum_cover.is_some() {
-                self.state.spectrum.clear_cover();
+            if self.state.resources.images.spectrum_cover.is_some() {
+                self.state.ui.spectrum.clear_cover();
                 self.accent_fade.set_target(/*to*/ None, &self.theme_base);
                 self.feed_ambient(/*palette*/ None);
-                self.state.images.spectrum_cover = None;
-                self.state.images.current_palette = None;
+                self.state.resources.images.spectrum_cover = None;
+                self.state.resources.images.current_palette = None;
             }
             return;
         };
-        if self.state.images.spectrum_cover.as_ref() == Some(&url) {
+        if self.state.resources.images.spectrum_cover.as_ref() == Some(&url) {
             return;
         }
-        if let Some(palette) = self.state.images.palettes.get(&url).cloned() {
+        if let Some(palette) = self.state.resources.images.palettes.get(&url).cloned() {
             let accents = self
                 .dynamic_accent_enabled()
                 .then(|| derive_accents(&palette));
             self.accent_fade.set_target(accents, &self.theme_base);
             self.feed_ambient(Some(&palette));
             self.state
+                .ui
                 .spectrum
                 .begin_cover_transition(palette.clone(), &self.theme);
-            self.state.images.spectrum_cover = Some(url);
-            self.state.images.current_palette = Some(palette);
-        } else if self.state.images.cache.contains_key(&url) {
+            self.state.resources.images.spectrum_cover = Some(url);
+            self.state.resources.images.current_palette = Some(palette);
+        } else if self.state.resources.images.cache.contains_key(&url) {
             // 图已回但无色板 = 取色失败:回退,标记已处理(不再每帧重试)。
-            self.state.spectrum.clear_cover();
+            self.state.ui.spectrum.clear_cover();
             self.accent_fade.set_target(/*to*/ None, &self.theme_base);
             self.feed_ambient(/*palette*/ None);
-            self.state.images.spectrum_cover = Some(url);
-            self.state.images.current_palette = None;
+            self.state.resources.images.spectrum_cover = Some(url);
+            self.state.resources.images.current_palette = None;
         }
         // else:封面还在抓,保持当前可见态(上一张封面 / hue)不动,等就绪后再红→蓝。
     }

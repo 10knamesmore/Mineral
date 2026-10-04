@@ -18,7 +18,7 @@ impl AppState {
         if reason != FinishReason::Eof || !self.records_local_plays_for(song_id.namespace()) {
             return;
         }
-        if self.library.local_play_counts.note_eof(song_id) {
+        if self.models.library.local_play_counts.note_eof(song_id) {
             self.redecorate_for_source(song_id.namespace());
         }
     }

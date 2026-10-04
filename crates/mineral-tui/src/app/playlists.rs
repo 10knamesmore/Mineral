@@ -10,7 +10,7 @@ use mineral_protocol::PlaylistOp;
 impl App {
     /// 为当前队列打开空名称输入框。
     pub(crate) fn open_save_queue_prompt(&mut self) {
-        if self.state.player.queue.is_empty() {
+        if self.state.models.player.queue.is_empty() {
             return;
         }
         let prompt = TextPrompt::new("Save queue as playlist", |text| {
@@ -128,10 +128,10 @@ mod tests {
                 delete: true,
             })
             .build();
-        app.state.library.playlists = vec![PlaylistView {
+        app.state.models.library.playlists = vec![PlaylistView {
             data: original_playlist.clone(),
         }];
-        app.state.browse.view.switch_to(View::Playlists);
+        app.state.ui.browse.view.switch_to(View::Playlists);
         key(&mut app, KeyCode::Char('o'));
         key(&mut app, KeyCode::Char('r'));
         assert!(app.overlays.in_text_input());
@@ -199,36 +199,38 @@ mod tests {
                     detail: Box::new(mineral_channel_core::PlaylistDetail::complete(data.clone())),
                 });
         }
-        app.state.browse.nav.opened_playlist = Some(id.clone());
-        app.state.browse.view.switch_to(View::Library);
+        app.state.ui.browse.nav.opened_playlist = Some(id.clone());
+        app.state.ui.browse.view.switch_to(View::Library);
         let mut renamed = playlist;
         renamed.name = "New".to_owned();
         app.state.apply(&mineral_task::TaskEvent::LibrarySnapshot {
             playlists: vec![retained.clone(), renamed.clone()],
         });
         assert_eq!(app.state.opened_playlist().map(|p| &p.data), Some(&renamed));
-        assert!(app.state.library.playlist_complete(&id));
+        assert!(app.state.models.library.playlist_complete(&id));
         app.state.apply(&mineral_task::TaskEvent::LibrarySnapshot {
             playlists: vec![retained.clone()],
         });
         assert!(app.state.opened_playlist().is_none());
-        assert!(!app.state.library.tracks.contains_key(&id));
-        assert!(!app.state.library.tracks_requested.contains_key(&id));
-        assert!(app.state.library.playlist_complete(&retained.id));
+        assert!(!app.state.models.library.tracks.contains_key(&id));
+        assert!(!app.state.models.library.tracks_requested.contains_key(&id));
+        assert!(app.state.models.library.playlist_complete(&retained.id));
         assert!(
             app.state
+                .models
                 .library
                 .tracks_requested
                 .contains_key(&retained.id)
         );
-        assert_eq!(app.state.browse.view.current(), View::Playlists);
+        assert_eq!(app.state.ui.browse.view.current(), View::Playlists);
         app.state.apply(&mineral_task::TaskEvent::LibrarySnapshot {
             playlists: Vec::new(),
         });
-        assert!(app.state.library.playlists.is_empty());
-        assert!(!app.state.library.tracks.contains_key(&retained.id));
+        assert!(app.state.models.library.playlists.is_empty());
+        assert!(!app.state.models.library.tracks.contains_key(&retained.id));
         assert!(
             !app.state
+                .models
                 .library
                 .tracks_requested
                 .contains_key(&retained.id)

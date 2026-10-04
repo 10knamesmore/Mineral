@@ -22,12 +22,12 @@ pub(crate) fn input<'a>(
 
 /// 为绘制组合一份歌词视图。
 pub(super) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> LyricsView<'a> {
-    state.browse.lyrics.view(
-        input(&state.playback, &state.library),
+    state.ui.browse.lyrics.view(
+        input(&state.models.playback, &state.models.library),
         FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
     )
 }
@@ -40,13 +40,14 @@ pub(super) fn prepare(
     mode: LyricMode,
     background: impl Fn(Rect) -> Color,
 ) {
-    let input = input(&state.playback, &state.library);
+    let input = input(&state.models.playback, &state.models.library);
     let frame = FrameEnv {
         config: &state.cfg,
         theme,
-        now: state.frame_now,
+        now: state.ui.frame_now,
     };
     state
+        .ui
         .browse
         .lyrics
         .prepare(area, input, frame, mode, background);

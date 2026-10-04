@@ -301,11 +301,12 @@ mod tests {
         original: Vec<LyricLine>,
     ) -> color_eyre::Result<AppState> {
         let song = qianzai_song();
-        s.library
+        s.models
+            .library
             .lyrics
             .insert(song.id.clone(), Lyrics { lines: original });
-        s.playback.track = Some(song);
-        s.browse.fullscreen.set(true);
+        s.models.playback.track = Some(song);
+        s.ui.browse.fullscreen.set(true);
         Ok(s)
     }
 
@@ -323,7 +324,11 @@ mod tests {
 
     /// 锚定目标行(整数 line index);附着态返回 `None`。
     fn target(s: &AppState) -> Option<i64> {
-        s.browse.lyrics.scroll.as_ref().map(LyricGlide::target_line)
+        s.ui.browse
+            .lyrics
+            .scroll
+            .as_ref()
+            .map(LyricGlide::target_line)
     }
 
     /// 步长随默认配置算(`behavior.page_scroll_rows` / `line_scroll_rows` 是手感旋钮,
@@ -334,10 +339,10 @@ mod tests {
         let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
         let line = i64::try_from(*s.cfg.tui().behavior().line_scroll_rows())?;
         assert!(page <= 19, "前提:默认翻页步长须落在 20 行 fixture 界内");
-        s.browse.fullscreen.set(false);
+        s.ui.browse.fullscreen.set(false);
         s.scroll_lyrics(ScrollStep::PageDown);
-        assert!(s.browse.lyrics.scroll.is_none(), "非全屏不接管滚动");
-        s.browse.fullscreen.set(true);
+        assert!(s.ui.browse.lyrics.scroll.is_none(), "非全屏不接管滚动");
+        s.ui.browse.fullscreen.set(true);
         // position 0 → 当前播放行 0;翻页锚定到 0 + page。
         s.scroll_lyrics(ScrollStep::PageDown);
         assert_eq!(target(&s), Some(page), "全屏翻页锚定行 = 0 + page");
@@ -365,7 +370,7 @@ mod tests {
             s.tick_lyric_scroll();
         }
         assert!(
-            s.browse.lyrics.scroll.is_none(),
+            s.ui.browse.lyrics.scroll.is_none(),
             "过冲弹回后空闲超时仍正常回锚"
         );
         Ok(())
@@ -382,7 +387,7 @@ mod tests {
             s.tick_lyric_scroll();
         }
         assert!(
-            s.browse.lyrics.scroll.is_none(),
+            s.ui.browse.lyrics.scroll.is_none(),
             "synced 歌空闲超时平滑回锚后归附着"
         );
         Ok(())
@@ -408,9 +413,9 @@ mod tests {
         s.tick_lyric_scroll();
         s.scroll_lyrics(ScrollStep::PageDown);
         assert_eq!(target(&s), Some(page));
-        s.playback.track = Some(feiyu_song());
+        s.models.playback.track = Some(feiyu_song());
         s.tick_lyric_scroll();
-        assert!(s.browse.lyrics.scroll.is_none(), "换歌清脱离态");
+        assert!(s.ui.browse.lyrics.scroll.is_none(), "换歌清脱离态");
         Ok(())
     }
 
@@ -459,16 +464,16 @@ mod tests {
         // seek 未落地(position 仍 0):锚点钉住不清,焦点仍在该行。
         s.tick_lyric_scroll();
         assert!(
-            s.browse.lyrics.scroll.is_some(),
+            s.ui.browse.lyrics.scroll.is_some(),
             "seek 落地前钉住锚点(不立即回附着)"
         );
         assert_eq!(s.manual_lyric_focus_line(), Some(focus), "锚点仍在焦点行");
 
         // 刚落进焦点行(elapsed=0,仍在淡入窗口内):不清——否则 attached 会从上一行重演。
-        s.playback.position_ms = u64::try_from(focus)? * 1000;
+        s.models.playback.position_ms = u64::try_from(focus)? * 1000;
         s.tick_lyric_scroll();
         assert!(
-            s.browse.lyrics.scroll.is_some(),
+            s.ui.browse.lyrics.scroll.is_some(),
             "落进焦点行但淡入未完成时仍钉住(避免 attached 重演行切入)"
         );
 
@@ -479,10 +484,10 @@ mod tests {
             scroll_ms < 1000,
             "前提:淡入窗口须短于行距,否则会溢出到下一行"
         );
-        s.playback.position_ms = u64::try_from(focus)? * 1000 + scroll_ms;
+        s.models.playback.position_ms = u64::try_from(focus)? * 1000 + scroll_ms;
         s.tick_lyric_scroll();
         assert!(
-            s.browse.lyrics.scroll.is_none(),
+            s.ui.browse.lyrics.scroll.is_none(),
             "越过淡入窗口后无缝回附着态"
         );
         Ok(())
@@ -495,20 +500,20 @@ mod tests {
         let mut s = fullscreen_with(timed_lines())?;
         s.tick_lyric_scroll();
         // 播放在第 18 行,向后 seek 到第 5 行:hold 在 5,但 position 仍在 18。
-        s.playback.position_ms = 18_000;
+        s.models.playback.position_ms = 18_000;
         s.hold_lyric_anchor_for_seek(5);
         s.tick_lyric_scroll();
         assert!(
-            s.browse.lyrics.scroll.is_some(),
+            s.ui.browse.lyrics.scroll.is_some(),
             "cur=18 ≠ line=5:不误判抵达(`>=` 会在此错误清脱离)"
         );
         // seek 落地到第 5 行并越过淡入窗口 → 清回附着。
         let scroll_ms = *s.cfg.tui().lyrics().scroll_ms();
         assert!(scroll_ms < 1000, "前提:淡入窗口须短于行距");
-        s.playback.position_ms = 5_000 + scroll_ms;
+        s.models.playback.position_ms = 5_000 + scroll_ms;
         s.tick_lyric_scroll();
         assert!(
-            s.browse.lyrics.scroll.is_none(),
+            s.ui.browse.lyrics.scroll.is_none(),
             "落进焦点行且越过淡入窗口后回附着态"
         );
         Ok(())
@@ -524,7 +529,7 @@ mod tests {
         assert_eq!(target(&s), Some(page));
         // 播放推进到第 5 行附近,但仍在 reattach 超时窗口内。
         for step in 1..50u64 {
-            s.playback.position_ms = step * 1000;
+            s.models.playback.position_ms = step * 1000;
             s.tick_lyric_scroll();
         }
         assert_eq!(target(&s), Some(page), "脱离态锚点不随播放漂移");

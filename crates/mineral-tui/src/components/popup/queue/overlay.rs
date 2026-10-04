@@ -31,7 +31,7 @@ use crate::runtime::state::{ListExpansionState, OverlayReveal};
 /// 浮动 queue 浮层。
 ///
 /// 只持有 UI-local 光标 + 视口滚动(`list`,永不被 server snapshot 覆盖,仅 clamp 防越界)
-/// 与本地 `/` 模糊过滤态(`search`);队列曲目是后端权威态,渲染 / 导航时从 [`AppState`] 读。
+/// 与本地 `/` 模糊过滤态(`search`);队列曲目是后端权威态,通过 `QueueInput` 借入。
 ///
 /// `/` 过滤只重排**显示**:光标 `list` 索引的是过滤视图(按匹配分降序),经
 /// [`Self::visible`] 映射回队列真实下标;底层 `player.queue`(播放顺序)分毫不动。
@@ -629,10 +629,10 @@ mod tests {
     fn ctx_with_queue(len: usize, current: Option<usize>) -> color_eyre::Result<AppState> {
         let mut s = AppState::test_default()?;
         let queue = endserenading(len);
-        s.playback.track = current.and_then(|i| queue.get(i).cloned());
+        s.models.playback.track = current.and_then(|i| queue.get(i).cloned());
         // 游标是队列在播行的下标依据(server 在播锚点的镜像)。
-        s.player.cursor = mineral_protocol::PlayCursor::InQueue(current.unwrap_or(0));
-        s.player.queue = queue;
+        s.models.player.cursor = mineral_protocol::PlayCursor::InQueue(current.unwrap_or(0));
+        s.models.player.queue = queue;
         Ok(s)
     }
 
@@ -652,7 +652,7 @@ mod tests {
 
         let theme = crate::test_support::default_theme()?;
         let mut ctx = AppState::test_default()?;
-        ctx.images = ImageEngine::disabled_kitty(Arc::clone(&ctx.cfg));
+        ctx.resources.images = ImageEngine::disabled_kitty(Arc::clone(&ctx.cfg));
         let mut previews = Vec::new();
         for index in 0..12 {
             let name = format!(
@@ -664,9 +664,10 @@ mod tests {
                 previews.push(None);
             } else {
                 let url = MediaUrl::remote(&format!("https://example.com/queue-{index}.png"))?;
-                ctx.images.insert_test_thumbnail(&url)?;
+                ctx.resources.images.insert_test_thumbnail(&url)?;
                 let mut probe = Buffer::empty(Rect::new(0, 0, THUMBNAIL_COLUMNS, 1));
-                ctx.images
+                ctx.resources
+                    .images
                     .render_thumbnail(Some(&url), probe.area, &mut probe);
                 previews.push(
                     probe
@@ -675,10 +676,10 @@ mod tests {
                 );
                 song.cover_url = Some(url);
             }
-            ctx.player.queue.push(song);
+            ctx.models.player.queue.push(song);
         }
-        ctx.playback.track = ctx.player.queue.get(6).cloned();
-        ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(6);
+        ctx.models.playback.track = ctx.models.player.queue.get(6).cloned();
+        ctx.models.player.cursor = mineral_protocol::PlayCursor::InQueue(6);
         for width in [40, 50, 80] {
             let area = Rect::new(7, 3, width, 4);
             let viewport = usize::from(area.height - 1);
@@ -691,7 +692,7 @@ mod tests {
             let assert_window = |offset: usize, buffer: &Buffer| -> color_eyre::Result<()> {
                 let first_song = visible
                     .get(offset)
-                    .and_then(|index| ctx.player.queue.get(*index))
+                    .and_then(|index| ctx.models.player.queue.get(*index))
                     .ok_or_else(|| color_eyre::eyre::eyre!("窗口首行应在过滤视图内"))?;
                 let first_row = area.y + 1;
                 let title_x = (area.left()..area.right())
@@ -708,6 +709,7 @@ mod tests {
                 for (row, &raw_index) in visible.iter().skip(offset).take(viewport).enumerate() {
                     let y = first_row + u16::try_from(row)?;
                     let song = ctx
+                        .models
                         .player
                         .queue
                         .get(raw_index)
@@ -778,7 +780,7 @@ mod tests {
         use crate::runtime::action::ScrollStep;
         // EndSerenading fixture 只有 10 首,翻页步长不止 10 行,队列要更长。
         let mut ctx = AppState::test_default()?;
-        ctx.player.queue = (0..100)
+        ctx.models.player.queue = (0..100)
             .map(|i| mineral_test::song(&format!("q{i}")))
             .collect();
         let page = *ctx.cfg.tui().behavior().page_scroll_rows();
@@ -979,7 +981,7 @@ mod tests {
     #[test]
     fn filter_keeps_only_matches() -> color_eyre::Result<()> {
         let mut ctx = AppState::test_default()?;
-        ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
+        ctx.models.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("al");
         let visible = o.visible(&crate::app::overlays::input::queue(&ctx));
@@ -1000,7 +1002,7 @@ mod tests {
     fn activate_plays_raw_index_under_filter() -> color_eyre::Result<()> {
         let mut ctx = AppState::test_default()?;
         // 只有下标 3 命中,过滤后它是视图第 0 行。
-        ctx.player.queue = named(&["one", "two", "three", "zephyr"]);
+        ctx.models.player.queue = named(&["one", "two", "three", "zephyr"]);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("zephyr");
         assert_eq!(
@@ -1025,7 +1027,7 @@ mod tests {
     #[test]
     fn reorder_suppressed_while_filtering() -> color_eyre::Result<()> {
         let mut ctx = AppState::test_default()?;
-        ctx.player.queue = named(&["alpha", "beta", "alba"]);
+        ctx.models.player.queue = named(&["alpha", "beta", "alba"]);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("al");
         assert!(
@@ -1046,7 +1048,7 @@ mod tests {
     fn slash_typing_flow_matches_browse() -> color_eyre::Result<()> {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut ctx = AppState::test_default()?;
-        ctx.player.queue = named(&["alpha", "beta"]);
+        ctx.models.player.queue = named(&["alpha", "beta"]);
         let mut o = QueueOverlay::new(0);
         assert!(
             o.on_action(
@@ -1114,7 +1116,7 @@ mod tests {
     #[test]
     fn pinyin_initials_filter_hits() -> color_eyre::Result<()> {
         let mut ctx = AppState::test_default()?;
-        ctx.player.queue = named(&["春日影", "MyGO"]);
+        ctx.models.player.queue = named(&["春日影", "MyGO"]);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("cry");
         assert_eq!(
@@ -1131,7 +1133,7 @@ mod tests {
     fn alias_match_produces_alias_hits() -> color_eyre::Result<()> {
         let mut ctx = AppState::test_default()?;
         // aliased_song:名「迷星叫」/ 别名「Mayoiuta」。"mayo" 只命中别名。
-        ctx.player.queue = vec![mineral_test::aliased_song(), mineral_test::song("other")];
+        ctx.models.player.queue = vec![mineral_test::aliased_song(), mineral_test::song("other")];
         let mut o = QueueOverlay::new(0);
         o.search.set_query("mayo");
         assert_eq!(
@@ -1140,6 +1142,7 @@ mod tests {
             "按别名命中,该曲进视图"
         );
         let s = ctx
+            .models
             .player
             .queue
             .first()
@@ -1154,10 +1157,10 @@ mod tests {
     #[test]
     fn jump_to_current_maps_into_filtered_view() -> color_eyre::Result<()> {
         let mut ctx = AppState::test_default()?;
-        ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
+        ctx.models.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
         // 在播 alba(真实下标 3)。queue_current_index 以 playback.track 为准,须同设。
-        ctx.playback.track = ctx.player.queue.get(3).cloned();
-        ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(3);
+        ctx.models.playback.track = ctx.models.player.queue.get(3).cloned();
+        ctx.models.player.cursor = mineral_protocol::PlayCursor::InQueue(3);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("al");
         let visible = o.visible(&crate::app::overlays::input::queue(&ctx));

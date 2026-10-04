@@ -7,16 +7,16 @@ use mineral_model::CollectionIndex;
 /// 随页面保留的曲目列表；共享数据由调用方借入。
 pub struct TrackList {
     /// 本列表的光标、视口与位置标记。
-    pub(crate) scroll: ScrollList,
+    pub(super) scroll: ScrollList,
 
     /// 本列表选中标题的滚动状态。
     pub(crate) title: crate::runtime::marquee::Marquee,
 
     /// 本列表的查询与输入编辑状态。
-    pub(crate) search: SearchState,
+    pub(super) search: SearchState,
 
     /// 仅保留本列表清除筛选前的显示输入。
-    pub(crate) expansion: ListExpansionState<CollectionIndex>,
+    pub(super) expansion: ListExpansionState<CollectionIndex>,
 
     /// 本次列表是否处于稳定布局，瞬态合成不启动筛选展开。
     pub(super) stable: bool,

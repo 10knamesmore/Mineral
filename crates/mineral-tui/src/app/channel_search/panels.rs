@@ -450,7 +450,7 @@ mod tests {
     fn album_detail_activate_plays_selected_track() -> color_eyre::Result<()> {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -478,17 +478,18 @@ mod tests {
                     .build(),
             ),
         });
-        app.state.channel_search.set_focus(SearchFocus::Detail);
+        app.state.ui.channel_search.set_focus(SearchFocus::Detail);
         // 光标移到第 3 首。
         if let Some(f) = app
             .state
+            .ui
             .channel_search
             .active_results_mut()
             .and_then(|kr| kr.detail.current_mut())
         {
             f.list_mut().set_sel(2);
         }
-        match app.state.channel_search.detail_activate_action() {
+        match app.state.ui.channel_search.detail_activate_action() {
             DetailActivate::Play { queue, target } => {
                 assert_eq!(queue.len(), 4, "队列=专辑全部曲目");
                 assert_eq!(target, 2, "exact target=选中第 3 个 occurrence");
@@ -509,7 +510,7 @@ mod tests {
 
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -549,7 +550,7 @@ mod tests {
 
         let (mut app, queue_ops) =
             crate::test_support::app_with_channel_search_qprobed(vec![SearchKind::Artist])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         let artist = mineral_model::Artist::builder()
@@ -580,10 +581,11 @@ mod tests {
                     .build(),
             ],
         });
-        app.state.channel_search.set_focus(SearchFocus::Detail);
+        app.state.ui.channel_search.set_focus(SearchFocus::Detail);
         // 切到 Albums 区,下钻进 al1。
         if let Some(f) = app
             .state
+            .ui
             .channel_search
             .active_results_mut()
             .and_then(|kr| kr.detail.current_mut())
@@ -592,11 +594,13 @@ mod tests {
         }
         let eff = app
             .state
+            .ui
             .channel_search
             .activate_detail_item(/*sweep_ticks*/ 1);
         app.apply_search_effect(eff);
         assert_eq!(
             app.state
+                .ui
                 .channel_search
                 .active_results()
                 .map(|kr| kr.detail.depth()),
@@ -618,6 +622,7 @@ mod tests {
         });
         if let Some(f) = app
             .state
+            .ui
             .channel_search
             .active_results_mut()
             .and_then(|kr| kr.detail.current_mut())
@@ -627,6 +632,7 @@ mod tests {
         // 走完整 handler:必须真发出 atomic PlayQueue。
         let eff = app
             .state
+            .ui
             .channel_search
             .activate_detail_item(/*sweep_ticks*/ 1);
         app.apply_search_effect(eff);
@@ -650,7 +656,7 @@ mod tests {
     fn detail_album_play_carries_album_context() -> color_eyre::Result<()> {
         let (mut app, _q) =
             crate::test_support::app_with_channel_search_qprobed(vec![SearchKind::Album])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -678,9 +684,10 @@ mod tests {
                     .build(),
             ),
         });
-        app.state.channel_search.set_focus(SearchFocus::Detail);
+        app.state.ui.channel_search.set_focus(SearchFocus::Detail);
         let super::SearchEffect::PlayQueue { context, .. } = app
             .state
+            .ui
             .channel_search
             .activate_detail_item(/*sweep_ticks*/ 1)
         else {
@@ -705,7 +712,7 @@ mod tests {
 
         let (mut app, queue_ops) =
             crate::test_support::app_with_channel_search_qprobed(vec![SearchKind::Song])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         let songs = crate::test_support::endserenading(4);
@@ -718,12 +725,13 @@ mod tests {
             payload: SearchPayload::Songs(songs),
             has_more: None,
         });
-        app.state.channel_search.set_focus(SearchFocus::Results);
-        if let Some(kr) = app.state.channel_search.active_results_mut() {
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
+        if let Some(kr) = app.state.ui.channel_search.active_results_mut() {
             kr.set_sel(2);
         }
         let eff = app
             .state
+            .ui
             .channel_search
             .activate_search_panel(/*sweep_ticks*/ 1);
         app.apply_search_effect(eff);
@@ -737,7 +745,7 @@ mod tests {
             "song 结果应原子提交 queue + exact target 2"
         );
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Results,
             "song 直接播,焦点不进 detail"
         );
@@ -749,7 +757,7 @@ mod tests {
     fn container_result_activate_opens_detail() -> color_eyre::Result<()> {
         let (mut app, queue_ops) =
             crate::test_support::app_with_channel_search_qprobed(vec![SearchKind::Album])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -765,14 +773,15 @@ mod tests {
             ]),
             has_more: None,
         });
-        app.state.channel_search.set_focus(SearchFocus::Results);
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
         let eff = app
             .state
+            .ui
             .channel_search
             .activate_search_panel(/*sweep_ticks*/ 1);
         app.apply_search_effect(eff);
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Detail,
             "容器结果 activate → 进 detail 浏览"
         );
@@ -795,7 +804,7 @@ mod tests {
 
         let (mut app, _q) =
             crate::test_support::app_with_channel_search_qprobed(vec![SearchKind::Album])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -824,16 +833,17 @@ mod tests {
                     .build(),
             ),
         });
-        app.state.channel_search.set_focus(SearchFocus::Detail);
+        app.state.ui.channel_search.set_focus(SearchFocus::Detail);
         let page = u16::try_from(*app.state.cfg.tui().behavior().page_scroll_rows())?;
         // C-f 翻页下滚简介(平移 page_scroll_rows)。
         app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert_eq!(
             app.state
+                .ui
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
-                .map(|f| f.description_scroll()),
+                .map(crate::runtime::state::DetailFrame::description_scroll),
             Some(page),
             "C-f 平移简介 offset = page_scroll_rows"
         );
@@ -841,10 +851,11 @@ mod tests {
         app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
         assert_eq!(
             app.state
+                .ui
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
-                .map(|f| f.description_scroll()),
+                .map(crate::runtime::state::DetailFrame::description_scroll),
             Some(0),
             "C-b 回滚到顶(下界钳 0)"
         );
@@ -856,7 +867,7 @@ mod tests {
     fn drill_from_results_enters_detail() -> color_eyre::Result<()> {
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -867,12 +878,13 @@ mod tests {
             payload: SearchPayload::Songs(crate::test_support::endserenading(3)),
             has_more: None,
         });
-        app.state.channel_search.set_focus(SearchFocus::Results);
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
         app.state
+            .ui
             .channel_search
             .drill_search_panel(/*sweep_ticks*/ 1);
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Detail,
             "drill 在结果列 → 进 detail(song 进其专辑)"
         );
@@ -893,21 +905,21 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let mut app = app_with_album_detail()?;
-        app.state.channel_search.set_focus(SearchFocus::Results);
-        app.state.channel_search.last_sel_change = rewound();
-        let before = app.state.channel_search.last_sel_change;
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
+        app.state.ui.channel_search.last_sel_change = rewound();
+        let before = app.state.ui.channel_search.last_sel_change;
         app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()));
         assert!(
-            app.state.channel_search.last_sel_change > before,
+            app.state.ui.channel_search.last_sel_change > before,
             "结果列光标移动应刷新时间戳"
         );
 
-        app.state.channel_search.set_focus(SearchFocus::Detail);
-        app.state.channel_search.last_sel_change = rewound();
-        let before = app.state.channel_search.last_sel_change;
+        app.state.ui.channel_search.set_focus(SearchFocus::Detail);
+        app.state.ui.channel_search.last_sel_change = rewound();
+        let before = app.state.ui.channel_search.last_sel_change;
         app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()));
         assert!(
-            app.state.channel_search.last_sel_change > before,
+            app.state.ui.channel_search.last_sel_change > before,
             "detail 列表光标移动应刷新时间戳"
         );
         Ok(())
@@ -920,7 +932,7 @@ mod tests {
 
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         let url = MediaUrl::remote("https://x.y/cover.jpg")?;
@@ -952,21 +964,25 @@ mod tests {
 
         let (mut app, url) = app_with_covered_album()?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.images.cache.insert_test(&url, Arc::new(img));
+        app.state
+            .resources
+            .images
+            .cache
+            .insert_test(&url, Arc::new(img));
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
         // 窗内(选中刚变):不投编码。
-        app.state.channel_search.last_sel_change = Instant::now();
+        app.state.ui.channel_search.last_sel_change = Instant::now();
         t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         assert!(
-            app.state.images.encode_pending.is_empty(),
+            app.state.resources.images.encode_pending.is_empty(),
             "滚动窗内不应派发封面编码"
         );
         // 停稳(窗外):恰好派发一次。
-        app.state.channel_search.last_sel_change = rewound();
+        app.state.ui.channel_search.last_sel_change = rewound();
         t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         assert_eq!(
-            app.state.images.encode_pending.len(),
+            app.state.resources.images.encode_pending.len(),
             1,
             "停稳后应恰好派发一次封面编码"
         );

@@ -285,7 +285,7 @@ impl ImageEngine {
             if let Some(url) = url {
                 let key = self.preview_key(url, target);
                 let _ = self.preview_images.render_if_ready(&key, |preview| {
-                    let _ = preview.render(target, buf);
+                    preview.render(target, buf);
                 });
             }
             return;

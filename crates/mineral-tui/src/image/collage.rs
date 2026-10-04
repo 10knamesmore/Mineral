@@ -28,11 +28,11 @@ const MAX_TILES: usize = 4;
 pub(crate) fn tick(state: &mut AppState) {
     let mut requests = Vec::<(SourceKind, MediaUrl)>::new();
     let mut composed = Vec::<(MediaUrl, usize, DynamicImage)>::new();
-    for p in &state.library.playlists {
+    for p in &state.models.library.playlists {
         if p.data.cover_url.is_some() || p.data.source() != SourceKind::MINERAL {
             continue;
         }
-        let Some(tracks) = state.library.tracks.get(&p.data.id) else {
+        let Some(tracks) = state.models.library.tracks.get(&p.data.id) else {
             continue;
         };
         let members = member_covers(tracks);
@@ -46,26 +46,37 @@ pub(crate) fn tick(state: &mut AppState) {
         // 续命成员图——拼完的成员图让 LRU 自然淘汰。
         let ready_count = members
             .iter()
-            .filter(|(_, url)| state.images.cache.contains_key(url))
+            .filter(|(_, url)| state.resources.images.cache.contains_key(url))
             .count();
-        let recorded = state.images.collage_ready.get(&key).copied().unwrap_or(0);
-        if ready_count == 0 || (state.images.cache.contains_key(&key) && recorded >= ready_count) {
+        let recorded = state
+            .resources
+            .images
+            .collage_ready
+            .get(&key)
+            .copied()
+            .unwrap_or(0);
+        if ready_count == 0
+            || (state.resources.images.cache.contains_key(&key) && recorded >= ready_count)
+        {
             continue;
         }
         let ready = members
             .iter()
-            .filter_map(|(_, url)| state.images.cache.get(url).cloned())
+            .filter_map(|(_, url)| state.resources.images.cache.get(url).cloned())
             .collect::<Vec<Arc<DynamicImage>>>();
         let Some(image) = compose(&ready) else {
             continue;
         };
         composed.push((key, ready.len(), image));
     }
-    state.images.load(requests);
+    state.resources.images.load(requests);
     for (key, tiles, image) in composed {
         mineral_log::debug!(target: "cover", key = %key, tiles, "歌单拼贴合成入缓存");
-        state.images.insert_synthesized(&key, Arc::new(image));
-        state.images.collage_ready.insert(key, tiles);
+        state
+            .resources
+            .images
+            .insert_synthesized(&key, Arc::new(image));
+        state.resources.images.collage_ready.insert(key, tiles);
     }
 }
 
@@ -311,7 +322,7 @@ mod tests {
     fn mineral_state(n: usize) -> color_eyre::Result<AppState> {
         let mut s = AppState::test_default()?;
         let pid = PlaylistId::new(SourceKind::MINERAL, "favorites");
-        s.library.playlists = vec![crate::test_support::playlist_view(
+        s.models.library.playlists = vec![crate::test_support::playlist_view(
             "favorites",
             "Favorites",
             SourceKind::MINERAL,
@@ -321,7 +332,7 @@ mod tests {
             .map(|i| song_with_cover(SourceKind::NETEASE, i))
             .collect::<color_eyre::Result<Vec<Song>>>()?;
         let tracks = entry_views(songs);
-        s.library.tracks.insert(
+        s.models.library.tracks.insert(
             pid,
             crate::runtime::state::PlaylistTracks {
                 entries: tracks,
@@ -342,13 +353,21 @@ mod tests {
     fn disabled_fetcher_settles_member_requests() -> color_eyre::Result<()> {
         let mut s = mineral_state(4)?;
         tick(&mut s);
-        assert_eq!(s.images.loading_count(), 0, "禁用 fetcher 不应留下在途请求");
-        assert!(s.images.collage_ready.is_empty(), "无就绪成员不应合成");
+        assert_eq!(
+            s.resources.images.loading_count(),
+            0,
+            "禁用 fetcher 不应留下在途请求"
+        );
+        assert!(
+            s.resources.images.collage_ready.is_empty(),
+            "无就绪成员不应合成"
+        );
         assert!(
             effective_cover_url(
-                &s.library,
-                s.images.ready(),
-                &s.library
+                &s.models.library,
+                s.resources.images.ready(),
+                &s.models
+                    .library
                     .playlists
                     .first()
                     .ok_or_else(|| eyre!("歌单在"))?
@@ -365,41 +384,48 @@ mod tests {
     fn tick_composes_progressively() -> color_eyre::Result<()> {
         let mut s = mineral_state(4)?;
         for i in 0..2 {
-            s.images
+            s.resources
+                .images
                 .cache
                 .insert_test(&cover_url(i)?, solid([200, 0, 0], 8));
         }
         tick(&mut s);
         let playlist = s
+            .models
             .library
             .playlists
             .first()
             .ok_or_else(|| eyre!("歌单在"))?
             .data
             .clone();
-        let key = effective_cover_url(&s.library, s.images.ready(), &playlist)
+        let key = effective_cover_url(&s.models.library, s.resources.images.ready(), &playlist)
             .ok_or_else(|| eyre!("2 张就绪应已合成"))?;
         assert_eq!(
-            s.images.collage_ready.get(&key).copied(),
+            s.resources.images.collage_ready.get(&key).copied(),
             Some(2),
             "记录就绪数 2"
         );
 
         for i in 2..4 {
-            s.images
+            s.resources
+                .images
                 .cache
                 .insert_test(&cover_url(i)?, solid([0, 200, 0], 8));
         }
         tick(&mut s);
         assert_eq!(
-            s.images.collage_ready.get(&key).copied(),
+            s.resources.images.collage_ready.get(&key).copied(),
             Some(4),
             "全员到货应重拼成 4"
         );
 
         // 就绪数没变,再 tick 不重拼(记录值不动、无新键)。
         tick(&mut s);
-        assert_eq!(s.images.collage_ready.len(), 1, "稳态不再新增合成");
+        assert_eq!(
+            s.resources.images.collage_ready.len(),
+            1,
+            "稳态不再新增合成"
+        );
         Ok(())
     }
 
@@ -408,12 +434,14 @@ mod tests {
     fn collage_key_is_deterministic_and_member_sensitive() -> color_eyre::Result<()> {
         let s = mineral_state(4)?;
         let playlist = &s
+            .models
             .library
             .playlists
             .first()
             .ok_or_else(|| eyre!("歌单在"))?
             .data;
         let tracks = s
+            .models
             .library
             .tracks
             .get(&playlist.id)

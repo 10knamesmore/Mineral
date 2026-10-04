@@ -62,6 +62,7 @@ impl SearchTest {
         let SearchPayload::Songs(songs) = &self
             .app
             .state
+            .ui
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("缺少结果桶"))?
@@ -172,7 +173,11 @@ fn failed_page_retries_without_advancing_or_clearing_other_requests() -> color_e
         test.press(KeyCode::Char('j'));
         assert_eq!(test.requested_pages()?, vec![second]);
     }
-    test.app.state.channel_search.select_kind(SearchKind::Album);
+    test.app
+        .state
+        .ui
+        .channel_search
+        .select_kind(SearchKind::Album);
     let failure = TaskEvent::SearchPageFailed {
         source: SourceKind::NETEASE,
         kind: SearchKind::Song,
@@ -180,7 +185,11 @@ fn failed_page_retries_without_advancing_or_clearing_other_requests() -> color_e
         page: second,
     };
     test.app.state.apply(&failure);
-    test.app.state.channel_search.select_kind(SearchKind::Song);
+    test.app
+        .state
+        .ui
+        .channel_search
+        .select_kind(SearchKind::Song);
     test.assert_song_ids(limit)?;
     test.press(KeyCode::Char('G'));
     assert_eq!(test.requested_pages()?, vec![second, second]);
@@ -205,24 +214,39 @@ fn pending_page_survives_source_and_kind_switches() -> color_eyre::Result<()> {
     let caps = test
         .app
         .state
+        .models
         .caps
         .get(&SourceKind::NETEASE)
         .cloned()
         .ok_or_else(|| eyre!("缺少 caps"))?;
-    test.app.state.caps.insert(SourceKind::BILIBILI, caps);
-    test.app.state.channel_search.select_kind(SearchKind::Album);
     test.app
         .state
+        .models
+        .caps
+        .insert(SourceKind::BILIBILI, caps);
+    test.app
+        .state
+        .ui
         .channel_search
-        .switch_source(SourceKind::BILIBILI, &test.app.state.caps);
+        .select_kind(SearchKind::Album);
+    test.app
+        .state
+        .ui
+        .channel_search
+        .switch_source(SourceKind::BILIBILI, &test.app.state.models.caps);
     test.app.state.apply(&results(second, true));
-    assert!(test.app.state.channel_search.active_results().is_none());
+    assert!(test.app.state.ui.channel_search.active_results().is_none());
     test.app
         .state
+        .ui
         .channel_search
-        .switch_source(SourceKind::NETEASE, &test.app.state.caps);
-    assert!(test.app.state.channel_search.active_results().is_none());
-    test.app.state.channel_search.select_kind(SearchKind::Song);
+        .switch_source(SourceKind::NETEASE, &test.app.state.models.caps);
+    assert!(test.app.state.ui.channel_search.active_results().is_none());
+    test.app
+        .state
+        .ui
+        .channel_search
+        .select_kind(SearchKind::Song);
     test.assert_song_ids(2 * limit)?;
     test.press(KeyCode::Char('G'));
     assert_eq!(

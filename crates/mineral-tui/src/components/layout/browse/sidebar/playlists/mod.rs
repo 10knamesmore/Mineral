@@ -6,3 +6,5 @@ mod view;
 
 pub use state::PlaylistList;
 pub(crate) use view::{PlaylistInput, PlaylistView};
+
+mod input;

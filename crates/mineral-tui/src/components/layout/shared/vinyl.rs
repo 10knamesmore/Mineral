@@ -11,7 +11,7 @@ use ratatui::style::{Color, Style};
 
 use crate::render::theme::Theme;
 
-/// 待机唱片纹的旋转状态:相位计数 + 一圈总步数(挂 `AppState`,主循环每 tick 推进一步)。
+/// 待机唱片纹的旋转状态:相位计数 + 一圈总步数(由根界面持有，显式 tick 推进一步)。
 ///
 /// 一圈步数由配置 `animation.vinyl_rev_ms` 按主循环帧间隔折算,转一圈的真实时长与帧率解耦。
 pub struct VinylSpin {

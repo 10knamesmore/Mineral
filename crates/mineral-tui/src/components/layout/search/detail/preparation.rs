@@ -123,7 +123,9 @@ fn prepare_rows(
                 }
             }
             ArtistSection::Albums => {
-                albums = available.as_ref().map(|albums| albums.items());
+                albums = available
+                    .as_ref()
+                    .map(crate::runtime::state::ArtistAlbums::items);
             }
         },
         None => return,
@@ -135,7 +137,7 @@ fn prepare_rows(
         cols.widths()
     };
     let columns = marquee::resolve_column_rects(area, &widths, 2);
-    let total = albums.map_or(songs.len(), |albums| albums.len());
+    let total = albums.map_or(songs.len(), <[mineral_model::Album]>::len);
     let viewport = usize::from(area.height.saturating_sub(1));
     let offset = frame.list().offset(total, viewport);
     let visible = offset..offset.saturating_add(viewport).min(total);

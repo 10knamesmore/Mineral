@@ -17,43 +17,43 @@ pub(crate) fn tracks<'a>(state: &'a AppState, theme: &'a Theme) -> TrackView<'a>
     let playlist = state.opened_playlist();
     let input = TrackInput {
         playlist,
-        tracks: playlist.and_then(|playlist| state.library.tracks.get(&playlist.data.id)),
-        generation: state.library.tracks_generation,
-        playing: state.playback.track.as_ref().map(|song| &song.id),
+        tracks: playlist.and_then(|playlist| state.models.library.tracks.get(&playlist.data.id)),
+        generation: state.models.library.tracks_generation,
+        playing: state.models.playback.track.as_ref().map(|song| &song.id),
     };
-    state.browse.tracks.view(
+    state.ui.browse.tracks.view(
         input,
         FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
-        state.images.ready(),
+        state.resources.images.ready(),
     )
 }
 
 /// 借出歌单模型与加载状态。
 pub(crate) fn playlists<'a>(state: &'a AppState, theme: &'a Theme) -> PlaylistView<'a> {
-    state.browse.playlists.view(
+    state.ui.browse.playlists.view(
         PlaylistInput {
-            library: &state.library,
-            loading: state.tasks_snapshot.running > 0,
+            library: &state.models.library,
+            loading: state.models.tasks_snapshot.running > 0,
         },
         FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
-        state.images.ready(),
+        state.resources.images.ready(),
     )
 }
 
 /// 页面形变中的列表保留稳定视口目标。
 fn motion(state: &AppState) -> crate::runtime::scroll::list::ScrollMotion {
     use crate::runtime::scroll::list::ScrollMotion;
-    if state.browse.fullscreen.at_min()
-        && state.channel_search.active.at_min()
-        && (state.browse.view.at_min() || state.browse.view.at_max())
+    if state.ui.browse.fullscreen.at_min()
+        && state.ui.channel_search.active.at_min()
+        && (state.ui.browse.view.at_min() || state.ui.browse.view.at_max())
     {
         ScrollMotion::Advancing {
             scrolloff: state.scrolloff(),
@@ -70,34 +70,35 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
     let image_phase = thumbnail_phase(
         state.image_render_phase(),
         motion,
-        state.frame_now,
-        state.browse.nav.last_sel_change,
+        state.ui.frame_now,
+        state.ui.browse.nav.last_sel_change,
         std::time::Duration::from_millis(*state.cfg.tui().cover().debounce_ms()),
     );
     let mut cx = PrepareCx {
         frame: FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
-        images: ImageNeeds::new(state.images.ready()),
+        images: ImageNeeds::new(state.resources.images.ready()),
         motion,
         image_phase,
         advance,
     };
-    if !state.browse.view.at_max() {
-        state.browse.playlists.prepare(
+    if !state.ui.browse.view.at_max() {
+        state.ui.browse.playlists.prepare(
             area,
             PlaylistInput {
-                library: &state.library,
-                loading: state.tasks_snapshot.running > 0,
+                library: &state.models.library,
+                loading: state.models.tasks_snapshot.running > 0,
             },
             &mut cx,
         );
     }
-    if !state.browse.view.at_min() {
-        let playlist = state.browse.nav.opened_playlist.as_ref().and_then(|id| {
+    if !state.ui.browse.view.at_min() {
+        let playlist = state.ui.browse.nav.opened_playlist.as_ref().and_then(|id| {
             state
+                .models
                 .library
                 .playlists
                 .iter()
@@ -105,13 +106,14 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
         });
         let input = TrackInput {
             playlist,
-            tracks: playlist.and_then(|playlist| state.library.tracks.get(&playlist.data.id)),
-            generation: state.library.tracks_generation,
-            playing: state.playback.track.as_ref().map(|song| &song.id),
+            tracks: playlist
+                .and_then(|playlist| state.models.library.tracks.get(&playlist.data.id)),
+            generation: state.models.library.tracks_generation,
+            playing: state.models.playback.track.as_ref().map(|song| &song.id),
         };
-        state.browse.tracks.prepare(area, input, &mut cx);
+        state.ui.browse.tracks.prepare(area, input, &mut cx);
     }
-    state.images.reconcile(cx.images.finish());
+    state.resources.images.reconcile(cx.images.finish());
 }
 
 /// 浏览页组合：分别借入两个子列表视图。
@@ -134,7 +136,7 @@ pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> BrowseView<'a> 
     BrowseView {
         playlists: playlists(state, theme),
         tracks: tracks(state, theme),
-        switch: state.browse.view,
+        switch: state.ui.browse.view,
         sweep: *state.cfg.tui().animation().view_sweep(),
     }
 }

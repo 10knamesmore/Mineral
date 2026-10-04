@@ -28,10 +28,11 @@ impl AppState {
         // caps 先读，随后 session 借走 channel_search。仅首页建桶时设置默认分区；
         // 续页保留已操作的详情导航，新选中实体的默认分区由结果桶保存的能力初始化。
         let sections = self
+            .models
             .caps
             .get(&source)
             .map(|channel_caps| channel_caps.artist_sections().clone());
-        let Some(session) = self.channel_search.session_for_mut(source) else {
+        let Some(session) = self.ui.channel_search.session_for_mut(source) else {
             return;
         };
         if session.query() != query {
@@ -56,7 +57,7 @@ impl AppState {
         query: &str,
         page: Page,
     ) {
-        if let Some(session) = self.channel_search.session_for_mut(source)
+        if let Some(session) = self.ui.channel_search.session_for_mut(source)
             && session.query() == query
         {
             session.fail_page(kind, page);
@@ -65,7 +66,7 @@ impl AppState {
 
     /// 将艺人详情应用到所有会话中匹配的保留帧。
     pub(super) fn apply_artist_detail(&mut self, id: &ArtistId, artist: &Artist) {
-        for results in self.channel_search.retained_results_mut() {
+        for results in self.ui.channel_search.retained_results_mut() {
             results.fill_artist_detail(id, artist);
         }
     }
@@ -79,7 +80,7 @@ impl AppState {
         has_more: Option<bool>,
     ) {
         mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, loaded = albums.len(), ?has_more, "receive artist albums page");
-        for results in self.channel_search.retained_results_mut() {
+        for results in self.ui.channel_search.retained_results_mut() {
             results.fill_artist_albums(id, albums, page, has_more);
         }
     }
@@ -87,14 +88,14 @@ impl AppState {
     /// 释放匹配保留帧中的失败续页，下次近底导航重试原页。
     pub(super) fn apply_artist_albums_page_failed(&mut self, id: &ArtistId, page: Page) {
         mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, "artist albums page failed or cancelled");
-        for results in self.channel_search.retained_results_mut() {
+        for results in self.ui.channel_search.retained_results_mut() {
             results.fail_artist_albums_page(id, page);
         }
     }
 
     /// 将完整专辑应用到所有会话中匹配的保留帧和结果行。
     pub(super) fn apply_album_detail(&mut self, id: &AlbumId, album: &Album) {
-        for results in self.channel_search.retained_results_mut() {
+        for results in self.ui.channel_search.retained_results_mut() {
             results.fill_album_detail(id, album);
         }
     }
@@ -125,9 +126,9 @@ mod tests {
                 ]))
                 .build(),
         );
-        s.caps = caps;
-        s.channel_search.enter(&s.caps);
-        if let Some(session) = s.channel_search.current_mut() {
+        s.models.caps = caps;
+        s.ui.channel_search.enter(&s.models.caps);
+        if let Some(session) = s.ui.channel_search.current_mut() {
             session.set_query(query.to_owned());
         }
         Ok(s)
@@ -156,9 +157,9 @@ mod tests {
                 ]))
                 .build(),
         );
-        s.caps = caps;
-        s.channel_search.enter(&s.caps);
-        if let Some(session) = s.channel_search.current_mut() {
+        s.models.caps = caps;
+        s.ui.channel_search.enter(&s.models.caps);
+        if let Some(session) = s.ui.channel_search.current_mut() {
             session.set_query(query.to_owned());
             session.set_kind(kind);
         }
@@ -183,7 +184,7 @@ mod tests {
 
     /// 读取当前详情帧，缺帧时让测试明确失败。
     fn current_frame(s: &AppState) -> color_eyre::Result<&crate::runtime::state::DetailFrame> {
-        s.channel_search
+        s.ui.channel_search
             .active_results()
             .and_then(|results| results.detail.current())
             .ok_or_else(|| color_eyre::eyre::eyre!("应有详情帧"))
@@ -191,11 +192,11 @@ mod tests {
 
     /// 标记当前详情帧已发起预取，模拟等待回包时离开该帧。
     fn mark_detail_requested(s: &mut AppState) -> color_eyre::Result<()> {
-        let frame = s
-            .channel_search
-            .active_results_mut()
-            .and_then(|results| results.detail.current_mut())
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有详情帧"))?;
+        let frame =
+            s.ui.channel_search
+                .active_results_mut()
+                .and_then(|results| results.detail.current_mut())
+                .ok_or_else(|| color_eyre::eyre::eyre!("应有详情帧"))?;
         frame.mark_requested();
         Ok(())
     }
@@ -220,6 +221,7 @@ mod tests {
             });
             assert_eq!(current_frame(&state)?.section, ArtistSection::Hot);
             let results = state
+                .ui
                 .channel_search
                 .active_results_mut()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?;
@@ -241,12 +243,12 @@ mod tests {
             frame.cycle_section(8);
             frame.list_mut().place(6, 2);
             frame.nudge_description(3);
-            state.channel_search.tick();
-            state.channel_search.tick();
+            state.ui.channel_search.tick();
+            state.ui.channel_search.tick();
             assert_eq!(current_frame(&state)?.list().offset(8, 3), 4);
 
             if switch_kind {
-                state.channel_search.select_kind(SearchKind::Album);
+                state.ui.channel_search.select_kind(SearchKind::Album);
             }
             state.apply(&TaskEvent::SearchResults {
                 source: SourceKind::NETEASE,
@@ -257,9 +259,10 @@ mod tests {
                 has_more: Some(false),
             });
             if switch_kind {
-                state.channel_search.select_kind(SearchKind::Artist);
+                state.ui.channel_search.select_kind(SearchKind::Artist);
             }
             let results = state
+                .ui
                 .channel_search
                 .active_results()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?;
@@ -274,6 +277,7 @@ mod tests {
                 if album.id == album_fixture("album-6").id));
 
             state
+                .ui
                 .channel_search
                 .active_results_mut()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?
@@ -301,7 +305,7 @@ mod tests {
         use crate::runtime::state::{ArtistSection, EntityRef};
 
         let mut state = state_searching("q", SearchKind::Artist)?;
-        state.caps.insert(
+        state.models.caps.insert(
             SourceKind::BILIBILI,
             ChannelCaps::builder()
                 .searchable(vec![SearchKind::Artist])
@@ -310,9 +314,11 @@ mod tests {
                 .build(),
         );
         state
+            .ui
             .channel_search
-            .switch_source(SourceKind::BILIBILI, &state.caps);
+            .switch_source(SourceKind::BILIBILI, &state.models.caps);
         state
+            .ui
             .channel_search
             .current_mut()
             .ok_or_else(|| color_eyre::eyre::eyre!("缺少 Bilibili 搜索会话"))?
@@ -321,6 +327,7 @@ mod tests {
             if offset > 0 {
                 assert_eq!(
                     state
+                        .ui
                         .channel_search
                         .active_results_mut()
                         .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?
@@ -343,6 +350,7 @@ mod tests {
                 has_more: Some(offset == 0),
             });
             let results = state
+                .ui
                 .channel_search
                 .active_results_mut()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?;
@@ -380,17 +388,18 @@ mod tests {
             mark_detail_requested(&mut s)?;
             if switch_source {
                 let caps = s
+                    .models
                     .caps
                     .get(&SourceKind::NETEASE)
                     .cloned()
                     .ok_or_else(|| color_eyre::eyre::eyre!("应有来源能力"))?;
-                s.caps.insert(SourceKind::BILIBILI, caps);
-                s.channel_search
-                    .switch_source(SourceKind::BILIBILI, &s.caps);
-                let session = s
-                    .channel_search
-                    .current_mut()
-                    .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?;
+                s.models.caps.insert(SourceKind::BILIBILI, caps);
+                s.ui.channel_search
+                    .switch_source(SourceKind::BILIBILI, &s.models.caps);
+                let session =
+                    s.ui.channel_search
+                        .current_mut()
+                        .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?;
                 session.set_query("q");
                 session.set_kind(SearchKind::Album);
                 // 原始 ID 相同但 namespace 不同，当前帧不能误收另一个来源的回包。
@@ -403,7 +412,7 @@ mod tests {
                     None,
                 );
             } else {
-                s.channel_search.select_kind(SearchKind::Artist);
+                s.ui.channel_search.select_kind(SearchKind::Artist);
             }
             let mut detailed = album;
             detailed.tracks =
@@ -417,13 +426,14 @@ mod tests {
                     current_frame(&s)?.data.is_none(),
                     "其他来源的同名 ID 不受影响"
                 );
-                s.channel_search.switch_source(SourceKind::NETEASE, &s.caps);
+                s.ui.channel_search
+                    .switch_source(SourceKind::NETEASE, &s.models.caps);
             } else {
                 assert!(
-                    s.channel_search.active_results().is_none(),
+                    s.ui.channel_search.active_results().is_none(),
                     "回包不创建当前 kind 的结果"
                 );
-                s.channel_search.select_kind(SearchKind::Album);
+                s.ui.channel_search.select_kind(SearchKind::Album);
             }
             match &current_frame(&s)?.data {
                 Some(DetailData::Album(received)) => assert_eq!(**received, detailed),
@@ -471,14 +481,14 @@ mod tests {
             };
             s.apply(first);
             if albums_first {
-                s.channel_search
+                s.ui.channel_search
                     .active_results_mut()
                     .ok_or_else(|| color_eyre::eyre::eyre!("应有结果"))?
                     .detail
                     .push(EntityRef::Album(Box::new(album.clone())), 1);
             } else {
-                s.channel_search.select_kind(SearchKind::Album);
-                s.channel_search
+                s.ui.channel_search.select_kind(SearchKind::Album);
+                s.ui.channel_search
                     .current_mut()
                     .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?
                     .apply_page(
@@ -495,14 +505,14 @@ mod tests {
             );
             if albums_first {
                 assert!(
-                    s.channel_search
+                    s.ui.channel_search
                         .active_results_mut()
                         .ok_or_else(|| color_eyre::eyre::eyre!("应有结果"))?
                         .detail
                         .pop(1)
                 );
             } else {
-                s.channel_search.select_kind(SearchKind::Artist);
+                s.ui.channel_search.select_kind(SearchKind::Artist);
             }
             match &current_frame(&s)?.data {
                 Some(DetailData::Artist {
@@ -537,7 +547,7 @@ mod tests {
             id: album.id.clone(),
             name: album.name.clone(),
         });
-        s.channel_search
+        s.ui.channel_search
             .current_mut()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?
             .apply_page(
@@ -557,14 +567,14 @@ mod tests {
             0,
             "首次到货定位到结果选中的歌曲"
         );
-        s.channel_search
+        s.ui.channel_search
             .active_results_mut()
             .and_then(|results| results.detail.current_mut())
             .ok_or_else(|| color_eyre::eyre::eyre!("应有详情帧"))?
             .list_mut()
             .place(2, 1);
-        s.channel_search.select_kind(SearchKind::Album);
-        s.channel_search
+        s.ui.channel_search.select_kind(SearchKind::Album);
+        s.ui.channel_search
             .current_mut()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?
             .apply_page(
@@ -579,7 +589,7 @@ mod tests {
             id: album.id.clone(),
             album: Box::new(album.clone()),
         });
-        s.channel_search.select_kind(SearchKind::Song);
+        s.ui.channel_search.select_kind(SearchKind::Song);
         let frame = current_frame(&s)?;
         assert_eq!(frame.list().sel(), 2, "保留用户选中的另一首歌曲");
         assert_eq!(frame.list().scroll_target(), 1, "保留原视口");
@@ -599,7 +609,7 @@ mod tests {
 
         let mut s = state_searching("q", SearchKind::Artist)?;
         let artist = artist_fixture("ar1");
-        s.channel_search
+        s.ui.channel_search
             .current_mut()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?
             .apply_page(
@@ -614,20 +624,20 @@ mod tests {
             artist: Box::new(artist.clone()),
         };
         s.apply(&detail_event);
-        let results = s
-            .channel_search
-            .active_results_mut()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有结果桶"))?;
+        let results =
+            s.ui.channel_search
+                .active_results_mut()
+                .ok_or_else(|| color_eyre::eyre::eyre!("应有结果桶"))?;
         results.set_sel(1);
         results.set_sel(0);
-        s.channel_search.select_kind(SearchKind::Album);
+        s.ui.channel_search.select_kind(SearchKind::Album);
         s.apply(&TaskEvent::ArtistAlbumsFetched {
             id: artist.id.clone(),
             page: Page::default(),
             albums: vec![album_fixture("al1")],
             has_more: None,
         });
-        s.channel_search.select_kind(SearchKind::Artist);
+        s.ui.channel_search.select_kind(SearchKind::Artist);
         assert!(
             matches!(
                 current_frame(&s)?.data,
@@ -683,7 +693,7 @@ mod tests {
             has_more: None,
         });
         mark_detail_requested(&mut s)?;
-        s.channel_search.select_kind(SearchKind::Song);
+        s.ui.channel_search.select_kind(SearchKind::Song);
         playlist.entries = PlaylistEntry::enumerate(crate::test_support::endserenading(2));
         s.apply(&TaskEvent::PlaylistDetailFetched {
             id: playlist.id.clone(),
@@ -693,13 +703,14 @@ mod tests {
             )),
         });
         assert_eq!(
-            s.library
+            s.models
+                .library
                 .tracks
                 .get(&playlist.id)
                 .map(|tracks| tracks.len()),
             Some(2)
         );
-        s.channel_search.select_kind(SearchKind::Playlist);
+        s.ui.channel_search.select_kind(SearchKind::Playlist);
         match &current_frame(&s)?.data {
             Some(DetailData::PlaylistEntries(entries)) => assert_eq!(*entries, playlist.entries),
             _ => color_eyre::eyre::bail!("切回歌单后应有曲目"),
@@ -715,20 +726,20 @@ mod tests {
 
         for insert in [false, true] {
             let mut s = state_in_search("hello")?;
-            s.channel_search.mark_loading(SearchKind::Song);
-            s.channel_search.mark_loading(SearchKind::Album);
-            assert!(s.channel_search.current_loading());
-            let session = s
-                .channel_search
-                .current_mut()
-                .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?;
+            s.ui.channel_search.mark_loading(SearchKind::Song);
+            s.ui.channel_search.mark_loading(SearchKind::Album);
+            assert!(s.ui.channel_search.current_loading());
+            let session =
+                s.ui.channel_search
+                    .current_mut()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?;
             if insert {
                 session.push_query_char('x');
             } else {
                 assert!(session.pop_query_char());
             }
             assert!(
-                !s.channel_search.current_loading(),
+                !s.ui.channel_search.current_loading(),
                 "编辑未提交的词不显示 searching"
             );
             s.apply(&TaskEvent::SearchResults {
@@ -740,19 +751,22 @@ mod tests {
                 has_more: None,
             });
             for kind in [SearchKind::Song, SearchKind::Album] {
-                s.channel_search.select_kind(kind);
+                s.ui.channel_search.select_kind(kind);
                 assert!(
-                    !s.channel_search.current_loading(),
+                    !s.ui.channel_search.current_loading(),
                     "所有 kind 的旧 loading 都失效"
                 );
                 assert!(
-                    s.channel_search.active_results().is_none(),
+                    s.ui.channel_search.active_results().is_none(),
                     "未提交的词没有结果桶"
                 );
             }
-            s.channel_search.select_kind(SearchKind::Song);
-            s.channel_search.mark_loading(SearchKind::Song);
-            assert!(s.channel_search.current_loading(), "重新提交后恢复加载状态");
+            s.ui.channel_search.select_kind(SearchKind::Song);
+            s.ui.channel_search.mark_loading(SearchKind::Song);
+            assert!(
+                s.ui.channel_search.current_loading(),
+                "重新提交后恢复加载状态"
+            );
         }
         Ok(())
     }
@@ -785,10 +799,10 @@ mod tests {
                     .build(),
             ),
         });
-        let kr = s
-            .channel_search
-            .active_results()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有结果桶"))?;
+        let kr =
+            s.ui.channel_search
+                .active_results()
+                .ok_or_else(|| color_eyre::eyre::eyre!("应有结果桶"))?;
         let frame = kr
             .detail
             .current()

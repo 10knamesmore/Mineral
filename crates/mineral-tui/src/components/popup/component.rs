@@ -92,7 +92,7 @@ pub(crate) enum OverlayResponse {
 /// 浮层产生、由 App 执行的意图。
 ///
 /// 浮层私有动作,**不并入** `runtime::action::Action`:以浮层私有光标为参数的意图
-/// (如 [`Self::PlayQueueIndex`])没法用「dispatch 时查 `AppState`」的范式表达。
+/// (如 [`Self::PlayQueueIndex`])没法用「dispatch 时读取模型」的范式表达。
 /// 与主 keymap 统一的是 dispatch 入口与动作概念,非枚举合一。
 #[derive(Clone)]
 pub(crate) enum OverlayAction {
@@ -111,14 +111,14 @@ pub(crate) enum OverlayAction {
     /// 关闭栈顶浮层(触发收起动画)。
     CloseTop,
 
-    /// 播放 queue 中第 `0` 项(下标);App 据此查 [`AppState`] 的队列取歌。
+    /// 播放 queue 中第 `0` 项(下标);应用据此查共享队列取歌。
     PlayQueueIndex(usize),
 
     /// queue 浮层 `y`:为队列第 `idx` 项弹复制菜单,贴 `anchor` 弹在 queue 浮层**之上**
     /// (不关 queue)。`anchor` 由浮层据自身停靠几何 + 私有光标算好——App 无从得知浮层
     /// 滚到哪一行,故锚点随动作携带。
     CopyQueueIndex {
-        /// 队列下标(浮层私有光标);App 据此查 [`AppState`] 队列取歌。
+        /// 队列下标(浮层私有光标);应用据此查共享队列取歌。
         idx: usize,
 
         /// 复制菜单锚点(队列选中行屏幕矩形)。
@@ -217,8 +217,8 @@ pub(crate) trait Overlay {
     ) {
     }
 
-    /// 处理一个按键,返回 [`OverlayResponse`]。`ctx` 只读后端态(如队列长度,用于
-    /// 钳制光标);浮层与 `AppState` 是 App 的平级字段,可同时借用。
+    /// 处理一个按键,返回 [`OverlayResponse`]。`ctx` 是组件声明的只读输入；
+    /// 事件处理只能修改该组件自身，跨领域操作作为响应交回应用。
     fn on_key(&mut self, key: &KeyEvent, ctx: &Self::Input<'_>) -> OverlayResponse;
 
     /// 处理一个已查表命中的全局 [`Action`]。返回 `None` 表示本浮层不认这个动作,

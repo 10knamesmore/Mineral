@@ -223,7 +223,7 @@ impl PlaylistFrame<'_> {
                 .map(|index| {
                     rows_data.get(index).and_then(|playlist| {
                         crate::image::collage::effective_cover_url(
-                            &view.input.library,
+                            view.input.library,
                             view.images,
                             &playlist.data,
                         )
@@ -248,14 +248,12 @@ fn frame_block(view: &PlaylistFrame<'_>, theme: &Theme, total: usize) -> Block<'
         theme,
     ));
 
-    let block = Block::new()
+    Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.surface1))
         .title(Line::from(title_spans))
-        .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)));
-
-    block
+        .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)))
 }
 
 /// 构造可见歌单的表格内容，不修改列表生命周期。

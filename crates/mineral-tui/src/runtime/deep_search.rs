@@ -335,7 +335,7 @@ mod tests {
     /// 把裸 Song 列表包成 PlaylistEntryView 塞进某歌单的 library.tracks 并 bump 版本。
     fn fill_tracks(s: &mut AppState, id: &PlaylistId, tracks: Vec<mineral_model::Song>) {
         let views = entry_views(tracks);
-        s.library.tracks.insert(
+        s.models.library.tracks.insert(
             id.clone(),
             crate::runtime::state::PlaylistTracks {
                 entries: views,
@@ -343,7 +343,7 @@ mod tests {
                 next_offset: None,
             },
         );
-        s.library.tracks_generation = s.library.tracks_generation.wrapping_add(1);
+        s.models.library.tracks_generation = s.models.library.tracks_generation.wrapping_add(1);
     }
 
     /// 标准夹具:[`state_with_playlists`] 的 p2 塞两首歌——
@@ -364,18 +364,18 @@ mod tests {
     #[test]
     fn song_name_hit_surfaces_playlist() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.browse.playlists.search.set_query("春日");
+        s.ui.browse.playlists.test_search_mut().set_query("春日");
         let names = s
             .filtered_playlists()
             .iter()
             .map(|p| p.data.name.clone())
             .collect::<Vec<String>>();
         assert_eq!(names, vec!["The Power of Failing".to_owned()], "仅 p2 命中");
-        let hit = s
-            .browse
-            .playlists
-            .deep_hit_for(&p2())
-            .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
+        let hit =
+            s.ui.browse
+                .playlists
+                .deep_hit_for(&p2())
+                .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
         assert_eq!(hit.name, "春日影");
         assert_eq!(hit.second.as_deref(), Some("CRYCHIC"));
         assert_eq!(hit.hit_field, HitField::Name);
@@ -389,13 +389,13 @@ mod tests {
     #[test]
     fn artist_hit_lands_in_second_segment() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.browse.playlists.search.set_query("mygo");
+        s.ui.browse.playlists.test_search_mut().set_query("mygo");
         let _ = s.filtered_playlists();
-        let hit = s
-            .browse
-            .playlists
-            .deep_hit_for(&p2())
-            .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
+        let hit =
+            s.ui.browse
+                .playlists
+                .deep_hit_for(&p2())
+                .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
         assert_eq!(hit.name, "迷星叫");
         assert_eq!(hit.second.as_deref(), Some("MyGO!!!!!"));
         assert_eq!(hit.hit_field, HitField::Second);
@@ -413,13 +413,13 @@ mod tests {
             "Mayoiuta",
         );
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.browse.playlists.search.set_query("mayo");
+        s.ui.browse.playlists.test_search_mut().set_query("mayo");
         let _ = s.filtered_playlists();
-        let hit = s
-            .browse
-            .playlists
-            .deep_hit_for(&p2())
-            .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有别名深度命中"))?;
+        let hit =
+            s.ui.browse
+                .playlists
+                .deep_hit_for(&p2())
+                .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有别名深度命中"))?;
         assert_eq!(hit.name, "迷星叫");
         assert_eq!(hit.alias.as_deref(), Some("Mayoiuta"));
         assert_eq!(hit.second.as_deref(), Some("MyGO!!!!!"), "次段回落首位艺人");
@@ -440,7 +440,7 @@ mod tests {
         let (cfg, warnings) = mineral_config::load(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");
         let mut s = AppState::test_with_config(Arc::new(cfg));
-        s.library.playlists = vec![playlist_view(
+        s.models.library.playlists = vec![playlist_view(
             "p2",
             "The Power of Failing",
             SourceKind::NETEASE,
@@ -448,12 +448,12 @@ mod tests {
         )];
         let t = with_alias(with_name(song("s2"), "迷星叫"), "Mayoiuta");
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.browse.playlists.search.set_query("mayo");
+        s.ui.browse.playlists.test_search_mut().set_query("mayo");
         assert!(
             s.filtered_playlists().is_empty(),
             "alias 权重 0:纯别名命中不应捞出歌单"
         );
-        assert!(s.browse.playlists.deep_hit_for(&p2()).is_none());
+        assert!(s.ui.browse.playlists.deep_hit_for(&p2()).is_none());
         Ok(())
     }
 
@@ -462,13 +462,13 @@ mod tests {
     #[test]
     fn extra_counts_additional_matched_songs() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.browse.playlists.search.set_query("迷");
+        s.ui.browse.playlists.test_search_mut().set_query("迷");
         let _ = s.filtered_playlists();
-        let hit = s
-            .browse
-            .playlists
-            .deep_hit_for(&p2())
-            .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
+        let hit =
+            s.ui.browse
+                .playlists
+                .deep_hit_for(&p2())
+                .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
         assert_eq!(hit.extra, 1, "除最佳外还有一首命中");
         Ok(())
     }
@@ -485,7 +485,7 @@ mod tests {
         let (cfg, warnings) = mineral_config::load(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");
         let mut s = AppState::test_with_config(Arc::new(cfg));
-        s.library.playlists = vec![playlist_view(
+        s.models.library.playlists = vec![playlist_view(
             "p2",
             "The Power of Failing",
             SourceKind::NETEASE,
@@ -493,12 +493,12 @@ mod tests {
         )];
         let t = with_artist(with_name(song("s2"), "迷星叫"), "MyGO!!!!!");
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.browse.playlists.search.set_query("mygo");
+        s.ui.browse.playlists.test_search_mut().set_query("mygo");
         assert!(
             s.filtered_playlists().is_empty(),
             "artist 权重 0:纯艺人命中不应捞出歌单"
         );
-        assert!(s.browse.playlists.deep_hit_for(&p2()).is_none());
+        assert!(s.ui.browse.playlists.deep_hit_for(&p2()).is_none());
         Ok(())
     }
 
@@ -506,14 +506,14 @@ mod tests {
     #[test]
     fn name_match_outranks_weighted_song_match() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
-        s.library.playlists = vec![
+        s.models.library.playlists = vec![
             // 故意把「歌内命中」的歌单放在前面,排序若不生效会按原序输出。
             playlist_view("inner", "other", SourceKind::NETEASE, 1),
             playlist_view("named", "春日影", SourceKind::NETEASE, 1),
         ];
         let inner_id = PlaylistId::new(SourceKind::NETEASE, "inner");
         fill_tracks(&mut s, &inner_id, vec![with_name(song("s1"), "春日影")]);
-        s.browse.playlists.search.set_query("春日影");
+        s.ui.browse.playlists.test_search_mut().set_query("春日影");
         let names = s
             .filtered_playlists()
             .iter()
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn new_tracks_invalidate_cache() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.browse.playlists.search.set_query("春日");
+        s.ui.browse.playlists.test_search_mut().set_query("春日");
         assert_eq!(s.filtered_playlists().len(), 1, "初始仅 p2 命中");
         // p1 的曲目此刻到达,内含同名命中曲。
         let p1 = PlaylistId::new(SourceKind::NETEASE, "p1");

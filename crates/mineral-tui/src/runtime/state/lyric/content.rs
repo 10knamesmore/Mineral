@@ -48,8 +48,8 @@ impl LyricExtra {
 impl AppState {
     /// 当前曲目的完整歌词集合;未拉到时返回 `None`。
     fn current_lyrics_set(&self) -> Option<&Lyrics> {
-        let song = self.playback.track.as_ref()?;
-        self.library.lyrics.get(&song.id)
+        let song = self.models.playback.track.as_ref()?;
+        self.models.library.lyrics.get(&song.id)
     }
 
     /// 当前曲目的歌词行序列(行级 / 逐字 / 有时间 / 无时间混排,翻译 / 罗马音已内嵌在
@@ -62,18 +62,19 @@ impl AppState {
     /// `None`——与歌词面板同口径,不显示错行;无同步 / 无当前行同样 `None`。
     /// 逐字行文本按需拼接故返回拥有串。
     pub(crate) fn active_title_lyric(&self) -> Option<String> {
-        if self.playback.sync_trust() == crate::runtime::playback::SyncTrust::Broken {
+        if self.models.playback.sync_trust() == crate::runtime::playback::SyncTrust::Broken {
             return None;
         }
         let lines = self.current_lines()?;
-        let idx = mineral_model::current_line(lines, self.playback.position_ms)?;
+        let idx = mineral_model::current_line(lines, self.models.playback.position_ms)?;
         lines.get(idx).map(|line| line.kind.text().into_owned())
     }
 
     /// 把副歌词切换意图交给当前歌词面板。
     pub fn cycle_lyric_extra(&mut self) {
-        let input = crate::view::lyrics::input(&self.playback, &self.library);
-        self.browse
+        let input = crate::view::lyrics::input(&self.models.playback, &self.models.library);
+        self.ui
+            .browse
             .lyrics
             .cycle_extra(input, self.cfg.tui().animation());
     }

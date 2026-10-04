@@ -88,14 +88,14 @@ pub(crate) fn entry_views(songs: Vec<Song>) -> Vec<PlaylistEntryView> {
 pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
     let pid = PlaylistId::new(SourceKind::MINERAL, "favorites");
-    s.library.playlists = vec![playlist_view(
+    s.models.library.playlists = vec![playlist_view(
         "favorites",
         "Favorites",
         SourceKind::MINERAL,
         3,
     )];
-    s.browse.nav.opened_playlist = Some(pid.clone());
-    s.browse.view.switch_to(View::Library);
+    s.ui.browse.nav.opened_playlist = Some(pid.clone());
+    s.ui.browse.view.switch_to(View::Library);
     let views = entry_views(mixed_source_songs())
         .into_iter()
         .map(|entry| PlaylistEntryView {
@@ -103,7 +103,7 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
             ..entry
         })
         .collect();
-    s.library.tracks.insert(
+    s.models.library.tracks.insert(
         pid,
         crate::runtime::state::PlaylistTracks {
             entries: views,
@@ -118,7 +118,7 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
 /// + 一个本地歌单。
 pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
-    s.library.playlists = vec![
+    s.models.library.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
@@ -130,8 +130,8 @@ pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
 /// 当前在播标记),view = Library,选中第 1 首。
 pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     let mut s = state_with_playlists()?;
-    s.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "p1"));
-    s.browse.view.switch_to(View::Library);
+    s.ui.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "p1"));
+    s.ui.browse.view.switch_to(View::Library);
     let tracks = endserenading(3);
     let plays = [1200_u32, 999, 88];
     let views = PlaylistEntry::enumerate(tracks.clone())
@@ -143,8 +143,8 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
             plays: plays.get(i).copied(),
         })
         .collect();
-    s.player.current = tracks.first().cloned();
-    s.library.tracks.insert(
+    s.models.player.current = tracks.first().cloned();
+    s.models.library.tracks.insert(
         PlaylistId::new(SourceKind::NETEASE, "p1"),
         crate::runtime::state::PlaylistTracks {
             entries: views,
@@ -152,7 +152,7 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
             next_offset: None,
         },
     );
-    s.browse.tracks.scroll.set_sel(1);
+    s.ui.browse.tracks.select(1);
     Ok(s)
 }
 
@@ -175,10 +175,10 @@ pub(crate) fn state_with_lyrics(
             }
         }
     }
-    s.library.lyrics.insert(track.id.clone(), lyrics);
-    s.playback.track = Some(track);
-    s.playback.position_ms = 62_000;
-    s.browse.lyrics.extra = extra;
+    s.models.library.lyrics.insert(track.id.clone(), lyrics);
+    s.models.playback.track = Some(track);
+    s.models.playback.position_ms = 62_000;
+    s.ui.browse.lyrics.extra = extra;
     Ok(s)
 }
 
@@ -188,9 +188,12 @@ pub(crate) fn state_with_lyrics(
 pub(crate) fn state_with_lrc_only() -> color_eyre::Result<AppState> {
     let mut s = AppState::test_default()?;
     let track = feiyu_song();
-    s.library.lyrics.insert(track.id.clone(), feiyu_lyrics());
-    s.playback.track = Some(track);
-    s.playback.position_ms = 165_000;
+    s.models
+        .library
+        .lyrics
+        .insert(track.id.clone(), feiyu_lyrics());
+    s.models.playback.track = Some(track);
+    s.models.playback.position_ms = 165_000;
     Ok(s)
 }
 
@@ -545,9 +548,9 @@ fn test_app_with(client: Arc<dyn Backend>) -> color_eyre::Result<App> {
 /// 把《EndSerenading》前 `len` 首灌进 queue,当前在播设为第 `current_idx` 首。
 fn fill_queue(app: &mut App, len: usize, current_idx: usize) {
     let queue = endserenading(len);
-    app.state.playback.track = queue.get(current_idx).cloned();
-    app.state.player.current = queue.get(current_idx).cloned();
-    app.state.player.queue = queue;
+    app.state.models.playback.track = queue.get(current_idx).cloned();
+    app.state.models.player.current = queue.get(current_idx).cloned();
+    app.state.models.player.queue = queue;
 }
 
 /// 造一个接 [`TestClient`] 且不启动图片 worker 的 [`App`]:queue 填《EndSerenading》前 `len` 首,
@@ -614,12 +617,12 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
         ..TestClient::default()
     };
     let mut app = test_app_with(Arc::new(client))?;
-    app.state.library.playlists = vec![
+    app.state.models.library.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
     ];
-    app.state.browse.view.switch_to(View::Playlists);
+    app.state.ui.browse.view.switch_to(View::Playlists);
     Ok((app, submitted))
 }
 
@@ -628,8 +631,8 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
 pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
     let mut app = test_app()?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-    app.state.browse.nav.opened_playlist = Some(pid.clone());
-    app.state.library.playlists = vec![PlaylistView {
+    app.state.ui.browse.nav.opened_playlist = Some(pid.clone());
+    app.state.models.library.playlists = vec![PlaylistView {
         data: Playlist::builder()
             .id(pid.clone())
             .name("EndSerenading".to_owned())
@@ -638,7 +641,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     }];
     let tracks = endserenading(len);
     let views = entry_views(tracks);
-    app.state.library.tracks.insert(
+    app.state.models.library.tracks.insert(
         pid,
         crate::runtime::state::PlaylistTracks {
             entries: views,
@@ -646,12 +649,12 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
             next_offset: None,
         },
     );
-    app.state.browse.view.switch_to(View::Library);
-    while !app.state.browse.view.at_max() {
-        app.state.browse.view.tick();
+    app.state.ui.browse.view.switch_to(View::Library);
+    while !app.state.ui.browse.view.at_max() {
+        app.state.ui.browse.view.tick();
     }
-    app.state.browse.playlists.scroll.set_sel(0);
-    app.state.browse.tracks.scroll.set_sel(sel_track);
+    app.state.ui.browse.playlists.select(0);
+    app.state.ui.browse.tracks.select(sel_track);
     Ok(app)
 }
 
@@ -671,6 +674,7 @@ pub(crate) fn app_in_search_morph(
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
     if let Some(sv) = app
         .state
+        .models
         .library
         .tracks
         .get_mut(&pid)
@@ -680,12 +684,13 @@ pub(crate) fn app_in_search_morph(
     }
     if cache_browse {
         app.state
+            .resources
             .images
             .cache
             .insert_test(&url_a, Arc::new(solid_cover(255, 0, 255)));
     }
     let url_b = MediaUrl::remote("https://x.y/detail-b.jpg")?;
-    app.state.caps.insert(
+    app.state.models.caps.insert(
         SourceKind::NETEASE,
         ChannelCaps::builder()
             .searchable(vec![SearchKind::Album])
@@ -693,8 +698,8 @@ pub(crate) fn app_in_search_morph(
             .artist_sections(mineral_channel_core::ArtistSections::new(vec![]))
             .build(),
     );
-    app.state.channel_search.enter(&app.state.caps);
-    if let Some(session) = app.state.channel_search.current_mut() {
+    app.state.ui.channel_search.enter(&app.state.models.caps);
+    if let Some(session) = app.state.ui.channel_search.current_mut() {
         session.set_query("q");
     }
     app.state.apply(&TaskEvent::SearchResults {
@@ -713,6 +718,7 @@ pub(crate) fn app_in_search_morph(
     });
     if cache_detail {
         app.state
+            .resources
             .images
             .cache
             .insert_test(&url_b, Arc::new(solid_cover(0, 255, 255)));
@@ -722,7 +728,7 @@ pub(crate) fn app_in_search_morph(
     for _ in 0..4 {
         active.tick();
     }
-    app.state.channel_search.active = active;
+    app.state.ui.channel_search.active = active;
     Ok(app)
 }
 
@@ -748,15 +754,15 @@ pub(crate) fn app_with_library_probed(
     };
     let mut app = test_app_with(Arc::new(client))?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-    app.state.browse.nav.opened_playlist = Some(pid.clone());
-    app.state.library.playlists = vec![playlist_view(
+    app.state.ui.browse.nav.opened_playlist = Some(pid.clone());
+    app.state.models.library.playlists = vec![playlist_view(
         "p1",
         "EndSerenading",
         SourceKind::NETEASE,
         u64::try_from(len).unwrap_or(0),
     )];
     let views = entry_views(endserenading(len));
-    app.state.library.tracks.insert(
+    app.state.models.library.tracks.insert(
         pid,
         crate::runtime::state::PlaylistTracks {
             entries: views,
@@ -764,11 +770,11 @@ pub(crate) fn app_with_library_probed(
             next_offset: None,
         },
     );
-    app.state.browse.view.switch_to(View::Library);
-    while !app.state.browse.view.at_max() {
-        app.state.browse.view.tick();
+    app.state.ui.browse.view.switch_to(View::Library);
+    while !app.state.ui.browse.view.at_max() {
+        app.state.ui.browse.view.tick();
     }
-    app.state.browse.tracks.scroll.set_sel(sel_track);
+    app.state.ui.browse.tracks.select(sel_track);
     Ok((app, queue_ops))
 }
 
@@ -785,7 +791,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
         })
         .collect();
     let views = entry_views(songs);
-    app.state.library.tracks.insert(
+    app.state.models.library.tracks.insert(
         pid,
         crate::runtime::state::PlaylistTracks {
             entries: views,
@@ -793,7 +799,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
             next_offset: None,
         },
     );
-    app.state.browse.tracks.scroll.set_sel(sel_track);
+    app.state.ui.browse.tracks.select(sel_track);
     Ok(app)
 }
 
@@ -819,18 +825,19 @@ pub(crate) fn app_in_fullscreen_seek_probe() -> color_eyre::Result<(App, Arc<Mut
 fn seed_fullscreen(mut app: App) -> App {
     let track = qianzai_song();
     app.state
+        .models
         .library
         .lyrics
         .insert(track.id.clone(), qianzai_lyrics());
-    app.state.playback.track = Some(track.clone());
-    app.state.playback.position_ms = 62_000;
-    app.state.player.current = Some(track);
-    app.state.player.queue = endserenading(3);
+    app.state.models.playback.track = Some(track.clone());
+    app.state.models.playback.position_ms = 62_000;
+    app.state.models.player.current = Some(track);
+    app.state.models.player.queue = endserenading(3);
     // 稳态全屏:一步推到满值(step=1000)。
     let mut fs = Toggle::new(1);
     fs.set(true);
     fs.tick();
-    app.state.browse.fullscreen = fs;
+    app.state.ui.browse.fullscreen = fs;
     app
 }
 
@@ -846,7 +853,7 @@ pub(crate) fn app_with_channel_search_probed(
         ..TestClient::default()
     };
     let mut app = test_app_with(Arc::new(client))?;
-    app.state.caps.insert(
+    app.state.models.caps.insert(
         SourceKind::NETEASE,
         ChannelCaps::builder()
             .searchable(searchable)
@@ -858,11 +865,11 @@ pub(crate) fn app_with_channel_search_probed(
             .build(),
     );
     // 真路径入会(挑默认源 + 建会话),再把 morph 推到稳态(step=1000 一步到位)。
-    app.state.channel_search.enter(&app.state.caps);
+    app.state.ui.channel_search.enter(&app.state.models.caps);
     let mut active = Toggle::new(1);
     active.set(true);
     active.tick();
-    app.state.channel_search.active = active;
+    app.state.ui.channel_search.active = active;
     Ok((app, submitted))
 }
 
@@ -877,7 +884,7 @@ pub(crate) fn app_with_channel_search_qprobed(
         ..TestClient::default()
     };
     let mut app = test_app_with(Arc::new(client))?;
-    app.state.caps.insert(
+    app.state.models.caps.insert(
         SourceKind::NETEASE,
         ChannelCaps::builder()
             .searchable(searchable)
@@ -888,11 +895,11 @@ pub(crate) fn app_with_channel_search_qprobed(
             ]))
             .build(),
     );
-    app.state.channel_search.enter(&app.state.caps);
+    app.state.ui.channel_search.enter(&app.state.models.caps);
     let mut active = Toggle::new(1);
     active.set(true);
     active.tick();
-    app.state.channel_search.active = active;
+    app.state.ui.channel_search.active = active;
     Ok((app, queue_ops))
 }
 

@@ -18,7 +18,7 @@ pub(crate) struct FrameEnv<'a> {
     pub(crate) now: Instant,
 }
 
-/// 列表在布局已知后更新自己的状态，并向资源管线声明需求。
+/// 组件在布局已知后更新自己的状态，并向资源管线声明需求。
 pub(crate) struct PrepareCx<'a> {
     /// 本次显示环境。
     pub(crate) frame: FrameEnv<'a>,

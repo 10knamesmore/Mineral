@@ -47,7 +47,7 @@ pub(crate) fn plan_fullscreen(
 /// 全屏端：无在播曲时采用待机唱片，有在播曲时等待其封面解码。
 fn fullscreen_end(full: &Areas, state: &AppState) -> Option<FlightEnd> {
     let area = full.cover?;
-    let Some(track) = state.playback.track.as_ref() else {
+    let Some(track) = state.models.playback.track.as_ref() else {
         return Some(FlightEnd {
             area,
             content: FlightContent::Vinyl,
@@ -68,7 +68,7 @@ fn browse_end(normal: &Areas, state: &AppState) -> Option<FlightEnd> {
 /// search 端:detail 面板头图区 + 栈顶帧实体封面(几何与面板绘制共享同一源)。
 fn detail_end(search: &Areas, state: &AppState) -> Option<FlightEnd> {
     let panel = search.right?;
-    let dframe = state.channel_search.active_results()?.detail.current()?;
+    let dframe = state.ui.channel_search.active_results()?.detail.current()?;
     let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
     let cover_area = detail::header_cover_area(panel, is_artist)?;
     resolve_end(cover_area, dframe.entity.cover().cloned()?, state)
@@ -77,6 +77,7 @@ fn detail_end(search: &Areas, state: &AppState) -> Option<FlightEnd> {
 /// 端就绪判定：有 URL 且图片已解码。
 fn resolve_end(area: Rect, url: MediaUrl, state: &AppState) -> Option<FlightEnd> {
     state
+        .resources
         .images
         .ready()
         .contains_decoded(&url)

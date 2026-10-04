@@ -25,6 +25,7 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
     let from = MediaUrl::remote("https://example.com/playlist.jpg")?;
     let to = MediaUrl::remote("https://example.com/selected-track.jpg")?;
     let playlist = state
+        .models
         .library
         .playlists
         .first_mut()
@@ -34,8 +35,8 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
     let playlist_id = playlist.data.id.clone();
     let mut selected = with_name(song("selected"), "Track detail");
     selected.cover_url = Some(to.clone());
-    state.browse.nav.opened_playlist = Some(playlist_id.clone());
-    state.library.tracks.insert(
+    state.ui.browse.nav.opened_playlist = Some(playlist_id.clone());
+    state.models.library.tracks.insert(
         playlist_id,
         crate::runtime::state::PlaylistTracks {
             entries: entry_views(vec![song("entry"), selected]),
@@ -43,16 +44,18 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
             next_offset: None,
         },
     );
-    state.browse.tracks.scroll.set_sel(1);
-    state.browse.view.retempo(4);
+    state.ui.browse.tracks.select(1);
+    state.ui.browse.view.retempo(4);
     if cache_playlist {
         state
+            .resources
             .images
             .cache
             .insert_test(&from, Arc::new(solid_cover(200, 0, 0)));
     }
     if cache_track {
         state
+            .resources
             .images
             .cache
             .insert_test(&to, Arc::new(solid_cover(0, 0, 200)));
@@ -80,17 +83,17 @@ fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
     let theme = default_theme()?;
     let from = cover_url(&state, View::Playlists)?;
     let to = cover_url(&state, View::Library)?;
-    state.browse.view.switch_to(View::Library);
-    state.browse.view.tick();
+    state.ui.browse.view.switch_to(View::Library);
+    state.ui.browse.view.tick();
     render(&mut state, &theme, false)?;
-    let pending = state.images.encode_pending.clone();
+    let pending = state.resources.images.encode_pending.clone();
     assert_eq!(pending.len(), 2, "只预热当前选中的两张图");
     assert!(pending.iter().any(|key| key.matches_url(&from)));
     assert!(pending.iter().any(|key| key.matches_url(&to)));
-    state.browse.view.tick();
+    state.ui.browse.view.tick();
     render(&mut state, &theme, false)?;
     assert_eq!(
-        state.images.encode_pending, pending,
+        state.resources.images.encode_pending, pending,
         "固定尺寸不重复提交编码"
     );
     Ok(())
@@ -101,14 +104,14 @@ fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
 fn cover_in_flight_suppresses_local_encode_requests() -> color_eyre::Result<()> {
     let mut state = state_with_covers(true, true)?;
     let theme = default_theme()?;
-    state.browse.view.switch_to(View::Library);
+    state.ui.browse.view.switch_to(View::Library);
     for _ in 0..=4 {
         render(&mut state, &theme, true)?;
         assert!(
-            state.images.encode_pending.is_empty(),
+            state.resources.images.encode_pending.is_empty(),
             "被接管的两端不应自画或预热"
         );
-        state.browse.view.tick();
+        state.ui.browse.view.tick();
     }
     Ok(())
 }

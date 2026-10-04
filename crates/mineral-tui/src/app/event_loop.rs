@@ -78,13 +78,13 @@ impl App {
                 None
             };
             let title_ctx = TitleContext {
-                song: self.state.player.current.as_ref(),
-                playing: self.state.playback.playing,
+                song: self.state.models.player.current.as_ref(),
+                playing: self.state.models.playback.playing,
                 connected: self.client.connected(),
-                position_ms: self.state.playback.position_ms,
-                duration_ms: self.state.playback.duration_ms(),
+                position_ms: self.state.models.playback.position_ms,
+                duration_ms: self.state.models.playback.duration_ms(),
                 lyric: title_lyric.as_deref(),
-                override_text: self.state.window_title_override.as_deref(),
+                override_text: self.state.models.window_title_override.as_deref(),
             };
             // 标题启用时确保标题栈已 push（幂等）——启动即启用由 lib.rs 兜住，热重载
             // 从禁用→启用则由此补上，保证退出能对称 pop 还原原标题。禁用时不 push。
@@ -97,7 +97,7 @@ impl App {
                 // 兜底默认值,跳过后端同步。fatal 态直接退出(不走 dispatch,不玩退出收缩动画)。
                 tui.draw(|f| {
                     draw(f, &self.frame_view());
-                    self.state.images.flush_graphics_commands()
+                    self.state.resources.images.flush_graphics_commands()
                 })?;
                 if event::poll(self.frame_tick())?
                     && let Event::Key(key) = event::read()?
@@ -112,7 +112,7 @@ impl App {
 
             tui.draw(|f| {
                 draw(f, &self.frame_view());
-                self.state.images.flush_graphics_commands()
+                self.state.resources.images.flush_graphics_commands()
             })?;
 
             let timeout = self.frame_tick().saturating_sub(self.last_tick.elapsed());
@@ -139,7 +139,7 @@ impl App {
                 self.client.flush_task_submissions();
                 self.notifications.tick();
                 // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。
-                self.state.now = chrono::Local::now();
+                self.state.ui.now = chrono::Local::now();
                 self.last_tick = Instant::now();
                 // 心跳间隔现读配置(daemon.heartbeat_secs),热更下一轮生效。
                 let heartbeat = Duration::from_secs(*self.state.cfg.daemon().heartbeat_secs());
@@ -156,14 +156,16 @@ impl App {
     fn tick_images(&mut self) {
         let current_cover = self
             .state
+            .models
             .playback
             .track
             .as_ref()
             .and_then(|track| track.cover_url.clone());
         // 当前曲的进入档位是 server 事实:切歌转场据此定向,`Prev` 之外都按下一首。
-        let advance = self.state.player.current_advance;
-        let fullscreen_stable = self.state.browse.fullscreen.at_max();
+        let advance = self.state.models.player.current_advance;
+        let fullscreen_stable = self.state.ui.browse.fullscreen.at_max();
         self.state
+            .resources
             .images
             .tick(current_cover, advance, fullscreen_stable);
         let queue_covers = self.overlays.queue_cover_candidates(&self.state);
@@ -187,8 +189,9 @@ impl App {
         let before = self.overlays.len();
         let closing_centered = self.overlays.any_leaving_centered();
         self.overlays.tick();
-        if self.state.browse.fullscreen.on() && closing_centered && self.overlays.len() < before {
-            self.state.images.terminal_images.clear();
+        if self.state.ui.browse.fullscreen.on() && closing_centered && self.overlays.len() < before
+        {
+            self.state.resources.images.terminal_images.clear();
         }
     }
 
@@ -217,22 +220,23 @@ impl App {
     fn log_heartbeat(&self) {
         let s = &self.state;
         let liked = s
+            .models
             .library
             .liked_ids
             .values()
             .fold(0_usize, |acc, set| acc + set.len());
         mineral_log::info!(
             target: "heartbeat",
-            view = ?s.browse.view,
-            playlists = s.library.playlists.len(),
-            tracks_cached = s.library.tracks.len(),
-            tracks_requested = s.library.tracks_requested.len(),
+            view = ?s.ui.browse.view,
+            playlists = s.models.library.playlists.len(),
+            tracks_cached = s.models.library.tracks.len(),
+            tracks_requested = s.models.library.tracks_requested.len(),
             tasks_pending = self.client.pending_task_count(),
-            lyrics_cached = s.library.lyrics.len(),
-            covers_cached = s.images.cache.len(),
-            covers_pending = s.images.loading_count(),
+            lyrics_cached = s.models.library.lyrics.len(),
+            covers_cached = s.resources.images.cache.len(),
+            covers_pending = s.resources.images.loading_count(),
             liked,
-            queue_len = s.player.queue.len(),
+            queue_len = s.models.player.queue.len(),
             events_dropped = self.client.events_dropped(),
             "client status"
         );
@@ -248,7 +252,7 @@ impl App {
         let snapshot = (
             rows,
             cols,
-            self.state.browse.fullscreen.on(),
+            self.state.ui.browse.fullscreen.on(),
             self.state.focused(),
         );
         if self.last_terminal_report == Some(snapshot) {
@@ -258,7 +262,7 @@ impl App {
         self.client.report_terminal_state(
             rows,
             cols,
-            self.state.browse.fullscreen.on(),
+            self.state.ui.browse.fullscreen.on(),
             self.state.focused(),
         );
     }
@@ -281,13 +285,16 @@ mod tests {
         use crate::test_support::app_in_fullscreen;
 
         let mut app = app_in_fullscreen()?;
-        assert!(app.state.browse.fullscreen.on(), "前置:已稳态进入全屏");
+        assert!(app.state.ui.browse.fullscreen.on(), "前置:已稳态进入全屏");
 
         // 模拟封面已渲染：塞一个终端图片缓存条目。
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        app.state.images.insert_test_terminal_image(&url, (10, 10));
+        app.state
+            .resources
+            .images
+            .insert_test_terminal_image(&url, (10, 10));
         assert!(
-            !app.state.images.terminal_images.is_empty(),
+            !app.state.resources.images.terminal_images.is_empty(),
             "前置:封面协议条目已就位"
         );
 
@@ -297,7 +304,7 @@ mod tests {
             app.tick_overlays();
         }
         assert!(
-            !app.state.images.terminal_images.is_empty(),
+            !app.state.resources.images.terminal_images.is_empty(),
             "浮层开着时(未出栈)不应清空封面协议"
         );
 
@@ -307,7 +314,7 @@ mod tests {
             app.tick_overlays();
         }
         assert!(
-            app.state.images.terminal_images.is_empty(),
+            app.state.resources.images.terminal_images.is_empty(),
             "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
         );
         Ok(())
@@ -324,7 +331,10 @@ mod tests {
         let mut app = app_in_fullscreen()?;
 
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        app.state.images.insert_test_terminal_image(&url, (10, 10));
+        app.state
+            .resources
+            .images
+            .insert_test_terminal_image(&url, (10, 10));
 
         // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
         app.overlays.push(super::AppOverlay::queue(/*sel*/ 0));
@@ -337,7 +347,7 @@ mod tests {
         }
 
         assert!(
-            !app.state.images.terminal_images.is_empty(),
+            !app.state.resources.images.terminal_images.is_empty(),
             "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
         );
         Ok(())

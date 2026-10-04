@@ -633,31 +633,31 @@ mod tests {
         for _ in 0..40 {
             draw_lib(&mut t, &mut app.state)?;
         }
-        let before = app.state.browse.tracks.scroll.scroll_target();
+        let before = app.state.ui.browse.tracks.scroll.scroll_target();
         assert!(before > 0, "前置:视口已滚到深处");
 
         // 进入 morph(fullscreen 离开 at_min),面板高度逐帧收缩地渲染。
         let mut fs = Toggle::new(8);
         fs.set(true);
         fs.tick();
-        app.state.browse.fullscreen = fs;
+        app.state.ui.browse.fullscreen = fs;
         for h in (2..20_u16).rev() {
             let mut small = Terminal::new(TestBackend::new(60, h))?;
             draw_lib(&mut small, &mut app.state)?;
         }
         assert_eq!(
-            app.state.browse.tracks.scroll.scroll_target(),
+            app.state.ui.browse.tracks.scroll.scroll_target(),
             before,
             "morph 期间滚动目标不得被瞬态 viewport 改写"
         );
 
         // 回浏览态:渲染收敛后仍在原 offset(无重定目标 = 无平移)。
-        app.state.browse.fullscreen = Toggle::new(8);
+        app.state.ui.browse.fullscreen = Toggle::new(8);
         for _ in 0..10 {
             draw_lib(&mut t, &mut app.state)?;
         }
         assert_eq!(
-            app.state.browse.tracks.scroll.scroll_target(),
+            app.state.ui.browse.tracks.scroll.scroll_target(),
             before,
             "回浏览态视口首行应与进全屏前一致"
         );
@@ -680,7 +680,7 @@ mod tests {
             loved: false,
             plays: None,
         };
-        state.library.tracks.insert(
+        state.models.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p1"),
             crate::runtime::state::PlaylistTracks {
                 entries: vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
@@ -688,7 +688,7 @@ mod tests {
                 next_offset: None,
             },
         );
-        state.browse.tracks.search.set_query("ab");
+        state.ui.browse.tracks.search.set_query("ab");
         let indexes = state
             .filtered_tracks()
             .iter()
@@ -707,6 +707,7 @@ mod tests {
         let mut state = crate::test_support::state_with_tracks()?;
         // 把第 3 首换成真实的 迷星叫 / 别名 Mayoiuta;搜别名 "Mayoiuta"(英文名/艺人都不含)。
         if let Some(v) = state
+            .models
             .library
             .tracks
             .get_mut(&PlaylistId::new(SourceKind::NETEASE, "p1"))
@@ -714,7 +715,7 @@ mod tests {
         {
             v.data.song = mineral_test::aliased_song();
         }
-        state.browse.tracks.search.set_query("Mayoiuta");
+        state.ui.browse.tracks.search.set_query("Mayoiuta");
         let filtered = state.filtered_tracks();
         assert!(
             filtered

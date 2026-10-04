@@ -25,15 +25,15 @@ impl App {
             position = playback.position_ms(Instant::now());
         });
         anchor.position_ms = position;
-        self.state.playback.apply_audio_snapshot(anchor);
+        self.state.models.playback.apply_audio_snapshot(anchor);
 
         // 模式、光标和来源每帧读取;队列与当前曲重段按版本复制。
-        let known = self.state.player.versions;
+        let known = self.state.models.player.versions;
         let mut sync = None;
         self.client.with_player(&mut |player| {
-            self.state.playback.mode = player.play_mode();
-            self.state.playback.play_origin = player.play_origin();
-            self.state.player.cursor = player.cursor();
+            self.state.models.playback.mode = player.play_mode();
+            self.state.models.playback.play_origin = player.play_origin();
+            self.state.models.player.cursor = player.cursor();
 
             let versions = player.versions();
             if versions != known {
@@ -57,23 +57,24 @@ impl App {
         if let Some(sync) = sync {
             self.apply_player_sync(sync);
         }
-        self.state
-            .transport
-            .sync_mode(self.state.playback.mode, self.state.cfg.tui().animation());
+        self.state.ui.transport.sync_mode(
+            self.state.models.playback.mode,
+            self.state.cfg.tui().animation(),
+        );
 
         if let Some(tasks) = self.client.tasks() {
-            self.state.tasks_snapshot = tasks;
+            self.state.models.tasks_snapshot = tasks;
         }
         let summary = self.client.downloads_summary();
         self.download_notifier
             .feed(&mut self.notifications, &summary);
-        self.state.downloads_summary = summary;
+        self.state.models.downloads_summary = summary;
         self.sync_downloads_subscription();
 
-        if self.state.window_title_override.is_none()
+        if self.state.models.window_title_override.is_none()
             && let WindowTitleOverride::Set(text) = self.client.window_title_override()
         {
-            self.state.window_title_override = text;
+            self.state.models.window_title_override = text;
         }
     }
 
@@ -82,8 +83,9 @@ impl App {
         let open = self.overlays.has_downloads();
         if open == self.downloads_subscribed {
             if open && let Some(detail) = self.client.downloads_detail() {
-                self.state.downloads = detail.rows();
-                self.overlays.clamp_downloads(self.state.downloads.len());
+                self.state.models.downloads = detail.rows();
+                self.overlays
+                    .clamp_downloads(self.state.models.downloads.len());
             }
             return;
         }
@@ -92,7 +94,7 @@ impl App {
             self.client.subscribe(SubscriptionTopic::DownloadsDetail);
         } else {
             self.client.unsubscribe(SubscriptionTopic::DownloadsDetail);
-            self.state.downloads.clear();
+            self.state.models.downloads.clear();
         }
     }
 
@@ -136,7 +138,7 @@ impl App {
             }
             Completion::AudioOutputs(outcome) => {
                 if let Some(popup) = self.overlays.audio_settings_mut() {
-                    popup.apply_devices(outcome, &self.state.playback.output.as_deref());
+                    popup.apply_devices(outcome, &self.state.models.playback.output.as_deref());
                 }
             }
             Completion::AudioOutputSelected(outcome) => {
@@ -263,12 +265,12 @@ mod tests {
     #[test]
     fn backend_sync_refreshes_light_state_without_section_changes() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-        let queue_before = app.state.player.queue.clone();
-        let current_before = app.state.player.current.clone();
-        let versions_before = app.state.player.versions;
-        app.state.playback.mode = PlayMode::RepeatOne;
-        app.state.playback.play_origin = Some(PlaybackOrigin::Remote);
-        app.state.player.cursor = PlayCursor::InQueue(2);
+        let queue_before = app.state.models.player.queue.clone();
+        let current_before = app.state.models.player.current.clone();
+        let versions_before = app.state.models.player.versions;
+        app.state.models.playback.mode = PlayMode::RepeatOne;
+        app.state.models.playback.play_origin = Some(PlaybackOrigin::Remote);
+        app.state.models.player.cursor = PlayCursor::InQueue(2);
 
         // 测试后端的镜像是顺序播放,与 UI 持有相同的重段版本。
         app.client.with_player(&mut |player| {
@@ -277,13 +279,13 @@ mod tests {
         });
         app.sync_from_backend();
 
-        assert_eq!(app.state.playback.mode, PlayMode::Sequential);
-        assert_eq!(app.state.playback.play_origin, None);
-        assert_eq!(app.state.player.cursor, PlayCursor::InQueue(0));
-        assert_eq!(app.state.player.versions, versions_before);
-        assert_eq!(app.state.player.queue, queue_before);
-        assert_eq!(app.state.player.current, current_before);
-        assert_eq!(app.state.playback.track, current_before);
+        assert_eq!(app.state.models.playback.mode, PlayMode::Sequential);
+        assert_eq!(app.state.models.playback.play_origin, None);
+        assert_eq!(app.state.models.player.cursor, PlayCursor::InQueue(0));
+        assert_eq!(app.state.models.player.versions, versions_before);
+        assert_eq!(app.state.models.player.queue, queue_before);
+        assert_eq!(app.state.models.player.current, current_before);
+        assert_eq!(app.state.models.playback.track, current_before);
         Ok(())
     }
 }

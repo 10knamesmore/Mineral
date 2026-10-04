@@ -161,6 +161,19 @@ pub(crate) fn draw_description(
     }
 }
 
+/// 测量简介行数后限制滚动位置，供准备入口写回。
+pub(super) fn prepare_scroll(text: &str, area: Rect, scroll: u16) -> u16 {
+    if area.is_empty() || text.is_empty() {
+        return scroll;
+    }
+    let rows = wrap_description(text, area.width.saturating_sub(1).max(1));
+    clamp_scroll(
+        scroll,
+        u16::try_from(rows.len()).unwrap_or(u16::MAX),
+        area.height,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{clamp_scroll, wrap_description};
@@ -241,17 +254,4 @@ mod tests {
         assert_eq!(clamp_scroll(100, 30, 10), 20, "上界 total-viewport");
         assert_eq!(clamp_scroll(7, 30, 10), 7, "界内不动");
     }
-}
-
-/// 测量简介行数后限制滚动位置，供准备入口写回。
-pub(super) fn prepare_scroll(text: &str, area: Rect, scroll: u16) -> u16 {
-    if area.is_empty() || text.is_empty() {
-        return scroll;
-    }
-    let rows = wrap_description(text, area.width.saturating_sub(1).max(1));
-    clamp_scroll(
-        scroll,
-        u16::try_from(rows.len()).unwrap_or(u16::MAX),
-        area.height,
-    )
 }

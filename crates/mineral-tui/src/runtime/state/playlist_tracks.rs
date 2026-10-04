@@ -164,19 +164,23 @@ mod tests {
         let mut state = AppState::test_default()?;
         let id = PlaylistId::new(SourceKind::NETEASE, "p");
         state
+            .models
             .library
             .request_playlist(id.clone(), PlaylistLoad::Preview);
         assert!(
             state
+                .models
                 .library
                 .needs_playlist(&id, PlaylistLoad::Complete, false)
         );
         state
+            .models
             .library
             .request_playlist(id.clone(), PlaylistLoad::Complete);
         state.apply(&fetched(&id, PlaylistLoad::Complete, true, &["1", "2"])?);
         state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
         let tracks = state
+            .models
             .library
             .tracks
             .get(&id)
@@ -185,6 +189,7 @@ mod tests {
         assert_eq!(tracks.len(), 2, "晚到首批不能截短完整结果");
         assert!(
             !state
+                .models
                 .library
                 .needs_playlist(&id, PlaylistLoad::Complete, true)
         );
@@ -197,13 +202,13 @@ mod tests {
         let id = PlaylistId::new(SourceKind::NETEASE, "p");
         state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
         let second = PlaylistLoad::More { offset: 1 };
-        state.library.request_playlist(id.clone(), second);
+        state.models.library.request_playlist(id.clone(), second);
         state.apply(&fetched(&id, second, false, &["1", "2"])?);
         let third = PlaylistLoad::More { offset: 2 };
-        state.library.request_playlist(id.clone(), third);
+        state.models.library.request_playlist(id.clone(), third);
         state.apply(&fetched(&id, second, false, &["1", "2"])?);
         assert!(
-            !state.library.needs_playlist(&id, third, true),
+            !state.models.library.needs_playlist(&id, third, true),
             "晚到的上一页不能清掉下一页的在途状态"
         );
         state.apply(&fetched(&id, third, false, &["1", "2", "3"])?);
@@ -211,6 +216,7 @@ mod tests {
         state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
         assert_eq!(
             state
+                .models
                 .library
                 .tracks
                 .get(&id)
@@ -227,10 +233,12 @@ mod tests {
         state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
         assert!(
             state
+                .models
                 .library
                 .needs_playlist(&id, PlaylistLoad::Complete, false)
         );
         state
+            .models
             .library
             .request_playlist(id.clone(), PlaylistLoad::Complete);
         state.apply(&TaskEvent::PlaylistDetailFailed {
@@ -238,25 +246,32 @@ mod tests {
             load: PlaylistLoad::Complete,
         });
         assert_eq!(
-            state.library.tracks.get(&id).map(|tracks| tracks.len()),
+            state
+                .models
+                .library
+                .tracks
+                .get(&id)
+                .map(|tracks| tracks.len()),
             Some(1)
         );
-        assert!(!state.library.playlist_complete(&id));
+        assert!(!state.models.library.playlist_complete(&id));
         assert!(
             !state
+                .models
                 .library
                 .needs_playlist(&id, PlaylistLoad::Complete, false),
             "逐帧预取不能自动重试失败"
         );
         assert!(
             state
+                .models
                 .library
                 .needs_playlist(&id, PlaylistLoad::Complete, true),
             "显式操作可以重试"
         );
         state.apply(&fetched(&id, PlaylistLoad::Complete, true, &[])?);
         assert!(
-            state.library.playlist_complete(&id),
+            state.models.library.playlist_complete(&id),
             "空歌单也能确认加载完整"
         );
         Ok(())

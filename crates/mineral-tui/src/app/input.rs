@@ -32,8 +32,8 @@ impl App {
                 }
             }
             Event::Resize(..) => {
-                self.state.browse.invalidate_expansions();
-                self.state.images.refresh_cell_pixels();
+                self.state.ui.browse.invalidate_expansions();
+                self.state.resources.images.refresh_cell_pixels();
                 self.report_terminal_state();
             }
             Event::FocusGained => self.set_focus(/*focused*/ true),
@@ -44,13 +44,13 @@ impl App {
 
     /// focus 事件落地:起顶栏变灰淡入/淡出(`dim` 开 = 未聚焦)、上报 daemon。
     fn set_focus(&mut self, focused: bool) {
-        self.state.dim.set(!focused);
+        self.state.ui.dim.set(!focused);
         self.report_terminal_state();
     }
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
     fn handle_key(&mut self, key: &KeyEvent) {
-        self.state.browse.interrupt_expansions();
+        self.state.ui.browse.interrupt_expansions();
         // Ctrl-C 强制退出(skip 一切)。
         if matches!(
             (key.modifiers, key.code),
@@ -153,9 +153,9 @@ impl App {
             }
             Action::JumpToCurrent => {}
         }
-        self.state.transport.on_action(
+        self.state.ui.transport.on_action(
             action,
-            self.state.playback.mode,
+            self.state.models.playback.mode,
             self.state.cfg.tui().animation(),
             std::time::Instant::now(),
         );
@@ -178,15 +178,15 @@ impl App {
     /// 切换全屏播放态:翻转开关并驱动形变进退场(`eased_in_out`,可中途反向)。
     /// search 布局态下屏蔽(与 search 互斥,见 [`Self::open_search_view`])。
     fn toggle_fullscreen(&mut self) {
-        if self.state.channel_search.active.on() {
+        if self.state.ui.channel_search.active.on() {
             return;
         }
-        self.state.browse.fullscreen.toggle();
+        self.state.ui.browse.fullscreen.toggle();
         mineral_log::debug!(
             target: "tui",
-            fullscreen = self.state.browse.fullscreen.on(),
-            progress = self.state.browse.fullscreen.raw(),
-            idle_vinyl = self.state.playback.track.is_none(),
+            fullscreen = self.state.ui.browse.fullscreen.on(),
+            progress = self.state.ui.browse.fullscreen.raw(),
+            idle_vinyl = self.state.models.playback.track.is_none(),
             "fullscreen layout transition"
         );
         self.report_terminal_state();
@@ -195,20 +195,20 @@ impl App {
     /// 切换 Search 布局态:翻转开关驱动布局端点 morph 进退场。全屏态下屏蔽
     /// (两个全屏级布局态互斥,逻辑 `on` 同时只一个)。
     fn open_search_view(&mut self) {
-        if self.state.browse.fullscreen.on() {
+        if self.state.ui.browse.fullscreen.on() {
             return;
         }
-        let entering_from_browse = self.state.channel_search.active.at_min();
-        self.state.channel_search.active.toggle();
+        let entering_from_browse = self.state.ui.channel_search.active.at_min();
+        self.state.ui.channel_search.active.toggle();
         mineral_log::debug!(
             target: "tui",
-            search = self.state.channel_search.active.on(),
-            progress = self.state.channel_search.active.raw(),
+            search = self.state.ui.channel_search.active.on(),
+            progress = self.state.ui.channel_search.active.raw(),
             "search layout transition"
         );
         // 从浏览端点进入时建立会话；中途反向沿用搜索焦点与输入状态。
-        if self.state.channel_search.active.on() && entering_from_browse {
-            self.state.channel_search.enter(&self.state.caps);
+        if self.state.ui.channel_search.active.on() && entering_from_browse {
+            self.state.ui.channel_search.enter(&self.state.models.caps);
         }
     }
 
@@ -216,7 +216,7 @@ impl App {
     fn cycle_lyric_extra(&mut self) {
         self.state.cycle_lyric_extra();
         self.ui_prefs
-            .save_lyric_extra(self.state.browse.lyrics.extra);
+            .save_lyric_extra(self.state.ui.browse.lyrics.extra);
     }
 
     /// 执行浮层产生的意图(浮层自身不持有 App,按键产出意图回这里执行)。
@@ -241,7 +241,7 @@ impl App {
                 self.client.stop_download(id);
             }
             OverlayAction::PlayQueueIndex(i) => {
-                if let Some(song) = self.state.player.queue.get(i).cloned() {
+                if let Some(song) = self.state.models.player.queue.get(i).cloned() {
                     self.client.play_song(song);
                 }
             }
@@ -299,7 +299,7 @@ impl App {
         let fallback = self.state.queue_current_index().unwrap_or(0);
         let sel = self
             .queue_cursor_memo
-            .filter(|at| *at < self.state.player.queue.len())
+            .filter(|at| *at < self.state.models.player.queue.len())
             .unwrap_or(fallback);
         self.overlays.push(AppOverlay::queue(sel));
     }
@@ -358,21 +358,21 @@ mod tests {
         );
         app.apply_pushed_config(mineral_protocol::BusValue::from_json(config));
         press(&mut app, KeyCode::Char('t'));
-        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::None);
+        assert_eq!(app.state.ui.browse.lyrics.extra, LyricExtra::None);
 
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::Translation);
+        assert_eq!(app.state.ui.browse.lyrics.extra, LyricExtra::Translation);
 
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::Romanization);
+        assert_eq!(app.state.ui.browse.lyrics.extra, LyricExtra::Romanization);
 
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::Romanization);
+        assert_eq!(app.state.ui.browse.lyrics.extra, LyricExtra::Romanization);
 
         app.state = crate::test_support::state_with_lrc_only()?;
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::None);
+        assert_eq!(app.state.ui.browse.lyrics.extra, LyricExtra::None);
         Ok(())
     }
 
@@ -530,7 +530,7 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('G'));
         assert_eq!(
-            app.state.browse.tracks.scroll.sel(),
+            app.state.ui.browse.tracks.scroll().sel(),
             4,
             "导航键应被 help 吞掉,Library 光标不动"
         );
@@ -570,7 +570,7 @@ mod tests {
         press(&mut app, KeyCode::Char('y'));
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         assert_eq!(
-            app.state.browse.nav.track_pos.get(&pid).map(|p| p.index),
+            app.state.ui.browse.nav.track_pos.get(&pid).map(|p| p.index),
             Some(4),
             "退出转场起点应补记 Library 光标位置"
         );
@@ -620,20 +620,24 @@ mod tests {
         let (mut app, shutdowns) = {
             let (mut app, shutdowns) = app_with_queue_probed(3, /*current_idx*/ 0)?;
             app.state
+                .ui
                 .browse
                 .view
                 .switch_to(crate::runtime::state::View::Library);
             (app, shutdowns)
         };
         press(&mut app, KeyCode::Char('/'));
-        assert!(app.state.browse.active_search().typing, "前置:已进搜索态");
+        assert!(
+            app.state.ui.browse.active_search().typing,
+            "前置:已进搜索态"
+        );
 
         app.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Char('Q'),
             KeyModifiers::SHIFT,
         )));
         assert_eq!(
-            app.state.browse.active_search().query(),
+            app.state.ui.browse.active_search().query(),
             "Q",
             "大写 Q 应进搜索词"
         );
@@ -702,6 +706,7 @@ mod tests {
         // 初始 loved = false。
         assert!(
             !app.state
+                .models
                 .library
                 .liked_ids
                 .get(&SourceKind::NETEASE)
@@ -713,6 +718,7 @@ mod tests {
         press(&mut app, KeyCode::Char('f'));
         assert!(
             app.state
+                .models
                 .library
                 .liked_ids
                 .get(&SourceKind::NETEASE)
@@ -733,6 +739,7 @@ mod tests {
         press(&mut app, KeyCode::Char('f'));
         assert!(
             !app.state
+                .models
                 .library
                 .liked_ids
                 .get(&SourceKind::NETEASE)
@@ -767,14 +774,14 @@ mod tests {
             (KeyCode::Char('+'), 100, 100),
             (KeyCode::Char('-'), 0, 0),
         ] {
-            app.state.playback.volume_pct = base;
+            app.state.models.playback.volume_pct = base;
             press(&mut app, key);
             assert_eq!(
                 volumes.lock().ok().and_then(|sent| sent.last().copied()),
                 Some(expected),
                 "{key:?} 在 {base}% 上应发 {expected}%"
             );
-            assert_eq!(app.state.playback.volume_pct, base, "本地不乐观回写");
+            assert_eq!(app.state.models.playback.volume_pct, base, "本地不乐观回写");
         }
 
         Ok(())
@@ -784,16 +791,16 @@ mod tests {
     #[test]
     fn z_toggles_fullscreen() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-        assert!(!app.state.browse.fullscreen.on(), "初始非全屏");
+        assert!(!app.state.ui.browse.fullscreen.on(), "初始非全屏");
 
         press(&mut app, KeyCode::Char('z'));
         assert!(
-            app.state.browse.fullscreen.on(),
+            app.state.ui.browse.fullscreen.on(),
             "z 进全屏(开关 + 形变目标合一)"
         );
 
         press(&mut app, KeyCode::Char('z'));
-        assert!(!app.state.browse.fullscreen.on(), "再按 z 退全屏");
+        assert!(!app.state.ui.browse.fullscreen.on(), "再按 z 退全屏");
         Ok(())
     }
 
@@ -801,13 +808,19 @@ mod tests {
     #[test]
     fn s_opens_search_layout_esc_exits() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
-        assert!(!app.state.channel_search.active.on(), "初始非 search 布局");
+        assert!(
+            !app.state.ui.channel_search.active.on(),
+            "初始非 search 布局"
+        );
 
         press(&mut app, KeyCode::Char('s'));
-        assert!(app.state.channel_search.active.on(), "s 进 search 布局");
+        assert!(app.state.ui.channel_search.active.on(), "s 进 search 布局");
 
         press(&mut app, KeyCode::Esc);
-        assert!(!app.state.channel_search.active.on(), "Esc 退 search 布局");
+        assert!(
+            !app.state.ui.channel_search.active.on(),
+            "Esc 退 search 布局"
+        );
         Ok(())
     }
 
@@ -819,23 +832,26 @@ mod tests {
         for focus in [SearchFocus::Results, SearchFocus::Detail] {
             let (mut app, _) =
                 crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
-            app.state.channel_search.set_focus(focus);
-            app.state.channel_search.active.retempo(8);
+            app.state.ui.channel_search.set_focus(focus);
+            app.state.ui.channel_search.active.retempo(8);
             press(&mut app, KeyCode::Char('s'));
-            assert!(!app.state.channel_search.active.on(), "面板上的 s 启动退场");
-            for _ in 0..2 {
-                app.state.channel_search.active.tick();
-            }
-            let progress = app.state.channel_search.active.raw();
             assert!(
-                !app.state.channel_search.active.at_min(),
+                !app.state.ui.channel_search.active.on(),
+                "面板上的 s 启动退场"
+            );
+            for _ in 0..2 {
+                app.state.ui.channel_search.active.tick();
+            }
+            let progress = app.state.ui.channel_search.active.raw();
+            assert!(
+                !app.state.ui.channel_search.active.at_min(),
                 "前置：仍在退场途中"
             );
             press(&mut app, KeyCode::Char('s'));
-            assert!(app.state.channel_search.active.on(), "再次按 s 反向进入");
-            assert_eq!(app.state.channel_search.active.raw(), progress);
+            assert!(app.state.ui.channel_search.active.on(), "再次按 s 反向进入");
+            assert_eq!(app.state.ui.channel_search.active.raw(), progress);
             assert_eq!(
-                app.state.channel_search.focus, focus,
+                app.state.ui.channel_search.focus, focus,
                 "反向不能重置搜索焦点"
             );
         }
@@ -847,10 +863,10 @@ mod tests {
     fn fullscreen_blocks_open_search() -> color_eyre::Result<()> {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.browse.fullscreen.on(), "前置:已进全屏");
+        assert!(app.state.ui.browse.fullscreen.on(), "前置:已进全屏");
 
         press(&mut app, KeyCode::Char('s'));
-        assert!(!app.state.channel_search.active.on(), "全屏态 s 无效");
+        assert!(!app.state.ui.channel_search.active.on(), "全屏态 s 无效");
         Ok(())
     }
 
@@ -860,12 +876,12 @@ mod tests {
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
         press(&mut app, KeyCode::Char('s'));
         assert!(
-            app.state.channel_search.active.on(),
+            app.state.ui.channel_search.active.on(),
             "前置:已进 search 布局"
         );
 
         press(&mut app, KeyCode::Char('z'));
-        assert!(!app.state.browse.fullscreen.on(), "search 态 z 无效");
+        assert!(!app.state.ui.browse.fullscreen.on(), "search 态 z 无效");
         Ok(())
     }
 
@@ -879,6 +895,7 @@ mod tests {
         press(&mut app, KeyCode::Char('i'));
         let session = app
             .state
+            .ui
             .channel_search
             .current()
             .ok_or_else(|| eyre!("应有当前会话"))?;
@@ -898,6 +915,7 @@ mod tests {
         press(&mut app, KeyCode::Backspace);
         let session = app
             .state
+            .ui
             .channel_search
             .current()
             .ok_or_else(|| eyre!("应有当前会话"))?;
@@ -942,7 +960,7 @@ mod tests {
             "Enter 提交首页 Search 任务"
         );
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Results,
             "提交后焦点落结果列"
         );
@@ -980,6 +998,7 @@ mod tests {
         press(&mut app, KeyCode::Char('J'));
         let sel = app
             .state
+            .ui
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
@@ -997,6 +1016,7 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         let sel = app
             .state
+            .ui
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
@@ -1005,6 +1025,7 @@ mod tests {
         press(&mut app, KeyCode::Char('k'));
         let sel = app
             .state
+            .ui
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
@@ -1083,7 +1104,7 @@ mod tests {
         }
         press(&mut app, KeyCode::Tab);
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Results,
             "Tab 切到上次面板(默认 results)"
         );
@@ -1101,13 +1122,13 @@ mod tests {
         let mut app = app_with_results(4)?;
         press_ctrl(&mut app, KeyCode::Char('l'));
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Detail,
             "Ctrl+L drill 进 detail"
         );
         press_ctrl(&mut app, KeyCode::Char('h'));
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Results,
             "Ctrl+H 回 results"
         );
@@ -1124,7 +1145,7 @@ mod tests {
         let mut app = app_with_results(4)?;
         press_ctrl(&mut app, KeyCode::Char('l')); // results → detail（song 结果走 drill 进入）
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Detail,
             "前置:焦点在 detail"
         );
@@ -1132,6 +1153,7 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         let sel = app
             .state
+            .ui
             .channel_search
             .active_results()
             .ok_or_else(|| eyre!("应有结果桶"))?
@@ -1150,12 +1172,12 @@ mod tests {
         ])?;
         press(&mut app, KeyCode::Left);
         assert_eq!(
-            app.state.channel_search.prompt_seg(),
+            app.state.ui.channel_search.prompt_seg(),
             PromptSegment::Kind,
             "词首 left 跨到 kind chip"
         );
         assert!(
-            app.state.channel_search.seg_open(),
+            app.state.ui.channel_search.seg_open(),
             "focus 到 chip 即展开下拉"
         );
         Ok(())
@@ -1170,11 +1192,14 @@ mod tests {
         press(&mut app, KeyCode::Left); // query → kind chip
         press(&mut app, KeyCode::Left); // kind → source chip
         assert_eq!(
-            app.state.channel_search.prompt_seg(),
+            app.state.ui.channel_search.prompt_seg(),
             PromptSegment::Source,
             "kind chip 再 left 到 source chip"
         );
-        assert!(app.state.channel_search.seg_open(), "source chip 下拉展开");
+        assert!(
+            app.state.ui.channel_search.seg_open(),
+            "source chip 下拉展开"
+        );
         Ok(())
     }
 
@@ -1189,6 +1214,7 @@ mod tests {
         assert_eq!(app.overlays.len(), 0, "@/$ 不再弹菜单");
         let query = app
             .state
+            .ui
             .channel_search
             .current()
             .ok_or_else(|| eyre!("应有会话"))?
@@ -1254,7 +1280,7 @@ mod tests {
                 .songs(songs)
                 .build()
         };
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -1276,12 +1302,13 @@ mod tests {
             albums: vec![test_album("a1"), test_album("a2")],
             has_more: None,
         });
-        app.state.channel_search.set_focus(SearchFocus::Results);
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
         press(&mut app, KeyCode::Char('l')); // results → detail
-        assert_eq!(app.state.channel_search.focus, SearchFocus::Detail);
+        assert_eq!(app.state.ui.channel_search.focus, SearchFocus::Detail);
         press(&mut app, KeyCode::Char('[')); // Hot → Albums
         let section = app
             .state
+            .ui
             .channel_search
             .active_results()
             .and_then(|kr| kr.detail.current())
@@ -1290,6 +1317,7 @@ mod tests {
         press(&mut app, KeyCode::Char('l')); // activate 专辑 → 下钻
         assert_eq!(
             app.state
+                .ui
                 .channel_search
                 .active_results()
                 .map(|kr| kr.detail.depth()),
@@ -1299,6 +1327,7 @@ mod tests {
         press(&mut app, KeyCode::Esc); // 弹回 root
         assert_eq!(
             app.state
+                .ui
                 .channel_search
                 .active_results()
                 .map(|kr| kr.detail.depth()),
@@ -1319,7 +1348,7 @@ mod tests {
 
         let (mut app, _submitted) =
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Album])?;
-        if let Some(s) = app.state.channel_search.current_mut() {
+        if let Some(s) = app.state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         app.state.apply(&TaskEvent::SearchResults {
@@ -1342,11 +1371,12 @@ mod tests {
                     .build(),
             ),
         });
-        app.state.channel_search.set_focus(SearchFocus::Detail);
+        app.state.ui.channel_search.set_focus(SearchFocus::Detail);
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(
             app.state
+                .ui
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
@@ -1370,6 +1400,7 @@ mod tests {
         assert_eq!(app.overlays.len(), 0, "搜索框 q 不弹退出确认框");
         let query = app
             .state
+            .ui
             .channel_search
             .current()
             .ok_or_else(|| eyre!("应有会话"))?
@@ -1413,29 +1444,32 @@ mod tests {
         press_ctrl(&mut app, KeyCode::Char('l')); // results → detail（song 结果走 drill 进入）
         press(&mut app, KeyCode::Tab); // detail → prompt
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Prompt,
             "detail Tab 回 prompt"
         );
         press(&mut app, KeyCode::Tab); // prompt → 上次面板 = detail
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Detail,
             "Tab 回上次面板=detail(记住位置)"
         );
         press(&mut app, KeyCode::Esc); // detail → results(Esc 链退一级)
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Results,
             "detail Esc 退一级到 results(Esc 链)"
         );
         press(&mut app, KeyCode::Esc); // results → prompt
         assert_eq!(
-            app.state.channel_search.focus,
+            app.state.ui.channel_search.focus,
             SearchFocus::Prompt,
             "results Esc 回 prompt"
         );
-        assert!(app.state.channel_search.active.on(), "Esc 链不退出布局态");
+        assert!(
+            app.state.ui.channel_search.active.on(),
+            "Esc 链不退出布局态"
+        );
         Ok(())
     }
 
@@ -1467,10 +1501,10 @@ mod tests {
         ) -> color_eyre::Result<(App, Arc<TestClient>)> {
             let (mut app, _) = app_with_channel_search_probed(vec![kind])?;
             let browse = app_with_long_library(64, 22)?;
-            app.state.browse = browse.state.browse;
-            app.state.library = browse.state.library;
-            app.state.browse.active_search_mut().set_query("Track");
-            app.state.browse.tracks.scroll.place(22, 4);
+            app.state.ui.browse = browse.state.ui.browse;
+            app.state.models.library = browse.state.models.library;
+            app.state.ui.browse.active_search_mut().set_query("Track");
+            app.state.ui.browse.tracks.place(22, 4);
             let client = Arc::new(TestClient::default());
             app.client = client.clone();
             for c in "remote".chars() {
@@ -1496,15 +1530,16 @@ mod tests {
 
         /// 后台 Browse 保留视图、过滤输入、两个列表的位置和所有歌曲的喜欢态。
         fn assert_browse_unchanged(app: &App) {
-            assert_eq!(app.state.browse.view.current(), View::Library);
-            assert_eq!(app.state.browse.active_search().query(), "Track");
-            assert!(!app.state.browse.active_search().typing);
-            assert_eq!(app.state.browse.playlists.scroll.sel(), 0);
-            assert_eq!(app.state.browse.playlists.scroll.scroll_target(), 0);
-            assert_eq!(app.state.browse.tracks.scroll.sel(), 22);
-            assert_eq!(app.state.browse.tracks.scroll.scroll_target(), 18);
+            assert_eq!(app.state.ui.browse.view.current(), View::Library);
+            assert_eq!(app.state.ui.browse.active_search().query(), "Track");
+            assert!(!app.state.ui.browse.active_search().typing);
+            assert_eq!(app.state.ui.browse.playlists.scroll().sel(), 0);
+            assert_eq!(app.state.ui.browse.playlists.scroll().scroll_target(), 0);
+            assert_eq!(app.state.ui.browse.tracks.scroll().sel(), 22);
+            assert_eq!(app.state.ui.browse.tracks.scroll().scroll_target(), 18);
             assert!(
                 app.state
+                    .models
                     .library
                     .tracks
                     .values()
@@ -1584,7 +1619,7 @@ mod tests {
                 false,
             )?;
             press(&mut app, KeyCode::Enter);
-            assert_eq!(app.state.channel_search.focus, SearchFocus::Detail);
+            assert_eq!(app.state.ui.channel_search.focus, SearchFocus::Detail);
             press(&mut app, KeyCode::Char('f'));
             assert!(love_targets(&client)?.is_empty());
             assert_browse_unchanged(&app);
@@ -1636,6 +1671,7 @@ mod tests {
                 );
                 assert!(
                     app.state
+                        .models
                         .library
                         .liked_ids
                         .values()
@@ -1680,6 +1716,7 @@ mod tests {
             assert_eq!(love_targets(&client)?, vec![selected.id.clone()]);
 
             app.state
+                .ui
                 .channel_search
                 .active_results_mut()
                 .and_then(|results| results.detail.current_mut())
@@ -1708,6 +1745,7 @@ mod tests {
                 press_ctrl(&mut app, KeyCode::Char(key));
                 assert_eq!(
                     app.state
+                        .ui
                         .channel_search
                         .active_results()
                         .ok_or_else(|| eyre!("缺少结果"))?
@@ -1738,6 +1776,7 @@ mod tests {
             configure_scroll(&mut app)?;
             let results = app
                 .state
+                .ui
                 .channel_search
                 .active_results_mut()
                 .ok_or_else(|| eyre!("缺少结果"))?;
@@ -1746,6 +1785,7 @@ mod tests {
             press_ctrl(&mut app, KeyCode::Char('d'));
             let results = app
                 .state
+                .ui
                 .channel_search
                 .active_results()
                 .ok_or_else(|| eyre!("缺少结果"))?;
@@ -1770,6 +1810,7 @@ mod tests {
             }
             let results = app
                 .state
+                .ui
                 .channel_search
                 .active_results_mut()
                 .ok_or_else(|| eyre!("缺少结果"))?;
@@ -1777,6 +1818,7 @@ mod tests {
             press_ctrl(&mut app, KeyCode::Char('f'));
             let results = app
                 .state
+                .ui
                 .channel_search
                 .active_results()
                 .ok_or_else(|| eyre!("缺少结果"))?;
@@ -1832,6 +1874,7 @@ mod tests {
                 press_ctrl(&mut app, KeyCode::Char(key));
                 let results = app
                     .state
+                    .ui
                     .channel_search
                     .active_results()
                     .ok_or_else(|| eyre!("缺少结果"))?;
@@ -1860,21 +1903,23 @@ mod tests {
                     SearchPayload::Songs(search_songs(3)),
                     false,
                 )?;
-                app.state.channel_search.set_focus(SearchFocus::Prompt);
+                app.state.ui.channel_search.set_focus(SearchFocus::Prompt);
                 app.state
+                    .ui
                     .channel_search
                     .set_prompt_seg(PromptSegment::Kind, 0);
-                app.state.channel_search.set_focus(focus);
+                app.state.ui.channel_search.set_focus(focus);
                 press(&mut app, KeyCode::Char('/'));
-                assert_eq!(app.state.channel_search.focus, SearchFocus::Prompt);
+                assert_eq!(app.state.ui.channel_search.focus, SearchFocus::Prompt);
                 assert_eq!(
-                    app.state.channel_search.prompt_focus(),
+                    app.state.ui.channel_search.prompt_focus(),
                     Some(PromptSegment::Query)
                 );
-                assert!(!app.state.channel_search.seg_open());
-                assert!(app.state.channel_search.active.on());
+                assert!(!app.state.ui.channel_search.seg_open());
+                assert!(app.state.ui.channel_search.active.on());
                 assert_eq!(
                     app.state
+                        .ui
                         .channel_search
                         .current()
                         .ok_or_else(|| eyre!("缺少搜索会话"))?
@@ -1893,6 +1938,7 @@ mod tests {
                 press(&mut app, KeyCode::Char('!'));
                 assert_eq!(
                     app.state
+                        .ui
                         .channel_search
                         .current()
                         .ok_or_else(|| eyre!("缺少搜索会话"))?
@@ -1910,7 +1956,7 @@ mod tests {
     fn fullscreen_tab_still_opens_queue() -> color_eyre::Result<()> {
         let mut app = app_with_queue(4, /*current_idx*/ 1)?;
         press(&mut app, KeyCode::Char('z'));
-        assert!(app.state.browse.fullscreen.on());
+        assert!(app.state.ui.browse.fullscreen.on());
 
         press(&mut app, KeyCode::Tab);
         assert_eq!(

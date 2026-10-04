@@ -10,13 +10,13 @@ use mineral_model::PlaylistId;
 /// 随页面保留的歌单列表；共享数据由调用方借入。
 pub struct PlaylistList {
     /// 本列表的光标、视口与位置标记。
-    pub(crate) scroll: ScrollList,
+    pub(super) scroll: ScrollList,
 
     /// 本列表的查询与输入编辑状态。
-    pub(crate) search: SearchState,
+    pub(super) search: SearchState,
 
     /// 仅保留本列表清除筛选前的显示输入。
-    pub(crate) expansion: ListExpansionState<PlaylistId>,
+    pub(super) expansion: ListExpansionState<PlaylistId>,
 
     /// 瞬态几何下不合成筛选展开。
     pub(super) stable: bool,

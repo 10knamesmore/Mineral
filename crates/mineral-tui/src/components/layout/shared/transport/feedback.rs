@@ -421,7 +421,7 @@ impl CaptionWidth {
     }
 }
 
-/// 与播放栏同生命周期的反馈状态，由 AppState 持有，输入与 tick 显式更新。
+/// 与播放栏同生命周期的反馈状态，由根界面持有，输入与 tick 显式更新。
 /// 三个期限仅由对应动作刷新；后端重复同步、绘制、resize 和页面形变均不续期。
 #[derive(Clone, Debug)]
 pub(crate) struct TransportBar {

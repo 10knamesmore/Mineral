@@ -1,4 +1,4 @@
-//! Lyrics 面板:按 [`crate::runtime::state::AppState::current_lines`] 渲染当前行 + 邻近行,
+//! Lyrics 面板:按本次歌词输入渲染当前行和邻近行,
 //! 当前行高亮居中,上下各若干行 dim。无歌词时 fallback "♪ no lyrics"。
 //!
 //! 有字词时间轴时，按歌词提供的字词跟唱：状态变化触发颜色动画，
@@ -699,15 +699,14 @@ fn primary_base(
         dist.saturating_sub(1),
         denom,
     );
-    let base = theme.text_over(row_bg, alpha).unwrap_or_else(|| {
+    theme.text_over(row_bg, alpha).unwrap_or_else(|| {
         lerp_color(
             theme.surface1,
             theme.surface0,
             dist.saturating_sub(1),
             denom,
         )
-    });
-    base
+    })
 }
 
 /// 把一个视觉行渲成 [`Line`]:当前行高亮 / wipe,上一行交叉淡出,其余原文行按距中心 dim,

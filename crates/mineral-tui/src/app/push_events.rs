@@ -20,7 +20,7 @@ impl App {
                     self.apply_pushed_config(config);
                 }
                 mineral_protocol::Event::WindowTitleOverride { text } => {
-                    self.state.window_title_override = text;
+                    self.state.models.window_title_override = text;
                 }
                 mineral_protocol::Event::TrackFinished { song_id, reason } => {
                     self.state.apply_track_finished(&song_id, reason);

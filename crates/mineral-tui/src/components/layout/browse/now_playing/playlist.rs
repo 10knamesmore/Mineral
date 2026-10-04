@@ -117,7 +117,7 @@ mod tests {
         let url = MediaUrl::remote("https://x.y/entry.jpg")?;
         let mut entry = song("s0");
         entry.cover_url = Some(url.clone());
-        app.state.library.tracks.insert(
+        app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::PlaylistTracks {
                 entries: entry_views(vec![entry]),
@@ -125,20 +125,24 @@ mod tests {
                 next_offset: None,
             },
         );
-        app.state.browse.playlists.scroll.set_sel(0);
+        app.state.ui.browse.playlists.select(0);
         // 入口曲图入 cache——否则 prewarm 无操作(它只对已解码在缓存的图提前编码)。
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.images.cache.insert_test(&url, Arc::new(img));
+        app.state
+            .resources
+            .images
+            .cache
+            .insert_test(&url, Arc::new(img));
 
         assert!(
-            app.state.images.encode_pending.is_empty(),
+            app.state.resources.images.encode_pending.is_empty(),
             "前置:尚未准备,encode_pending 为空"
         );
-        app.state.images.begin_preparation();
+        app.state.resources.images.begin_preparation();
         crate::view::now_playing::prepare(Rect::new(0, 0, 40, 20), &mut app.state, false);
-        app.state.images.finish_preparation();
+        app.state.resources.images.finish_preparation();
 
-        let pending = app.state.images.encode_pending;
+        let pending = app.state.resources.images.encode_pending;
         assert!(
             pending.iter().any(|key| key.matches_url(&url)),
             "入口曲封面应被按封面区尺寸提前编码(encode_pending 应含其 URL)"

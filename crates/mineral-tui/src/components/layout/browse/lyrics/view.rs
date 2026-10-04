@@ -69,7 +69,10 @@ impl LyricsView<'_> {
 
     /// 本组件当前的手动滚动坐标。
     pub(super) fn manual_anchor(&self) -> Option<i64> {
-        self.panel.scroll.as_ref().map(|scroll| scroll.pos_milli())
+        self.panel
+            .scroll
+            .as_ref()
+            .map(super::glide::LyricGlide::pos_milli)
     }
 
     /// 手动滚动的目标原文行。

@@ -61,12 +61,18 @@ impl super::AppState {
     /// 锚点悬空(在播曲已被摘出队列但仍在响)时直接返回 `None` 且**不**回落身份匹配:
     /// 队列里若还留着同一首歌的另一份,回落会把那一行错点亮成「正在播」。
     pub fn queue_current_index(&self) -> Option<usize> {
-        let id = &self.playback.track.as_ref()?.id;
-        let sel = self.player.cursor.queue_index()?;
-        if self.player.queue.get(sel).is_some_and(|s| &s.id == id) {
+        let id = &self.models.playback.track.as_ref()?.id;
+        let sel = self.models.player.cursor.queue_index()?;
+        if self
+            .models
+            .player
+            .queue
+            .get(sel)
+            .is_some_and(|s| &s.id == id)
+        {
             return Some(sel);
         }
-        self.player.queue.iter().position(|s| &s.id == id)
+        self.models.player.queue.iter().position(|s| &s.id == id)
     }
 
     /// 在播曲前后各 `range` 首在 `queue` 中的下标,按播放模式的环回语义算——切歌落点
@@ -79,14 +85,14 @@ impl super::AppState {
     /// # Return:
     ///   邻居下标(前一 / 后一交替,去重);无在播曲 / 空队列返回空。
     pub fn queue_neighbor_indexes(&self, range: usize) -> Vec<usize> {
-        let len = self.player.queue.len();
+        let len = self.models.player.queue.len();
         let Some(pos) = self.queue_current_index() else {
             return Vec::new();
         };
         if range == 0 {
             return Vec::new();
         }
-        let wraps = self.playback.mode != mineral_protocol::PlayMode::Sequential;
+        let wraps = self.models.playback.mode != mineral_protocol::PlayMode::Sequential;
         let mut out = Vec::with_capacity(range.saturating_mul(2));
         for d in 1..=range {
             let neighbors = if wraps {
@@ -116,10 +122,10 @@ mod tests {
     fn queue_neighbor_indexes_follow_play_mode_wrap() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
         let queue = endserenading(5);
-        s.playback.track = queue.first().cloned();
-        s.player.queue = queue;
+        s.models.playback.track = queue.first().cloned();
+        s.models.player.queue = queue;
 
-        s.playback.mode = mineral_protocol::PlayMode::Shuffle;
+        s.models.playback.mode = mineral_protocol::PlayMode::Shuffle;
         assert_eq!(
             s.queue_neighbor_indexes(1),
             vec![4, 1],
@@ -127,14 +133,14 @@ mod tests {
         );
         assert_eq!(s.queue_neighbor_indexes(2), vec![4, 1, 3, 2]);
 
-        s.playback.mode = mineral_protocol::PlayMode::Sequential;
+        s.models.playback.mode = mineral_protocol::PlayMode::Sequential;
         assert_eq!(
             s.queue_neighbor_indexes(1),
             vec![1],
             "顺序模式队首没有上一首"
         );
 
-        s.playback.track = s.player.queue.get(4).cloned();
+        s.models.playback.track = s.models.player.queue.get(4).cloned();
         assert_eq!(
             s.queue_neighbor_indexes(1),
             vec![3],
@@ -148,11 +154,11 @@ mod tests {
     fn queue_current_index_finds_playing() -> color_eyre::Result<()> {
         let mut s = AppState::test_default()?;
         let queue = endserenading(5);
-        s.playback.track = queue.get(2).cloned();
-        s.player.queue = queue;
+        s.models.playback.track = queue.get(2).cloned();
+        s.models.player.queue = queue;
         assert_eq!(s.queue_current_index(), Some(2));
 
-        s.playback.track = None;
+        s.models.playback.track = None;
         assert_eq!(s.queue_current_index(), None);
         Ok(())
     }
@@ -163,14 +169,14 @@ mod tests {
     fn queue_current_index_prefers_anchor_over_identity() -> color_eyre::Result<()> {
         use mineral_test::song;
         let mut s = AppState::test_default()?;
-        s.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
-        s.playback.track = Some(song("a"));
-        s.player.cursor = mineral_protocol::PlayCursor::InQueue(2); // 第二个 a 正在播
+        s.models.player.queue = vec![song("a"), song("b"), song("a"), song("b")];
+        s.models.playback.track = Some(song("a"));
+        s.models.player.cursor = mineral_protocol::PlayCursor::InQueue(2); // 第二个 a 正在播
         assert_eq!(s.queue_current_index(), Some(2), "应采纳锚点,而非首个 a@0");
 
         // 锚点不指向在播歌(在播曲不在队列)→ 退回身份匹配,找不到返回 None。
-        s.playback.track = Some(song("z"));
-        s.player.cursor = mineral_protocol::PlayCursor::InQueue(2);
+        s.models.playback.track = Some(song("z"));
+        s.models.player.cursor = mineral_protocol::PlayCursor::InQueue(2);
         assert_eq!(s.queue_current_index(), None, "在播曲不在队列时仍返回 None");
         Ok(())
     }

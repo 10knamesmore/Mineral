@@ -31,7 +31,7 @@ impl ArtistAlbumsTest {
             SearchKind::Artist,
             SearchKind::Album,
         ])?;
-        app.state.caps.insert(
+        app.state.models.caps.insert(
             SourceKind::BILIBILI,
             ChannelCaps::builder()
                 .searchable(vec![SearchKind::Artist, SearchKind::Album])
@@ -40,9 +40,10 @@ impl ArtistAlbumsTest {
                 .build(),
         );
         app.state
+            .ui
             .channel_search
-            .switch_source(source, &app.state.caps);
-        app.state.channel_search.select_kind(SearchKind::Artist);
+            .switch_source(source, &app.state.models.caps);
+        app.state.ui.channel_search.select_kind(SearchKind::Artist);
         let artist_id = ArtistId::new(source, "artist");
         let mut test = Self {
             app,
@@ -65,7 +66,7 @@ impl ArtistAlbumsTest {
             has_more: Some(false),
         });
         test.press(KeyCode::Char('l'));
-        test.app.state.channel_search.last_sel_change = Instant::now()
+        test.app.state.ui.channel_search.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .ok_or_else(|| eyre!("无法设置驻留时间"))?;
         crate::runtime::prefetch::tick(&mut test.app.state, &*test.app.client, Vec::new());
@@ -127,6 +128,7 @@ impl ArtistAlbumsTest {
     fn frame(&self) -> color_eyre::Result<&DetailFrame> {
         self.app
             .state
+            .ui
             .channel_search
             .active_results()
             .and_then(|results| results.detail.current())
@@ -137,6 +139,7 @@ impl ArtistAlbumsTest {
     fn frame_mut(&mut self) -> color_eyre::Result<&mut DetailFrame> {
         self.app
             .state
+            .ui
             .channel_search
             .active_results_mut()
             .and_then(|results| results.detail.current_mut())
@@ -259,19 +262,26 @@ fn album_page_reaches_retained_parent_across_source_and_kind_switches() -> color
     let second = Page::new(limit, limit);
     test.press(KeyCode::Char('G'));
     test.press(KeyCode::Char('l'));
-    test.app.state.channel_search.select_kind(SearchKind::Album);
     test.app
         .state
+        .ui
         .channel_search
-        .switch_source(SourceKind::BILIBILI, &test.app.state.caps);
+        .select_kind(SearchKind::Album);
+    test.app
+        .state
+        .ui
+        .channel_search
+        .switch_source(SourceKind::BILIBILI, &test.app.state.models.caps);
     test.receive(second, limit, true);
-    assert!(test.app.state.channel_search.active_results().is_none());
+    assert!(test.app.state.ui.channel_search.active_results().is_none());
     test.app
         .state
+        .ui
         .channel_search
-        .switch_source(SourceKind::NETEASE, &test.app.state.caps);
+        .switch_source(SourceKind::NETEASE, &test.app.state.models.caps);
     test.app
         .state
+        .ui
         .channel_search
         .select_kind(SearchKind::Artist);
     assert!(matches!(&test.frame()?.entity, EntityRef::Album(_)));

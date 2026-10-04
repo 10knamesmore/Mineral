@@ -93,15 +93,15 @@ impl App {
     /// 根据当前尺寸准备一份可独立重复或省略绘制的显示状态。
     /// `advance` 只在逻辑时钟走过一拍时为真；输入、resize 和资源回填不额外推进动画。
     pub(crate) fn prepare_view(&mut self, area: Rect, now: Instant, advance: bool) {
-        self.state.frame_now = now;
-        self.state.frame_area = area;
-        self.state.images.begin_preparation();
+        self.state.ui.frame_now = now;
+        self.state.ui.frame_area = area;
+        self.state.resources.images.begin_preparation();
         let layout = self.state.cfg.tui().layout();
         let normal = compute(area, layout);
         let full = compute_fullscreen(area, layout);
         let search = compute_search(area, layout);
         let ambient_cfg = self.state.cfg.tui().ambient();
-        let field = (self.state.browse.ambient_reveal.active()
+        let field = (self.state.ui.browse.ambient_reveal.active()
             && (*ambient_cfg.enabled() || !self.ambient.settled_at_base()))
         .then(|| ambient::rgb_of(self.theme.base))
         .flatten()
@@ -111,7 +111,7 @@ impl App {
                 &self.ambient,
                 base,
                 ambient_cfg,
-                self.state.browse.ambient_reveal.progress(),
+                self.state.ui.browse.ambient_reveal.progress(),
                 self.ambient_pulse.level_permille(ambient_cfg.pulse()),
             )
         });
@@ -121,8 +121,8 @@ impl App {
                 field.color_at(rect.x + rect.width / 2, rect.y + rect.height / 2)
             })
         };
-        if !self.state.browse.fullscreen.at_min() {
-            if self.state.browse.fullscreen.at_max() {
+        if !self.state.ui.browse.fullscreen.at_min() {
+            if self.state.ui.browse.fullscreen.at_max() {
                 if let Some(cover) = full.cover {
                     prepare_fullscreen_cover(cover, full.cover, &mut self.state);
                 }
@@ -136,16 +136,17 @@ impl App {
                     );
                 }
                 if let Some(spectrum) = full.spectrum {
-                    spectrum::prepare(spectrum, &mut self.state.spectrum);
+                    spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
                 }
                 self.state
+                    .ui
                     .transport
-                    .prepare(full.transport, &self.state.playback, now);
+                    .prepare(full.transport, &self.state.models.playback, now);
             } else {
                 let current = transform::morph_areas(
                     &normal,
                     &full,
-                    self.state.browse.fullscreen.eased_in_out(),
+                    self.state.ui.browse.fullscreen.eased_in_out(),
                 );
                 let flight = crate::view::flight::plan_fullscreen(&normal, &full, &self.state);
                 crate::view::browse::prepare(normal.left, &mut self.state, &self.theme, advance);
@@ -153,9 +154,10 @@ impl App {
                     crate::view::now_playing::prepare(right, &mut self.state, flight.is_some());
                 }
                 if let Some(plan) = flight {
-                    let mut images = crate::image::ImageNeeds::new(self.state.images.ready());
+                    let mut images =
+                        crate::image::ImageNeeds::new(self.state.resources.images.ready());
                     flight::prepare(&plan, &mut images);
-                    self.state.images.reconcile(images.finish());
+                    self.state.resources.images.reconcile(images.finish());
                 } else if let Some(cover) = current.cover {
                     prepare_fullscreen_cover(cover, full.cover, &mut self.state);
                 }
@@ -178,14 +180,16 @@ impl App {
                     );
                 }
                 if let Some(spectrum) = current.spectrum {
-                    spectrum::prepare(spectrum, &mut self.state.spectrum);
+                    spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
                 }
-                self.state
-                    .transport
-                    .prepare(current.transport, &self.state.playback, now);
+                self.state.ui.transport.prepare(
+                    current.transport,
+                    &self.state.models.playback,
+                    now,
+                );
             }
-        } else if !self.state.channel_search.active.at_min() {
-            let moving = !self.state.channel_search.active.at_max();
+        } else if !self.state.ui.channel_search.active.at_min() {
+            let moving = !self.state.ui.channel_search.active.at_max();
             let flight = moving
                 .then(|| crate::view::flight::plan(&normal, &search, &self.state))
                 .flatten();
@@ -204,7 +208,7 @@ impl App {
                     );
                 }
                 if let Some(spectrum) = normal.spectrum {
-                    spectrum::prepare(spectrum, &mut self.state.spectrum);
+                    spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
                 }
             }
             crate::view::search::prepare(
@@ -216,18 +220,19 @@ impl App {
                 advance,
             );
             if let Some(plan) = flight {
-                let mut images = crate::image::ImageNeeds::new(self.state.images.ready());
+                let mut images = crate::image::ImageNeeds::new(self.state.resources.images.ready());
                 flight::prepare(&plan, &mut images);
-                self.state.images.reconcile(images.finish());
+                self.state.resources.images.reconcile(images.finish());
             }
             let current = transform::morph_search(
                 &normal,
                 &search,
-                self.state.channel_search.active.eased_in_out(),
+                self.state.ui.channel_search.active.eased_in_out(),
             );
             self.state
+                .ui
                 .transport
-                .prepare(current.transport, &self.state.playback, now);
+                .prepare(current.transport, &self.state.models.playback, now);
         } else {
             crate::view::browse::prepare(normal.left, &mut self.state, &self.theme, advance);
             if let Some(right) = normal.right {
@@ -243,29 +248,30 @@ impl App {
                 );
             }
             if let Some(spectrum) = normal.spectrum {
-                spectrum::prepare(spectrum, &mut self.state.spectrum);
+                spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
             }
             self.state
+                .ui
                 .transport
-                .prepare(normal.transport, &self.state.playback, now);
+                .prepare(normal.transport, &self.state.models.playback, now);
         }
         if self.transition.is_none() {
             self.overlays
                 .prepare_content(area, &mut self.state, &self.theme, advance);
         }
-        self.state.images.finish_preparation();
+        self.state.resources.images.finish_preparation();
     }
 
     /// 只借出绘制所需的状态；该借用存续期间不能更新应用。
     pub(crate) fn frame_view(&self) -> FrameView<'_> {
         let state = &self.state;
         let theme = &self.theme;
-        let normal = compute(state.frame_area, state.cfg.tui().layout());
+        let normal = compute(state.ui.frame_area, state.cfg.tui().layout());
         FrameView {
             env: crate::components::frame::FrameEnv {
                 config: &state.cfg,
                 theme,
-                now: state.frame_now,
+                now: state.ui.frame_now,
             },
             browse: super::browse::view(state, theme),
             selected: super::now_playing::view(state, theme),
@@ -274,23 +280,31 @@ impl App {
             detail: super::search::detail_view(state, theme),
             transport: super::transport::view(state, theme),
             status: super::status::input(state),
-            spectrum: &state.spectrum,
-            fullscreen: &state.browse.fullscreen,
-            ambient_reveal: &state.browse.ambient_reveal,
-            images: state.images.ready(),
-            playing: state.playback.track.as_ref(),
-            cover_transition: state.images.transition.as_ref(),
-            vinyl: &state.vinyl,
-            search_flight: super::flight::plan(
-                &normal,
-                &compute_search(state.frame_area, state.cfg.tui().layout()),
-                state,
-            ),
-            fullscreen_flight: super::flight::plan_fullscreen(
-                &normal,
-                &compute_fullscreen(state.frame_area, state.cfg.tui().layout()),
-                state,
-            ),
+            spectrum: &state.ui.spectrum,
+            fullscreen: &state.ui.browse.fullscreen,
+            ambient_reveal: &state.ui.browse.ambient_reveal,
+            images: state.resources.images.ready(),
+            playing: state.models.playback.track.as_ref(),
+            cover_transition: state.resources.images.transition.as_ref(),
+            vinyl: &state.ui.vinyl,
+            search_flight: (!state.ui.channel_search.active.settled())
+                .then(|| {
+                    super::flight::plan(
+                        &normal,
+                        &compute_search(state.ui.frame_area, state.cfg.tui().layout()),
+                        state,
+                    )
+                })
+                .flatten(),
+            fullscreen_flight: (!state.ui.browse.fullscreen.settled())
+                .then(|| {
+                    super::flight::plan_fullscreen(
+                        &normal,
+                        &compute_fullscreen(state.ui.frame_area, state.cfg.tui().layout()),
+                        state,
+                    )
+                })
+                .flatten(),
             overlay_inputs: crate::app::overlays::input::all(state),
             ambient: &self.ambient,
             ambient_pulse: &self.ambient_pulse,
@@ -306,18 +320,19 @@ impl App {
 /// 全屏封面准备：实际显示保活与稳定尺寸预热分别声明。
 fn prepare_fullscreen_cover(area: Rect, steady: Option<Rect>, state: &mut AppState) {
     let url = state
+        .models
         .playback
         .track
         .as_ref()
         .and_then(|track| track.cover_url.clone());
-    if state.browse.fullscreen.at_max() {
-        if let Some(active) = &state.images.transition {
+    if state.ui.browse.fullscreen.at_max() {
+        if let Some(active) = &state.resources.images.transition {
             let from = active.from_url.clone();
             let to = active.to_url.clone();
             let progress = active.anim.eased_in_out();
             let advance = active.advance;
             let style = crate::image::BlendStyle::from(*state.cfg.tui().cover_transition().style());
-            state.images.prepare_display(
+            state.resources.images.prepare_display(
                 ImageContent::Blend {
                     from: &from,
                     to: &to,
@@ -328,9 +343,9 @@ fn prepare_fullscreen_cover(area: Rect, steady: Option<Rect>, state: &mut AppSta
                 area,
                 ImageRenderPhase::Stable,
             );
-            state.images.prepare(&to, area);
+            state.resources.images.prepare(&to, area);
         } else {
-            state.images.prepare_display(
+            state.resources.images.prepare_display(
                 ImageContent::Display { url: url.as_ref() },
                 area,
                 ImageRenderPhase::Stable,
@@ -341,6 +356,7 @@ fn prepare_fullscreen_cover(area: Rect, steady: Option<Rect>, state: &mut AppSta
             .into_iter()
             .filter_map(|index| {
                 state
+                    .models
                     .player
                     .queue
                     .get(index)
@@ -348,18 +364,18 @@ fn prepare_fullscreen_cover(area: Rect, steady: Option<Rect>, state: &mut AppSta
             })
             .collect::<Vec<_>>();
         for url in urls {
-            state.images.prepare(&url, area);
+            state.resources.images.prepare(&url, area);
         }
     } else {
-        state.images.prepare_display(
+        state.resources.images.prepare_display(
             ImageContent::Display { url: url.as_ref() },
             area,
             ImageRenderPhase::Resizing,
         );
-        if state.browse.fullscreen.on()
+        if state.ui.browse.fullscreen.on()
             && let (Some(url), Some(steady)) = (&url, steady)
         {
-            state.images.prepare(url, steady);
+            state.resources.images.prepare(url, steady);
         }
     }
 }

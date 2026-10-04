@@ -15,8 +15,8 @@ use crate::runtime::action::Action;
 use crate::runtime::keymap::Keymap;
 
 /// Page 决策所需的只读跨页上下文(= React 的 props)。借用而非拥有,故 App 侧必须在调用点
-/// **就地构造**(写明 `&self.state.caps` 等字段路径),不能抽成 `self.page_ctx()` 方法——那会整借
-/// `self.state`、与 `&mut self.state.channel_search` 冲突。
+/// **就地构造**(写明 `&self.state.models.caps` 等字段路径),不能抽成 `self.page_ctx()` 方法——那会整借
+/// `self.state`、与 `&mut self.state.ui.channel_search` 冲突。
 #[derive(Clone, Copy)]
 pub(crate) struct SearchCtx<'a> {
     /// 各 source 能力声明(决定可搜 source / kind 列表)。
@@ -100,10 +100,10 @@ impl App {
             crate::render::anim::ticks16_from_ms(*anim.sweep_ms(), *anim.frame_tick_ms());
         // SearchCtx 就地构造:channel_search / caps / cfg 是 self.state 三个不相交字段,keymap 在
         // self 上,全 disjoint,借用检查器放行(故不能抽成取 ctx 的方法,那会整借 self.state)。
-        let eff = self.state.channel_search.on_key(
+        let eff = self.state.ui.channel_search.on_key(
             key,
             SearchCtx {
-                caps: &self.state.caps,
+                caps: &self.state.models.caps,
                 keymap: &self.keymap,
                 behavior: self.state.cfg.tui().behavior(),
                 sweep_ticks,
@@ -138,7 +138,7 @@ impl App {
                     Priority::User,
                 );
                 // 首页在飞：结果区显 searching spinner，到货（含 0 条）由 apply_page 清。
-                self.state.channel_search.mark_loading(kind);
+                self.state.ui.channel_search.mark_loading(kind);
             }
             SearchEffect::FetchMore {
                 source,

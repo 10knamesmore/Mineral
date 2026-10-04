@@ -13,14 +13,14 @@ use ratatui::layout::Rect;
 /// 结果和提示行只接收搜索组件本身及来源能力。
 pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> SearchView<'a> {
     SearchView {
-        page: &state.channel_search,
-        caps: &state.caps,
+        page: &state.ui.channel_search,
+        caps: &state.models.caps,
         frame: FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
-        dock_right: state.browse.fullscreen.on(),
+        dock_right: state.ui.browse.fullscreen.on(),
     }
 }
 
@@ -28,25 +28,26 @@ pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> SearchView<'a> 
 pub(crate) fn detail_view<'a>(state: &'a AppState, theme: &'a Theme) -> DetailView<'a> {
     DetailView {
         stack: state
+            .ui
             .channel_search
             .active_results()
             .map(|results| &results.detail),
         paint: DetailPaint {
-            liked: &state.library.liked_ids,
-            focus: state.channel_search.focus_permille(
+            liked: &state.models.library.liked_ids,
+            focus: state.ui.channel_search.focus_permille(
                 *state.cfg.tui().animation().search_focus_transition(),
                 SearchFocus::Detail,
             ),
             loading: spinner::glyph(
                 state.cfg.tui().animation().spinner_frames(),
-                state.channel_search.spinner_counter(),
+                state.ui.channel_search.spinner_counter(),
             ),
             frame: FrameEnv {
                 config: &state.cfg,
                 theme,
-                now: state.frame_now,
+                now: state.ui.frame_now,
             },
-            images: state.images.ready(),
+            images: state.resources.images.ready(),
             phase: state.image_render_phase(),
         },
     }
@@ -61,7 +62,7 @@ pub(super) fn prepare(
     cover_in_flight: bool,
     advance: bool,
 ) {
-    let motion = if state.channel_search.active.at_max() {
+    let motion = if state.ui.channel_search.active.at_max() {
         ScrollMotion::Advancing {
             scrolloff: state.scrolloff(),
             glide_ticks: state.list_glide_ticks(),
@@ -73,16 +74,21 @@ pub(super) fn prepare(
         frame: FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
-        images: ImageNeeds::new(state.images.ready()),
+        images: ImageNeeds::new(state.resources.images.ready()),
         motion,
         image_phase: state.image_render_phase(),
         advance,
     };
-    panel::prepare_results(left, &mut state.channel_search, &cx);
+    panel::prepare_results(left, &mut state.ui.channel_search, &cx);
     if let Some(right) = right {
-        detail::prepare(right, &mut state.channel_search, &mut cx, cover_in_flight);
+        detail::prepare(
+            right,
+            &mut state.ui.channel_search,
+            &mut cx,
+            cover_in_flight,
+        );
     }
-    state.images.reconcile(cx.images.finish());
+    state.resources.images.reconcile(cx.images.finish());
 }

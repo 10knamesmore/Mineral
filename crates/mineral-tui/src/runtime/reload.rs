@@ -29,7 +29,7 @@ impl crate::app::App {
         self.state.clear_local_play_counts();
         self.state.cfg = cfg;
         let cfg = Arc::clone(&self.state.cfg);
-        self.state.images.apply_config(Arc::clone(&cfg));
+        self.state.resources.images.apply_config(Arc::clone(&cfg));
         let tui_cfg = cfg.tui();
         let anim = tui_cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
@@ -48,10 +48,11 @@ impl crate::app::App {
             ));
         let accent_target = (*dynamic.enabled()).then(|| {
             self.state
+                .resources
                 .images
                 .spectrum_cover
                 .as_ref()
-                .and_then(|url| self.state.images.palettes.get(url))
+                .and_then(|url| self.state.resources.images.palettes.get(url))
                 .map(crate::image::colors::derive_accents)
         });
         self.accent_fade
@@ -64,19 +65,19 @@ impl crate::app::App {
             crate::render::anim::ticks32_from_ms(*tui_cfg.ambient().fade_ms(), tick_ms),
             tick_ms,
         );
-        let ambient_palette = self.state.images.current_palette.clone();
+        let ambient_palette = self.state.resources.images.current_palette.clone();
         self.feed_ambient(ambient_palette.as_ref());
         // 固化型(携带运行态):响度包络只重设时间基准,包络值 / 峰值跟踪保留不跳。
         self.ambient_pulse.retempo(tick_ms);
         // 固化型(携带运行态):在途的切歌封面转场 retempo 保相位(新转场现场折算,不在此列)。
-        if let Some(active) = self.state.images.transition.as_mut() {
+        if let Some(active) = self.state.resources.images.transition.as_mut() {
             active.anim.retempo(crate::render::anim::ticks16_from_ms(
                 *tui_cfg.cover_transition().duration_ms(),
                 tick_ms,
             ));
         }
-        // 固化型(带槽相位,整体重建 + 相位 reconciliation 在其内部):marquee / 唱片纹。
-        self.state.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
+        // 唱片旋转保留已有相位；各组件的标题滚动在采样时读取当前配置。
+        self.state.ui.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
             *anim.vinyl_rev_ms(),
             tick_ms,
         );
@@ -94,29 +95,36 @@ impl crate::app::App {
             *tui_cfg.toast().flash_ttl_secs(),
             crate::render::anim::ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
         );
-        self.state.browse.retempo(anim);
-        self.state.transport.retempo(anim);
-        self.state.channel_search.reconfigure(
+        self.state.ui.browse.retempo(anim);
+        self.state.ui.transport.retempo(anim);
+        self.state.ui.channel_search.reconfigure(
             crate::render::anim::ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
             crate::render::anim::ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
             crate::runtime::state::search_whitelist::SearchWhitelist::from(
                 tui_cfg.search().channel(),
             ),
         );
-        self.state.dim.retempo(crate::render::anim::ticks16_from_ms(
-            *anim.focus_fade_ms(),
-            tick_ms,
-        ));
+        self.state
+            .ui
+            .dim
+            .retempo(crate::render::anim::ticks16_from_ms(
+                *anim.focus_fade_ms(),
+                tick_ms,
+            ));
         // 固化型(携带运行态):在途的波形入场揭示 retempo 保相位,不重播动画。
         let reveal_ticks = self.state.waveform_reveal_ticks();
-        self.state.playback.retempo_envelope_reveal(reveal_ticks);
         self.state
+            .models
+            .playback
+            .retempo_envelope_reveal(reveal_ticks);
+        self.state
+            .ui
             .spectrum
             .reconfigure(tui_cfg.spectrum().clone(), tick_ms);
         // FFT 预计算贵且重建丢样本环缓冲(频谱空一两帧),参数没变不动。
         let params = crate::runtime::state::spectrum_params(tui_cfg.spectrum());
-        if self.state.fft.params() != &params {
-            self.state.fft = mineral_spectrum::SpectrumComputer::new(params);
+        if self.state.resources.fft.params() != &params {
+            self.state.resources.fft = mineral_spectrum::SpectrumComputer::new(params);
         }
     }
 
@@ -267,22 +275,22 @@ mod tests {
         for _ in 0..6 {
             app.state.tick_frame();
         }
-        let before = app.state.browse.lyrics.extra_press.strength();
+        let before = app.state.ui.browse.lyrics.extra_press.strength();
         assert!(before > 0 && before < 1000);
-        let mut old_speed = app.state.browse.lyrics.extra_press.clone();
+        let mut old_speed = app.state.ui.browse.lyrics.extra_press.clone();
         old_speed.tick();
         app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "animation": {
             "controls_press_ms": 4400, "frame_tick_ms": 32
         } } }))?);
-        assert_eq!(app.state.browse.lyrics.extra_press.strength(), before);
+        assert_eq!(app.state.ui.browse.lyrics.extra_press.strength(), before);
         app.state.tick_frame();
-        let after = app.state.browse.lyrics.extra_press.strength();
+        let after = app.state.ui.browse.lyrics.extra_press.strength();
         assert!(after < before);
         assert!(after > old_speed.strength());
         for _ in 0..160 {
             app.state.tick_frame();
         }
-        assert_eq!(app.state.browse.lyrics.extra_press.strength(), 0);
+        assert_eq!(app.state.ui.browse.lyrics.extra_press.strength(), 0);
         Ok(())
     }
 
@@ -300,63 +308,66 @@ mod tests {
         let ticks = crate::components::frame::FrameEnv {
             config: &app.state.cfg,
             theme: &app.theme,
-            now: app.state.frame_now,
+            now: app.state.ui.frame_now,
         }
         .cursor_ticks();
         app.state
+            .ui
             .browse
             .tracks
-            .scroll
+            .test_scroll_mut()
             .prepare(101, 10, motion, ticks, true);
-        app.state.browse.tracks.scroll.set_sel(100);
+        app.state.ui.browse.tracks.select(100);
         for _ in 0..3 {
             app.state
+                .ui
                 .browse
                 .tracks
-                .scroll
+                .test_scroll_mut()
                 .prepare(101, 10, motion, ticks, true);
         }
-        let before = app.state.browse.tracks.scroll.position(101);
+        let before = app.state.ui.browse.tracks.scroll().position(101);
         assert!(before.is_some_and(|value| value > 0 && value < POSITION_SCALE));
-        let mut reference = app.state.browse.tracks.scroll.clone();
+        let mut reference = app.state.ui.browse.tracks.scroll().clone();
         app.apply_pushed_config(pushed_tree(serde_json::json!({
             "tui": { "animation": { "minimap_cursor_ms": 1600 } }
         }))?);
         let slow_ticks = crate::components::frame::FrameEnv {
             config: &app.state.cfg,
             theme: &app.theme,
-            now: app.state.frame_now,
+            now: app.state.ui.frame_now,
         }
         .cursor_ticks();
-        assert_eq!(app.state.browse.tracks.scroll.position(101), before);
+        assert_eq!(app.state.ui.browse.tracks.scroll().position(101), before);
         app.state
+            .ui
             .browse
             .tracks
-            .scroll
+            .test_scroll_mut()
             .prepare(101, 10, motion, slow_ticks, true);
         reference.prepare(101, 10, motion, ticks, true);
-        let slow = app.state.browse.tracks.scroll.position(101);
+        let slow = app.state.ui.browse.tracks.scroll().position(101);
         let fast = reference.position(101);
         assert!(slow.zip(before).is_some_and(|(now, old)| now > old));
         assert!(slow.zip(fast).is_some_and(|(slow, fast)| slow < fast));
         app.apply_pushed_config(pushed_tree(serde_json::json!({
             "tui": { "animation": { "minimap_cursor_ms": 0 } }
         }))?);
-        assert_eq!(app.state.browse.tracks.scroll.position(101), slow);
-        app.state.browse.tracks.scroll.prepare(
+        assert_eq!(app.state.ui.browse.tracks.scroll().position(101), slow);
+        app.state.ui.browse.tracks.test_scroll_mut().prepare(
             101,
             10,
             motion,
             crate::components::frame::FrameEnv {
                 config: &app.state.cfg,
                 theme: &app.theme,
-                now: app.state.frame_now,
+                now: app.state.ui.frame_now,
             }
             .cursor_ticks(),
             true,
         );
         assert_eq!(
-            app.state.browse.tracks.scroll.position(101),
+            app.state.ui.browse.tracks.scroll().position(101),
             Some(POSITION_SCALE)
         );
         Ok(())
@@ -371,7 +382,7 @@ mod tests {
         use crate::runtime::playback::EnvelopeState;
 
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        app.state.playback.envelope = Some(EnvelopeState::new(
+        app.state.models.playback.envelope = Some(EnvelopeState::new(
             SongId::new(SourceKind::LOCAL, "a"),
             Envelope {
                 points: vec![9],
@@ -380,10 +391,11 @@ mod tests {
             /*ticks*/ 40,
         ));
         for _ in 0..10 {
-            app.state.playback.tick_envelope_reveal();
+            app.state.models.playback.tick_envelope_reveal();
         }
         let mid = app
             .state
+            .models
             .playback
             .envelope
             .as_ref()
@@ -396,6 +408,7 @@ mod tests {
         } }))?);
         assert_eq!(
             app.state
+                .models
                 .playback
                 .envelope
                 .as_ref()
@@ -450,10 +463,23 @@ mod tests {
 
         let mut app = app_with_library(1, 0)?;
         let id = SongId::new(SourceKind::NETEASE, "1");
-        assert!(app.state.library.local_play_counts.enter_selection(&id));
-        assert!(app.state.library.local_play_counts.complete(&id, Some(3)));
+        assert!(
+            app.state
+                .models
+                .library
+                .local_play_counts
+                .enter_selection(&id)
+        );
+        assert!(
+            app.state
+                .models
+                .library
+                .local_play_counts
+                .complete(&id, Some(3))
+        );
         let entry = app
             .state
+            .models
             .library
             .tracks
             .values_mut()
@@ -466,10 +492,17 @@ mod tests {
             serde_json::json!({ "stats": { "level": "off" } }),
         )?);
 
-        assert!(app.state.library.local_play_counts.has_no_cached_values());
-        assert!(app.state.library.local_play_counts.is_idle());
         assert!(
             app.state
+                .models
+                .library
+                .local_play_counts
+                .has_no_cached_values()
+        );
+        assert!(app.state.models.library.local_play_counts.is_idle());
+        assert!(
+            app.state
+                .models
                 .library
                 .tracks
                 .values()
@@ -489,7 +522,7 @@ mod tests {
         use crate::image::GraphicsProtocol;
 
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        let negotiated = app.state.images.graphics_protocol();
+        let negotiated = app.state.resources.images.graphics_protocol();
         assert_ne!(
             negotiated,
             GraphicsProtocol::Sixel,
@@ -497,18 +530,21 @@ mod tests {
         );
         // 塞一个终端图片条目，验证 backend 替换会清缓存。
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        app.state.images.insert_test_terminal_image(&url, (10, 10));
+        app.state
+            .resources
+            .images
+            .insert_test_terminal_image(&url, (10, 10));
 
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "tui": { "cover": { "protocol": "sixel" } } }),
         )?);
         assert_eq!(
-            app.state.images.graphics_protocol(),
+            app.state.resources.images.graphics_protocol(),
             GraphicsProtocol::Sixel,
             "强制档替换 terminal backend"
         );
         assert!(
-            app.state.images.terminal_images.is_empty(),
+            app.state.resources.images.terminal_images.is_empty(),
             "backend 替换应清终端图片缓存"
         );
 
@@ -516,7 +552,7 @@ mod tests {
             serde_json::json!({ "tui": { "cover": { "protocol": "auto" } } }),
         )?);
         assert_eq!(
-            app.state.images.graphics_protocol(),
+            app.state.resources.images.graphics_protocol(),
             negotiated,
             "切回 auto 还原启动协商结果(不重探)"
         );
@@ -533,10 +569,11 @@ mod tests {
         use std::sync::Arc;
 
         let mut app = app_with_queue(1, 0)?;
-        app.state.images = ImageEngine::disabled_kitty(Arc::clone(&app.state.cfg));
+        app.state.resources.images = ImageEngine::disabled_kitty(Arc::clone(&app.state.cfg));
         let url = MediaUrl::remote("https://example.com/cell-fit.png")?;
         let source = Arc::new(crate::test_support::solid_cover(180, 80, 40));
         app.state
+            .resources
             .images
             .cache
             .insert_test(&url, Arc::clone(&source));
@@ -549,9 +586,10 @@ mod tests {
                 ImageRenderPhase::Stable,
             );
         };
-        render(&mut app.state.images);
+        render(&mut app.state.resources.images);
         let crop_key = app
             .state
+            .resources
             .images
             .encode_pending
             .iter()
@@ -560,45 +598,53 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("missing initial cover encode request"))?;
         assert_eq!(crop_key.cell_fit(), CoverCellFit::Crop);
         app.state
+            .resources
             .images
             .insert_test_terminal_image(&url, (area.width, area.height));
-        app.state.images.encode_pending.remove(&crop_key);
-        let initial_preview_key = app.state.images.preview_key(&url, area);
+        app.state.resources.images.encode_pending.remove(&crop_key);
+        let initial_preview_key = app.state.resources.images.preview_key(&url, area);
 
         for (value, expected) in [
             ("stretch", CoverCellFit::Stretch),
             ("contain", CoverCellFit::Contain),
         ] {
-            let previous = app.state.images.encode_pending.clone();
+            let previous = app.state.resources.images.encode_pending.clone();
             app.apply_pushed_config(pushed_tree(serde_json::json!({
                 "tui": { "cover": { "cell_fit": value } }
             }))?);
-            render(&mut app.state.images);
-            let pending = &app.state.images.encode_pending;
+            render(&mut app.state.resources.images);
+            let pending = &app.state.resources.images.encode_pending;
             let added = pending.difference(&previous).collect::<Vec<_>>();
             assert_eq!(added.len(), 1);
             assert!(added.iter().all(|key| key.cell_fit() == expected));
-            assert!(app.state.images.terminal_images.contains(&crop_key));
+            assert!(
+                app.state
+                    .resources
+                    .images
+                    .terminal_images
+                    .contains(&crop_key)
+            );
             assert_ne!(
-                app.state.images.preview_key(&url, area),
+                app.state.resources.images.preview_key(&url, area),
                 initial_preview_key
             );
             assert!(
                 app.state
+                    .resources
                     .images
                     .cache
                     .get(&url)
                     .is_some_and(|image| Arc::ptr_eq(image, &source))
             );
         }
-        let pending = app.state.images.encode_pending.clone();
+        let pending = app.state.resources.images.encode_pending.clone();
         app.apply_pushed_config(pushed_tree(serde_json::json!({
             "tui": { "cover": { "cell_fit": "crop" } }
         }))?);
-        render(&mut app.state.images);
-        assert_eq!(app.state.images.encode_pending, pending);
+        render(&mut app.state.resources.images);
+        assert_eq!(app.state.resources.images.encode_pending, pending);
         assert_eq!(
-            app.state.images.preview_key(&url, area),
+            app.state.resources.images.preview_key(&url, area),
             initial_preview_key
         );
         Ok(())
@@ -610,12 +656,13 @@ mod tests {
         use std::time::{Duration, Instant};
         let mut app = app_with_queue(1, 0)?;
         let start = Instant::now();
-        app.state.transport.title.prepare("a", 40, 10, start);
+        app.state.ui.transport.title.prepare("a", 40, 10, start);
         let tick_ms = *app.state.cfg.tui().animation().frame_tick_ms();
         let now = start + Duration::from_millis(tick_ms * 200);
         let later = start + Duration::from_millis(tick_ms * 400);
         let sample = |now| {
             app.state
+                .ui
                 .transport
                 .title
                 .phase("a", 40, 10, 2, app.state.cfg.tui().animation(), now)
@@ -627,6 +674,7 @@ mod tests {
         )?);
         assert_eq!(
             app.state
+                .ui
                 .transport
                 .title
                 .phase("a", 40, 10, 2, app.state.cfg.tui().animation(), later)
@@ -655,18 +703,18 @@ mod tests {
     #[test]
     fn pushed_config_retempo_preserves_phase() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        app.state.browse.fullscreen.toggle();
+        app.state.ui.browse.fullscreen.toggle();
         for _ in 0..3 {
-            app.state.browse.fullscreen.tick();
+            app.state.ui.browse.fullscreen.tick();
         }
-        let mid = app.state.browse.fullscreen.eased_in_out();
+        let mid = app.state.ui.browse.fullscreen.eased_in_out();
         assert!(mid > 0, "前置:形变已起步");
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "tui": { "animation": { "fullscreen_ms": 1000 } } }),
         )?);
-        assert!(app.state.browse.fullscreen.on(), "逻辑态保留");
+        assert!(app.state.ui.browse.fullscreen.on(), "逻辑态保留");
         assert!(
-            app.state.browse.fullscreen.eased_in_out() >= mid,
+            app.state.ui.browse.fullscreen.eased_in_out() >= mid,
             "相位不回零(retempo 只换速度)"
         );
         Ok(())
@@ -677,12 +725,12 @@ mod tests {
     #[test]
     fn pushed_config_ambient_trail_retempo_preserves_phase() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        app.state.browse.fullscreen.toggle();
+        app.state.ui.browse.fullscreen.toggle();
         // 推进过默认滞后(140ms/16ms ≈ 9 拍)再进缓动几拍;tick_frame 同拍推进跟随。
         for _ in 0..14 {
             app.state.tick_frame();
         }
-        let mid = app.state.browse.ambient_reveal.progress();
+        let mid = app.state.ui.browse.ambient_reveal.progress();
         assert!(mid > 0, "前置:滞后已尽、缓动起步");
         app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "animation": {
             "ambient_trail": {
@@ -691,7 +739,7 @@ mod tests {
             },
         } } }))?);
         assert_eq!(
-            app.state.browse.ambient_reveal.progress(),
+            app.state.ui.browse.ambient_reveal.progress(),
             mid,
             "retempo 只换速度,推送那帧进度不跳"
         );
@@ -735,12 +783,12 @@ mod tests {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let base_accent = app.theme_base.accent;
         let url = MediaUrl::remote("https://example.com/c.jpg")?;
-        if let Some(song) = app.state.player.current.as_mut() {
+        if let Some(song) = app.state.models.player.current.as_mut() {
             song.cover_url = Some(url.clone());
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.images.palettes.insert(url, palette);
+        app.state.resources.images.palettes.insert(url, palette);
         app.sync_cover_palette();
         for _ in 0..400 {
             app.tick_cover_fades();
@@ -770,12 +818,12 @@ mod tests {
 
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let url = MediaUrl::remote("https://example.com/c.jpg")?;
-        if let Some(song) = app.state.player.current.as_mut() {
+        if let Some(song) = app.state.models.player.current.as_mut() {
             song.cover_url = Some(url.clone());
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.images.palettes.insert(url, palette);
+        app.state.resources.images.palettes.insert(url, palette);
         app.sync_cover_palette();
         for _ in 0..20 {
             app.tick_cover_fades();
@@ -799,12 +847,12 @@ mod tests {
 
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let url = MediaUrl::remote("https://example.com/c.jpg")?;
-        if let Some(song) = app.state.player.current.as_mut() {
+        if let Some(song) = app.state.models.player.current.as_mut() {
             song.cover_url = Some(url.clone());
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(220, 60, 60)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.images.palettes.insert(url, palette);
+        app.state.resources.images.palettes.insert(url, palette);
         app.sync_cover_palette();
         Ok(app)
     }
@@ -941,7 +989,7 @@ mod tests {
         for _ in 0..5 {
             anim.tick();
         }
-        app.state.images.transition = Some(CoverTransition {
+        app.state.resources.images.transition = Some(CoverTransition {
             from_url: MediaUrl::remote("https://x.y/a.jpg")?,
             to_url: MediaUrl::remote("https://x.y/b.jpg")?,
             advance: None,
@@ -953,6 +1001,7 @@ mod tests {
         )?);
         let active = app
             .state
+            .resources
             .images
             .transition
             .as_ref()
@@ -973,13 +1022,22 @@ mod tests {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         let url = mineral_model::MediaUrl::remote("https://x.y/c.jpg")?;
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8));
-        let evicted = app.state.images.cache.insert_test(&url, Arc::new(img));
+        let evicted = app
+            .state
+            .resources
+            .images
+            .cache
+            .insert_test(&url, Arc::new(img));
         assert!(evicted.is_empty(), "预算内不逐出");
-        assert_eq!(app.state.images.cache.len(), 1, "前置:已缓存一张");
+        assert_eq!(app.state.resources.images.cache.len(), 1, "前置:已缓存一张");
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "tui": { "cover": { "cache": { "image": 0 } } } }),
         )?);
-        assert_eq!(app.state.images.cache.len(), 0, "预算缩到 0 应立即逐出");
+        assert_eq!(
+            app.state.resources.images.cache.len(),
+            0,
+            "预算缩到 0 应立即逐出"
+        );
         Ok(())
     }
 

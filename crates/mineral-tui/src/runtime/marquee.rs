@@ -64,6 +64,7 @@ struct Tempo {
 }
 
 impl Tempo {
+    /// 按本次配置折算节奏，仅作为相位采样的局部值。
     fn from_config(cfg: &mineral_config::MarqueeConfig, tick_ms: u64) -> Self {
         use crate::render::anim::ticks16_from_ms;
         Self {

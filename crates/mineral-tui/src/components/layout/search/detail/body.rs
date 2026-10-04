@@ -443,9 +443,9 @@ mod tests {
     fn detail_thumbnail_columns_keep_names_and_images_offscreen() -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         let mut state = AppState::test_default()?;
-        state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
+        state.resources.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
         let url = MediaUrl::remote("https://example.com/detail-cover.png")?;
-        state.images.insert_test_thumbnail(&url)?;
+        state.resources.images.insert_test_thumbnail(&url)?;
         let mut covered = with_name(song("covered"), "Alpha");
         covered.cover_url = Some(url.clone());
         let missing = with_name(song("missing"), "Beta");

@@ -95,24 +95,25 @@ impl App {
     /// `selected_loved` 随选中歌给(♥ 装饰缓存),`search_query` 空词为 `None`。
     pub(crate) fn collect_key_context(&self) -> mineral_protocol::KeyContext {
         use mineral_protocol::{KeyContext, PlaylistRef, ViewKind};
-        let now_playing = self.state.player.current.clone().map(Box::new);
+        let now_playing = self.state.models.player.current.clone().map(Box::new);
         let selected_playlist = self.state.selected_playlist().map(|p| PlaylistRef {
             id: p.data.id.clone(),
             name: p.data.name.clone(),
         });
-        let search_query = if self.state.browse.active_search().query().is_empty() {
+        let search_query = if self.state.ui.browse.active_search().query().is_empty() {
             None
         } else {
-            Some(self.state.browse.active_search().query().to_owned())
+            Some(self.state.ui.browse.active_search().query().to_owned())
         };
         // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
         // Library 列表取选中行(PlaylistEntryView 已装饰)。
         let (view, selected_song, selected_loved) =
             if let Some(cursor) = self.overlays.active_queue_cursor(&self.state) {
                 // 队列浮层:唯一带脚本选中的浮层(取光标条目)。
-                let song = self.state.player.queue.get(cursor).cloned();
+                let song = self.state.models.player.queue.get(cursor).cloned();
                 let loved = song.as_ref().map(|s| {
                     self.state
+                        .models
                         .library
                         .liked_ids
                         .get(&s.id.namespace())
@@ -126,13 +127,13 @@ impl App {
                         (ViewKind::Search, None, None)
                     }
                     ActiveLayer::Fullscreen => (ViewKind::Fullscreen, None, None),
-                    ActiveLayer::Browse => match self.state.browse.view.current() {
+                    ActiveLayer::Browse => match self.state.ui.browse.view.current() {
                         View::Playlists => (ViewKind::Playlists, None, None),
                         View::Library => {
                             let sel = self
                                 .state
                                 .filtered_tracks()
-                                .get(self.state.browse.tracks.scroll.sel());
+                                .get(self.state.ui.browse.tracks.scroll().sel());
                             let loved = sel.as_ref().map(|entry| entry.loved);
                             (
                                 ViewKind::Tracks,
@@ -155,10 +156,10 @@ impl App {
 
     /// 空格键:有当前曲目时在 pause/resume 间切换;没歌时无动作。
     pub(crate) fn toggle_play_pause(&mut self) {
-        if self.state.playback.track.is_none() {
+        if self.state.models.playback.track.is_none() {
             return;
         }
-        if self.state.playback.playing {
+        if self.state.models.playback.playing {
             self.client.pause();
         } else {
             self.client.resume();
@@ -167,18 +168,18 @@ impl App {
 
     /// 在当前音量上加/减 `delta`,clamp 到 0..=100,只发命令。
     pub(crate) fn nudge_volume(&mut self, delta: i16) {
-        let cur = i16::from(self.state.playback.volume_pct);
+        let cur = i16::from(self.state.models.playback.volume_pct);
         let new = cur.saturating_add(delta).clamp(0, 100);
-        let pct = u8::try_from(new).unwrap_or(self.state.playback.volume_pct);
+        let pct = u8::try_from(new).unwrap_or(self.state.models.playback.volume_pct);
         self.client.set_volume(pct);
     }
 
     /// 相对当前位置跳 `delta_s` 秒,clamp 到 [0, duration];时长未知时无法 clamp,不跳。
     pub(crate) fn seek_relative(&mut self, delta_s: i64) {
-        let Some(dur_ms) = self.state.playback.duration_ms() else {
+        let Some(dur_ms) = self.state.models.playback.duration_ms() else {
             return;
         };
-        let cur = i64::try_from(self.state.playback.position_ms).unwrap_or(0);
+        let cur = i64::try_from(self.state.models.playback.position_ms).unwrap_or(0);
         let max = i64::try_from(dur_ms).unwrap_or(0);
         let new_ms = cur
             .saturating_add(delta_s.saturating_mul(1000))
@@ -191,6 +192,7 @@ impl App {
     pub(crate) fn seek_to(&mut self, position_ms: u64) {
         self.client.seek(position_ms);
         self.state
+            .ui
             .transport
             .on_seek(self.state.cfg.tui().animation());
     }
@@ -199,20 +201,20 @@ impl App {
     /// Library 曲目；容器行、空行和全屏态不操作。
     pub(crate) fn toggle_love_selection(&mut self) {
         let song = match self.state.page_kind() {
-            PageKind::Search => match self.state.channel_search.selected_entity() {
+            PageKind::Search => match self.state.ui.channel_search.selected_entity() {
                 Some(EntityRef::Song(song)) => Some(*song),
                 Some(EntityRef::Album(_) | EntityRef::Artist(_) | EntityRef::Playlist(_))
                 | None => None,
             },
             PageKind::Browse => {
-                if self.state.browse.fullscreen.on()
-                    || self.state.browse.view.current() != View::Library
+                if self.state.ui.browse.fullscreen.on()
+                    || self.state.ui.browse.view.current() != View::Library
                 {
                     return;
                 }
                 self.state
                     .filtered_tracks()
-                    .get(self.state.browse.tracks.scroll.sel())
+                    .get(self.state.ui.browse.tracks.scroll().sel())
                     .map(|entry| entry.data.song.clone())
             }
         };
@@ -310,15 +312,15 @@ impl App {
 
     /// 下载当前视图选中项:Playlists 整张歌单 / Library 单曲。全屏态屏蔽。
     pub(crate) fn download_selection(&mut self) {
-        if self.state.browse.fullscreen.on() {
+        if self.state.ui.browse.fullscreen.on() {
             return;
         }
-        match self.state.browse.view.current() {
+        match self.state.ui.browse.view.current() {
             View::Playlists => {
                 let id = self
                     .state
                     .filtered_playlists()
-                    .get(self.state.browse.playlists.scroll.sel())
+                    .get(self.state.ui.browse.playlists.scroll().sel())
                     .map(|p| p.data.id.clone());
                 if let Some(id) = id {
                     self.client.download(DownloadTarget::Playlist(id));
@@ -328,7 +330,7 @@ impl App {
                 let song = self
                     .state
                     .filtered_tracks()
-                    .get(self.state.browse.tracks.scroll.sel())
+                    .get(self.state.ui.browse.tracks.scroll().sel())
                     .map(|entry| entry.data.song.clone());
                 if let Some(song) = song {
                     self.client.download(DownloadTarget::Song(Box::new(song)));
@@ -351,7 +353,7 @@ impl App {
         let fetch = container_fetch(container);
         crate::runtime::prefetch::submit_detail_tasks(
             &*self.client,
-            &mut self.state.library,
+            &mut self.state.models.library,
             fetch.clone(),
         );
         self.pending_container.insert(fetch.dedup_key(), mode);
@@ -362,7 +364,7 @@ impl App {
     fn container_loaded_songs(&self, container: &ContainerRef) -> Option<Vec<Song>> {
         match container {
             ContainerRef::Playlist(p) => {
-                let views = self.state.library.tracks.get(&p.id)?;
+                let views = self.state.models.library.tracks.get(&p.id)?;
                 if !views.complete {
                     return None;
                 }
@@ -383,6 +385,7 @@ impl App {
         if let mineral_protocol::QueueContextWire::Playlist { id, name } = &context
             && let Some(tracks) = self
                 .state
+                .models
                 .library
                 .tracks
                 .get(id)
@@ -407,8 +410,8 @@ impl App {
                     .behavior()
                     .filter_play_scope()
                     .matches_only()
-                    && !self.state.browse.active_search().query().is_empty())
-                .then(|| self.state.browse.active_search().query().to_owned());
+                    && !self.state.ui.browse.active_search().query().is_empty())
+                .then(|| self.state.ui.browse.active_search().query().to_owned());
                 self.pending_playlist_play = Some(PendingPlaylistPlay {
                     playlist: id.clone(),
                     target: entry.data.clone(),
@@ -417,7 +420,7 @@ impl App {
                 });
                 crate::runtime::prefetch::submit_detail_tasks(
                     &*self.client,
-                    &mut self.state.library,
+                    &mut self.state.models.library,
                     DetailFetch::PlaylistDetail(id.clone()),
                 );
                 mineral_log::info!(target: "tui", playlist = %id, "等待完整歌单后起播");
@@ -628,7 +631,7 @@ mod tests {
             }),
         };
         // Replace the fixture's complete data with an actual first response.
-        app.state.library.tracks.remove(&id);
+        app.state.models.library.tracks.remove(&id);
         app.state.apply(&preview);
         app.play_queue(
             vec![repeated.clone(), repeated.clone()],
@@ -768,6 +771,7 @@ mod tests {
             app.client = client.clone();
             let playlist = app
                 .state
+                .models
                 .library
                 .playlists
                 .first()
@@ -776,6 +780,7 @@ mod tests {
                 .clone();
             let songs = app
                 .state
+                .models
                 .library
                 .tracks
                 .get(&playlist.id)
@@ -783,7 +788,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.data.song.clone())
                 .collect::<Vec<_>>();
-            app.state.player.queue = songs.iter().take(500).cloned().collect();
+            app.state.models.player.queue = songs.iter().take(500).cloned().collect();
             let container = Box::new(ContainerRef::Playlist(Box::new(playlist.clone())));
             let (operation, action) = if mode == PlayMode::Append {
                 ("append", MenuAction::AppendContainer(container))
@@ -937,7 +942,7 @@ mod tests {
     #[test]
     fn container_play_next_submits_one_batch_in_order() -> color_eyre::Result<()> {
         let (mut app, _ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
-        app.state.player.queue = endserenading(1);
+        app.state.models.player.queue = endserenading(1);
         let queue_ops = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let queue_contexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         app.client = std::sync::Arc::new(crate::test_support::TestClient {
@@ -984,7 +989,10 @@ mod tests {
     #[test]
     fn container_play_next_on_empty_queue_keeps_insert_intent() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
-        assert!(app.state.player.queue.is_empty(), "前置:本地队列应为空");
+        assert!(
+            app.state.models.player.queue.is_empty(),
+            "前置:本地队列应为空"
+        );
         let album = album_with_songs("al1", 2);
         let want = album
             .tracks
@@ -1010,7 +1018,7 @@ mod tests {
     #[test]
     fn keyctx_library_view_collects_selection() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 1)?;
-        app.state.player.current = app
+        app.state.models.player.current = app
             .state
             .filtered_tracks()
             .first()
@@ -1036,7 +1044,12 @@ mod tests {
         );
         assert_eq!(
             ctx.now_playing().as_ref().map(|s| s.id.clone()),
-            app.state.player.current.as_ref().map(|s| s.id.clone())
+            app.state
+                .models
+                .player
+                .current
+                .as_ref()
+                .map(|s| s.id.clone())
         );
         assert_eq!(*ctx.search_query(), None, "无过滤词为 None");
         Ok(())
@@ -1047,10 +1060,11 @@ mod tests {
     fn keyctx_playlists_view_selects_playlist_only() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
         app.state
+            .ui
             .browse
             .view
             .switch_to(crate::runtime::state::View::Playlists);
-        app.state.player.current = None;
+        app.state.models.player.current = None;
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Playlists);
         assert!(ctx.selected_song().is_none());
@@ -1068,7 +1082,7 @@ mod tests {
         assert_eq!(*ctx.view(), ViewKind::Queue);
         assert_eq!(
             ctx.selected_song().as_ref().map(|s| s.id.clone()),
-            app.state.player.queue.get(2).map(|s| s.id.clone()),
+            app.state.models.player.queue.get(2).map(|s| s.id.clone()),
             "浮层光标所指条目算选中"
         );
         assert_eq!(
@@ -1083,13 +1097,18 @@ mod tests {
     #[test]
     fn keyctx_fullscreen_reports_now_playing() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 2, /*current_idx*/ 1)?;
-        app.state.browse.fullscreen.set(true);
+        app.state.ui.browse.fullscreen.set(true);
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Fullscreen);
         assert!(ctx.selected_song().is_none());
         assert_eq!(
             ctx.now_playing().as_ref().map(|s| s.id.clone()),
-            app.state.player.current.as_ref().map(|s| s.id.clone())
+            app.state
+                .models
+                .player
+                .current
+                .as_ref()
+                .map(|s| s.id.clone())
         );
         Ok(())
     }
@@ -1098,7 +1117,7 @@ mod tests {
     #[test]
     fn keyctx_channel_search_reports_search() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.channel_search.active.set(true);
+        app.state.ui.channel_search.active.set(true);
         let ctx = app.collect_key_context();
         assert_eq!(
             *ctx.view(),
@@ -1112,7 +1131,7 @@ mod tests {
     #[test]
     fn keyctx_non_queue_overlay_is_transparent() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.channel_search.active.set(true);
+        app.state.ui.channel_search.active.set(true);
         app.overlays.push(crate::app::AppOverlay::confirm());
         let ctx = app.collect_key_context();
         assert_eq!(

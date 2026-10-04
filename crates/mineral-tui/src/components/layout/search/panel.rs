@@ -38,14 +38,7 @@ fn border_style(focused: bool, theme: &Theme) -> Style {
 ///
 /// # Params:
 ///   - `rs`: channel 搜索子域(读当前 source / 会话 query / kind / 段焦点)
-/// 画结果列:bordered `results` 外框 + 结果行(当前光标行高亮)。
-///
-/// 光标行高亮分两档:焦点在结果列时 accent 亮高亮;否则(在 prompt / detail)走暗调高亮,
-/// 仍标出"回得去"的光标位置而不抢视觉。
-///
-/// # Params:
-///   - `state`: 已准备的 channel 搜索显示状态
-///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`,改由浮动环表达高亮)
+///   - `border_focused`: 焦点环滑动期间压暗边框，高亮由浮动环表达。
 pub fn draw_prompt(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -232,7 +225,7 @@ pub(crate) fn draw_prompt_dropdown(
             };
             // 行 fg = 各源徽标色(身份靠图标 + 颜色,与 chip 一致);kind 下拉保持中性。
             let items = rs
-                .source_options(&state.caps)
+                .source_options(state.caps)
                 .iter()
                 .map(|s| {
                     MenuItem::display_tinted(
@@ -245,7 +238,7 @@ pub(crate) fn draw_prompt_dropdown(
         }
         PromptSegment::Kind => {
             let items = rs
-                .kind_options(&state.caps)
+                .kind_options(state.caps)
                 .iter()
                 .map(|k| MenuItem::display(k.label()))
                 .collect();
@@ -321,7 +314,14 @@ pub(crate) fn prepare_results(area: Rect, page: &mut SearchPage, cx: &PrepareCx<
     }
 }
 
-///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`)
+/// 画结果列:bordered `results` 外框 + 结果行(当前光标行高亮)。
+///
+/// 光标行高亮分两档:焦点在结果列时 accent 亮高亮;否则(在 prompt / detail)走暗调高亮,
+/// 仍标出"回得去"的光标位置而不抢视觉。
+///
+/// # Params:
+///   - `state`: 已准备的 channel 搜索显示状态
+///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`,改由浮动环表达高亮)
 pub(crate) fn draw_results(
     frame: &mut Frame<'_>,
     area: Rect,

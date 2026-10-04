@@ -400,58 +400,66 @@ mod tests {
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         if let Some(sv) = app
             .state
+            .models
             .library
             .tracks
             .get_mut(&pid)
             .and_then(|views| views.get_mut(0))
         {
             sv.data.song.cover_url = Some(url.clone());
-            app.state.playback.track = Some(sv.data.song.clone());
+            app.state.models.playback.track = Some(sv.data.song.clone());
         }
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-        app.state.images.cache.insert_test(&url, Arc::new(img));
+        app.state
+            .resources
+            .images
+            .cache
+            .insert_test(&url, Arc::new(img));
         // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发编码。
-        app.state.browse.nav.last_sel_change = Instant::now()
+        app.state.ui.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
 
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
 
         // 从空 pending 开始形变,使首帧暴露端点预热请求。
-        app.state.browse.fullscreen.set(true);
-        let mut morph_pending = app.state.images.encode_pending.clone();
+        app.state.ui.browse.fullscreen.set(true);
+        let mut morph_pending = app.state.resources.images.encode_pending.clone();
         assert!(morph_pending.is_empty(), "前置:尚未渲染,pending 为空");
         for frame_no in 0..5 {
-            app.state.browse.fullscreen.tick();
+            app.state.ui.browse.fullscreen.tick();
             assert!(
-                !app.state.browse.fullscreen.settled(),
+                !app.state.ui.browse.fullscreen.settled(),
                 "测试需停留在形变中途"
             );
             t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
             if frame_no == 0 {
-                morph_pending = app.state.images.encode_pending.clone();
+                morph_pending = app.state.resources.images.encode_pending.clone();
                 assert!(
                     !morph_pending.is_empty(),
                     "首个形变帧应派发端点稳态尺寸预热"
                 );
             } else {
                 assert_eq!(
-                    app.state.images.encode_pending, morph_pending,
+                    app.state.resources.images.encode_pending, morph_pending,
                     "后续形变帧不应追加封面编码派发(churn)"
                 );
             }
         }
 
         for _ in 0..1_000 {
-            if app.state.browse.fullscreen.settled() {
+            if app.state.ui.browse.fullscreen.settled() {
                 break;
             }
-            app.state.browse.fullscreen.tick();
+            app.state.ui.browse.fullscreen.tick();
         }
-        assert!(app.state.browse.fullscreen.settled(), "形变应在上限内落定");
+        assert!(
+            app.state.ui.browse.fullscreen.settled(),
+            "形变应在上限内落定"
+        );
         t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         assert_eq!(
-            app.state.images.encode_pending, morph_pending,
+            app.state.resources.images.encode_pending, morph_pending,
             "稳态渲染应命中预热的同一 (url, dims) 去重键"
         );
         Ok(())
@@ -467,17 +475,17 @@ mod tests {
         let mut active = Toggle::new(8);
         active.set(true);
         active.tick();
-        app.state.channel_search.active = active;
+        app.state.ui.channel_search.active = active;
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
         t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
-        let pending = app.state.images.encode_pending.clone();
+        let pending = app.state.resources.images.encode_pending.clone();
         assert!(!pending.is_empty(), "首个形变帧应预热端点封面编码");
         for _ in 0..3 {
-            app.state.channel_search.active.tick();
+            app.state.ui.channel_search.active.tick();
             t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         }
         assert_eq!(
-            app.state.images.encode_pending, pending,
+            app.state.resources.images.encode_pending, pending,
             "后续形变帧不应追加编码派发(churn)"
         );
         Ok(())
@@ -496,21 +504,25 @@ mod tests {
         // —— 预编码要求图已就绪(否则该首仍等 fetch,后续帧再预热)。
         for i in 0..3 {
             let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
-            if let Some(s) = app.state.player.queue.get_mut(i) {
+            if let Some(s) = app.state.models.player.queue.get_mut(i) {
                 s.cover_url = Some(url.clone());
             }
             if i <= 1 {
                 let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-                app.state.images.cache.insert_test(&url, Arc::new(img));
+                app.state
+                    .resources
+                    .images
+                    .cache
+                    .insert_test(&url, Arc::new(img));
             }
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。
-        app.state.playback.track = app.state.player.queue.first().cloned();
+        app.state.models.playback.track = app.state.models.player.queue.first().cloned();
         // 稳态全屏:一步推到满值。
         let mut fs = Toggle::new(1);
         fs.set(true);
         fs.tick();
-        app.state.browse.fullscreen = fs;
+        app.state.ui.browse.fullscreen = fs;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
@@ -518,6 +530,7 @@ mod tests {
         let next_url = MediaUrl::remote("https://prewarm/1.jpg")?;
         let warmed = app
             .state
+            .resources
             .images
             .encode_pending
             .iter()
@@ -537,22 +550,26 @@ mod tests {
         let mut app = app_with_queue(3, /*current_idx*/ 1)?;
         for i in 0..3 {
             let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
-            if let Some(s) = app.state.player.queue.get_mut(i) {
+            if let Some(s) = app.state.models.player.queue.get_mut(i) {
                 s.cover_url = Some(url.clone());
             }
             let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
-            app.state.images.cache.insert_test(&url, Arc::new(img));
+            app.state
+                .resources
+                .images
+                .cache
+                .insert_test(&url, Arc::new(img));
         }
-        app.state.playback.track = app.state.player.queue.get(1).cloned();
+        app.state.models.playback.track = app.state.models.player.queue.get(1).cloned();
         let mut fs = Toggle::new(1);
         fs.set(true);
         fs.tick();
-        app.state.browse.fullscreen = fs;
+        app.state.ui.browse.fullscreen = fs;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
         t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
 
-        let pending = app.state.images.encode_pending;
+        let pending = app.state.resources.images.encode_pending;
         for (idx, label) in [(0, "上一首"), (2, "下一首")] {
             let url = MediaUrl::remote(&format!("https://prewarm/{idx}.jpg"))?;
             assert!(

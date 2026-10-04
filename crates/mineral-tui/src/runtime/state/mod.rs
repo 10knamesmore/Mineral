@@ -26,7 +26,6 @@ mod view_switch;
 
 #[cfg(test)]
 pub(crate) use crate::image::CoverTransition;
-pub use crate::image::ImageEngine;
 pub use application_state::AppState;
 pub(crate) use application_state::spectrum_params;
 pub(crate) use artist_albums::ArtistAlbums;
@@ -46,3 +45,6 @@ pub use view_context::{ActiveLayer, PageKind, View};
 pub(crate) use view_switch::ViewSwitch;
 
 pub(crate) use detail::DetailStack;
+
+mod models;
+mod resources;

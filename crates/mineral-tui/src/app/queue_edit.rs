@@ -33,7 +33,7 @@ impl App {
     ///
     /// 不复用 browse 页那条路径:那条按「当前 View 的选中曲」取歌,而浮层自持光标。
     fn toggle_love_queue_index(&mut self, idx: usize) {
-        let Some(song) = self.state.player.queue.get(idx).cloned() else {
+        let Some(song) = self.state.models.player.queue.get(idx).cloned() else {
             return;
         };
         self.client.toggle_love(song.clone());
@@ -42,7 +42,7 @@ impl App {
 
     /// 下载队列第 `idx` 项。
     fn download_queue_index(&mut self, idx: usize) {
-        let Some(song) = self.state.player.queue.get(idx).cloned() else {
+        let Some(song) = self.state.models.player.queue.get(idx).cloned() else {
             return;
         };
         self.client
@@ -62,7 +62,7 @@ impl App {
         idx: usize,
         build: impl FnOnce(QueueAnchor) -> QueueOp,
     ) {
-        let Some(song) = self.state.player.queue.get(idx) else {
+        let Some(song) = self.state.models.player.queue.get(idx) else {
             return;
         };
         let anchor = QueueAnchor::new(idx, song.id.clone());

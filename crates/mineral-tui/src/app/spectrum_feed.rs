@@ -11,12 +11,12 @@ impl App {
         let samples = self.client.drain_pcm();
         // 换代 / 缺口:重置需要连续窗口的 FFT 与 scope 状态;动画衰减照常推进。
         if self.client.take_pcm_discontinuity() {
-            self.state.fft.reset();
-            self.state.spectrum.reset_stream();
+            self.state.resources.fft.reset();
+            self.state.ui.spectrum.reset_stream();
         }
-        let sample_rate = self.state.playback.sample_rate_hz;
+        let sample_rate = self.state.models.playback.sample_rate_hz;
         if !samples.is_empty() {
-            self.state.fft.push(&samples);
+            self.state.resources.fft.push(&samples);
         }
         // 同一批样本顺路喂氛围背景的响度包络(空样本 = 静音,包络自然回落)。
         self.ambient_pulse.feed(
@@ -24,16 +24,18 @@ impl App {
             sample_rate,
             self.state.cfg.tui().ambient().pulse(),
         );
-        let playing = self.state.playback.playing;
-        let volume_pct = self.state.playback.volume_pct;
+        let playing = self.state.models.playback.playing;
+        let volume_pct = self.state.models.playback.volume_pct;
         if *self.state.cfg.tui().spectrum().style() == mineral_config::SpectrumStyle::Scope {
             self.state
+                .ui
                 .spectrum
                 .tick_scope(volume_pct, &samples, sample_rate);
         } else {
-            let target_bars = self.state.spectrum.target_bars;
-            let bars = self.state.fft.compute(sample_rate, target_bars);
+            let target_bars = self.state.ui.spectrum.target_bars;
+            let bars = self.state.resources.fft.compute(sample_rate, target_bars);
             self.state
+                .ui
                 .spectrum
                 .tick(playing, volume_pct, bars.as_deref());
         }

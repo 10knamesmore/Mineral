@@ -33,7 +33,7 @@ pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(Sourc
 /// 来源随封面一起带出，决定图片引擎使用的落盘子目录。
 fn request_covers(state: &mut AppState, queue_covers: Vec<(SourceKind, MediaUrl)>) {
     let items = collect_cover_candidates(state, queue_covers);
-    state.images.prefetch(items);
+    state.resources.images.prefetch(items);
 }
 
 /// 合并队列光标、Browse 光标与在播位置的候选,单批按 URL 去重。
@@ -59,11 +59,11 @@ fn collect_cover_candidates(
     for (source, url) in queue_covers {
         push_if_new(Some((source, &url)), &mut out);
     }
-    match state.browse.view.current() {
+    match state.ui.browse.view.current() {
         View::Playlists => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
             let filtered = state.filtered_playlists();
-            let sel = state.browse.playlists.scroll.sel();
+            let sel = state.ui.browse.playlists.scroll().sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|p| {
                     p.data
@@ -84,7 +84,7 @@ fn collect_cover_candidates(
             // remembered-pos / deep-hit 的其他入口按常规取图路径加载。
             if let Some(first) = filtered
                 .get(sel)
-                .and_then(|p| state.library.tracks.get(&p.data.id))
+                .and_then(|p| state.models.library.tracks.get(&p.data.id))
                 .and_then(|tracks| tracks.first())
             {
                 push_if_new(song_cover(&first.data.song), &mut out);
@@ -93,7 +93,7 @@ fn collect_cover_candidates(
         View::Library => {
             // sel 与邻居均按过滤视图下标读取；视图借用曲目，不复制整个歌单。
             let filtered = state.filtered_tracks();
-            let sel = state.browse.tracks.scroll.sel();
+            let sel = state.ui.browse.tracks.scroll().sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|entry| {
                     entry
@@ -115,19 +115,19 @@ fn collect_cover_candidates(
     }
 
     // 在播曲与浏览选中解耦:全屏直接渲染在播曲,自动切歌也要让接下来几首封面就绪。沿
-    // `state.player.queue`(已应用 shuffle 的有效播放顺序)给在播曲 ± `playback_cover_radius`
+    // `state.models.player.queue`(已应用 shuffle 的有效播放顺序)给在播曲 ± `playback_cover_radius`
     // 预取;在播曲自身即便不在队列(单首试听 / 队列刚换)也单独保一张。
-    if let Some(track) = state.playback.track.as_ref() {
+    if let Some(track) = state.models.playback.track.as_ref() {
         push_if_new(song_cover(track), &mut out);
     }
     if let Some(pos) = state.queue_current_index() {
         for d in 1..=playback_radius {
             if let Some(idx) = pos.checked_sub(d)
-                && let Some(s) = state.player.queue.get(idx)
+                && let Some(s) = state.models.player.queue.get(idx)
             {
                 push_if_new(song_cover(s), &mut out);
             }
-            if let Some(s) = state.player.queue.get(pos.saturating_add(d)) {
+            if let Some(s) = state.models.player.queue.get(pos.saturating_add(d)) {
                 push_if_new(song_cover(s), &mut out);
             }
         }
@@ -150,23 +150,23 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
 fn request_playback_cover_decodes(state: &mut AppState) {
     let ahead = *state.cfg.tui().prefetch().prewarm_ahead();
     let mut covers = Vec::<(SourceKind, MediaUrl)>::new();
-    if let Some((source, url)) = state.playback.track.as_ref().and_then(song_cover) {
+    if let Some((source, url)) = state.models.playback.track.as_ref().and_then(song_cover) {
         covers.push((source, url.clone()));
     }
     covers.extend(
         state
             .queue_neighbor_indexes(ahead)
             .into_iter()
-            .filter_map(|idx| state.player.queue.get(idx))
+            .filter_map(|idx| state.models.player.queue.get(idx))
             .filter_map(song_cover)
             .map(|(source, url)| (source, url.clone())),
     );
-    state.images.load(covers);
+    state.resources.images.load(covers);
 }
 
 /// 邻近歌单预取首批；仅在 tracks 光标接近已加载末行时请求下一批。
 fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
-    if state.channel_search.active.on() {
+    if state.ui.channel_search.active.on() {
         return;
     }
     let selected = state
@@ -178,9 +178,9 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             load: PlaylistLoad::Preview,
         }));
     }
-    if state.browse.view == View::Library {
+    if state.ui.browse.view == View::Library {
         let Some(id) = selected else { return };
-        let load = if let Some(tracks) = state.library.tracks.get(&id) {
+        let load = if let Some(tracks) = state.models.library.tracks.get(&id) {
             let Some(offset) = tracks.next_offset else {
                 return;
             };
@@ -188,21 +188,23 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             let rows_to_bottom = visible
                 .len()
                 .saturating_sub(1)
-                .saturating_sub(state.browse.tracks.scroll.sel());
+                .saturating_sub(state.ui.browse.tracks.scroll().sel());
             if visible.is_empty()
                 || rows_to_bottom > usize::from(*state.cfg.tui().behavior().search_prefetch_rows())
             {
                 return;
             }
-            if !state
-                .library
-                .needs_playlist_page(&id, offset, state.browse.nav.last_sel_change)
-            {
+            if !state.models.library.needs_playlist_page(
+                &id,
+                offset,
+                state.ui.browse.nav.last_sel_change,
+            ) {
                 return;
             }
             PlaylistLoad::More { offset }
         } else {
             if !state
+                .models
                 .library
                 .needs_playlist(&id, PlaylistLoad::Preview, false)
             {
@@ -218,7 +220,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             }),
             Priority::User,
         );
-        state.library.request_playlist(id, load);
+        state.models.library.request_playlist(id, load);
         return;
     }
     for id in collect_pending_tracks(state) {
@@ -230,7 +232,10 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             }),
             Priority::Background,
         );
-        state.library.request_playlist(id, PlaylistLoad::Preview);
+        state
+            .models
+            .library
+            .request_playlist(id, PlaylistLoad::Preview);
     }
 }
 
@@ -241,19 +246,19 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
 /// 后再选中会重查。`stats.level = off` 或 source 被 `exclude_sources` 排除时不查询，字段
 /// 始终缺失。
 fn request_play_count(state: &mut AppState, client: &dyn Backend) {
-    if state.browse.view != View::Library {
-        state.library.local_play_counts.leave_selection();
+    if state.ui.browse.view != View::Library {
+        state.models.library.local_play_counts.leave_selection();
         return;
     }
     let Some(id) = selected_track_id(state) else {
-        state.library.local_play_counts.leave_selection();
+        state.models.library.local_play_counts.leave_selection();
         return;
     };
     if !state.records_local_plays_for(id.namespace()) {
-        state.library.local_play_counts.leave_selection();
+        state.models.library.local_play_counts.leave_selection();
         return;
     }
-    if !state.library.local_play_counts.enter_selection(&id) {
+    if !state.models.library.local_play_counts.enter_selection(&id) {
         return;
     }
     mineral_log::debug!(target: "prefetch", song_id = id.as_str(), source = ?id.namespace(), "query local completed play count");
@@ -266,17 +271,17 @@ fn request_play_count(state: &mut AppState, client: &dyn Backend) {
 /// 同帧只派一次（`DetailFrame.requested`）；移光标 / 下钻换新帧后可再派——失败的帧换走
 /// 再回即重试（驻留窗口重新触发），与 spec「预览失败驻留重试」一致。布局态未开则不派。
 fn request_detail(state: &mut AppState, client: &dyn Backend) {
-    if !state.channel_search.active.on() {
+    if !state.ui.channel_search.active.on() {
         return;
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().search().channel().detail_debounce_ms());
-    if state.channel_search.last_sel_change.elapsed() < debounce {
+    if state.ui.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
     // 取出当前帧的拉取意图 + 封面并标记已派，随即释放 channel_search 借用。
     let intent = {
-        let Some(kr) = state.channel_search.active_results_mut() else {
+        let Some(kr) = state.ui.channel_search.active_results_mut() else {
             return;
         };
         let Some(frame) = kr.detail.current_mut() else {
@@ -297,9 +302,9 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
     };
     let source = fetch.source();
     mineral_log::debug!(target: "prefetch", ?source, key = %fetch.dedup_key(), "request detail");
-    submit_detail_tasks(client, &mut state.library, fetch);
+    submit_detail_tasks(client, &mut state.models.library, fetch);
     if let Some(url) = cover {
-        state.images.prefetch([(source, url)]);
+        state.resources.images.prefetch([(source, url)]);
     }
 }
 
@@ -308,8 +313,8 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
 /// # Params:
 ///   - `state`: 当前配置、detail 列表与图片引擎
 fn request_detail_covers(state: &mut AppState) {
-    let items = collect_detail_cover_candidates(state, state.images.graphics_protocol());
-    state.images.prefetch(items);
+    let items = collect_detail_cover_candidates(state, state.resources.images.graphics_protocol());
+    state.resources.images.prefetch(items);
 }
 
 /// 驻留超过 detail 防抖窗后，按选中行优先、向两侧外扩的顺序收集封面并按 URL 去重。
@@ -322,15 +327,16 @@ fn collect_detail_cover_candidates(
     state: &AppState,
     protocol: GraphicsProtocol,
 ) -> Vec<(SourceKind, MediaUrl)> {
-    if !state.channel_search.active.on() {
+    if !state.ui.channel_search.active.on() {
         return Vec::new();
     }
     let debounce =
         std::time::Duration::from_millis(*state.cfg.tui().search().channel().detail_debounce_ms());
-    if state.channel_search.last_sel_change.elapsed() < debounce {
+    if state.ui.channel_search.last_sel_change.elapsed() < debounce {
         return Vec::new();
     }
     let Some(frame) = state
+        .ui
         .channel_search
         .active_results()
         .and_then(|results| results.detail.current())
@@ -404,7 +410,7 @@ pub(crate) fn submit_detail_tasks(
 fn selected_track_id(state: &AppState) -> Option<SongId> {
     state
         .filtered_tracks()
-        .get(state.browse.tracks.scroll.sel())
+        .get(state.ui.browse.tracks.scroll().sel())
         .map(|entry| entry.data.song.id.clone())
 }
 
@@ -412,12 +418,13 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
 fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
     let radius = *state.cfg.tui().prefetch().radius();
     let filtered = state.filtered_playlists();
-    let sel = state.browse.playlists.scroll.sel();
+    let sel = state.ui.browse.playlists.scroll().sel();
     let mut out = Vec::new();
     let mut consider = |idx: usize| {
         if let Some(p) = filtered.get(idx) {
             let id = &p.data.id;
             if state
+                .models
                 .library
                 .needs_playlist(id, PlaylistLoad::Preview, false)
             {
@@ -477,18 +484,18 @@ mod tests {
                 ..
             })
         )));
-        state.browse.nav.last_sel_change = Instant::now() - std::time::Duration::from_secs(1);
+        state.ui.browse.nav.last_sel_change = Instant::now() - std::time::Duration::from_secs(1);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "停留不请求完整歌单");
-        state.browse.nav.opened_playlist = Some(id.clone());
-        state.browse.view.switch_to(View::Library);
+        state.ui.browse.nav.opened_playlist = Some(id.clone());
+        state.ui.browse.view.switch_to(View::Library);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "进入歌单不升级为全量，也不重复首批");
         // 20 个位置仅有 19 首返回详情，下一批必须从来源指定的 20 开始。
         deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 19, Some(20));
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "刚进入首行不续页");
-        state.browse.tracks.scroll.set_sel(10);
+        state.ui.browse.tracks.select(10);
         super::request_playlist_tracks(&mut state, &client);
         let page_tasks = tasks()?;
         assert_eq!(page_tasks.len(), 4);
@@ -508,10 +515,14 @@ mod tests {
             39,
             Some(40),
         );
-        assert_eq!(state.browse.tracks.scroll.sel(), 10, "追加曲目保留当前光标");
+        assert_eq!(
+            state.ui.browse.tracks.scroll().sel(),
+            10,
+            "追加曲目保留当前光标"
+        );
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, page_tasks, "新一批到达后不自动继续拉满");
-        state.browse.tracks.scroll.set_sel(38);
+        state.ui.browse.tracks.select(38);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?.len(), 5);
         assert!(matches!(
@@ -522,11 +533,16 @@ mod tests {
             }))
         ));
         deliver_playlist_page(&mut state, &id, PlaylistLoad::More { offset: 40 }, 45, None);
-        state.browse.tracks.scroll.set_sel(44);
+        state.ui.browse.tracks.select(44);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?.len(), 5, "完整结果停止续页");
         assert_eq!(
-            state.library.playlists.first().map(|p| p.data.track_count),
+            state
+                .models
+                .library
+                .playlists
+                .first()
+                .map(|p| p.data.track_count),
             Some(10),
             "分页详情不改 playlists 的 items"
         );
@@ -540,10 +556,10 @@ mod tests {
         let mut state = crate::test_support::state_with_playlists()?;
         let client = TestClient::default();
         let id = PlaylistId::new(SourceKind::NETEASE, "p1");
-        state.browse.nav.opened_playlist = Some(id.clone());
-        state.browse.view.switch_to(View::Library);
+        state.ui.browse.nav.opened_playlist = Some(id.clone());
+        state.ui.browse.view.switch_to(View::Library);
         deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 20, Some(20));
-        state.browse.tracks.scroll.set_sel(19);
+        state.ui.browse.tracks.select(19);
         super::request_playlist_tracks(&mut state, &client);
         state.apply(&TaskEvent::PlaylistDetailFailed {
             id: id.clone(),
@@ -559,10 +575,15 @@ mod tests {
             1
         );
         assert_eq!(
-            state.library.tracks.get(&id).map(|tracks| tracks.len()),
+            state
+                .models
+                .library
+                .tracks
+                .get(&id)
+                .map(|tracks| tracks.len()),
             Some(20)
         );
-        state.browse.nav.last_sel_change = Instant::now();
+        state.ui.browse.nav.last_sel_change = Instant::now();
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(
             client
@@ -622,8 +643,8 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let mut state = AppState::test_default()?;
-        state.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
-        state.player.queue = (0..8)
+        state.resources.images = ImageEngine::disabled_kitty(Arc::clone(&state.cfg));
+        state.models.player.queue = (0..8)
             .map(|index| {
                 let mut song = song_with_cover(index)?;
                 song.name = if index % 2 == 0 { "kept" } else { "other" }.to_owned();
@@ -633,8 +654,8 @@ mod tests {
                 Ok(song)
             })
             .collect::<color_eyre::Result<Vec<_>>>()?;
-        state.playback.track = state.player.queue.first().cloned();
-        state.player.cursor = mineral_protocol::PlayCursor::InQueue(0);
+        state.models.playback.track = state.models.player.queue.first().cloned();
+        state.models.player.cursor = mineral_protocol::PlayCursor::InQueue(0);
         let mut overlays = OverlayStack::new(1);
         overlays.push(crate::app::AppOverlay::queue(0));
         overlays.dispatch_key(
@@ -673,6 +694,7 @@ mod tests {
                 .into_iter()
                 .map(|index| {
                     let song = state
+                        .models
                         .player
                         .queue
                         .get(index)
@@ -704,8 +726,8 @@ mod tests {
     /// 造一个 Library 刚选中 Bilibili 曲目的状态。
     fn selected_bilibili_state() -> color_eyre::Result<AppState> {
         let mut state = state_with_mixed_tracks()?;
-        state.browse.tracks.scroll.set_sel(1);
-        state.browse.nav.last_sel_change = Instant::now();
+        state.ui.browse.tracks.select(1);
+        state.ui.browse.nav.last_sel_change = Instant::now();
         Ok(state)
     }
 
@@ -736,7 +758,11 @@ mod tests {
             "本地统计不应提交 ChannelFetch::RemotePlayCount"
         );
         assert!(
-            state.library.local_play_counts.has_no_cached_values(),
+            state
+                .models
+                .library
+                .local_play_counts
+                .has_no_cached_values(),
             "后台结果到达前不应伪造同步值"
         );
 
@@ -745,7 +771,7 @@ mod tests {
             count: Some(7),
         });
 
-        assert_eq!(state.library.local_play_counts.get(&id), Some(&7));
+        assert_eq!(state.models.library.local_play_counts.get(&id), Some(&7));
         Ok(())
     }
 
@@ -769,13 +795,13 @@ mod tests {
         state.apply_track_finished(&bilibili, FinishReason::Eof);
         request_play_count(&mut state, &client);
 
-        state.browse.tracks.scroll.set_sel(0);
+        state.ui.browse.tracks.select(0);
         request_play_count(&mut state, &client);
 
-        state.browse.tracks.scroll.set_sel(1);
+        state.ui.browse.tracks.select(1);
         request_play_count(&mut state, &client);
 
-        state.browse.tracks.scroll.set_sel(0);
+        state.ui.browse.tracks.select(0);
         request_play_count(&mut state, &client);
         state.apply(&TaskEvent::LocalPlayCountFetched {
             song_id: netease.clone(),
@@ -783,10 +809,10 @@ mod tests {
         });
         request_play_count(&mut state, &client);
 
-        state.browse.tracks.scroll.set_sel(1);
+        state.ui.browse.tracks.select(1);
         request_play_count(&mut state, &client);
 
-        state.browse.tracks.scroll.set_sel(0);
+        state.ui.browse.tracks.select(0);
         request_play_count(&mut state, &client);
 
         assert_eq!(
@@ -797,6 +823,7 @@ mod tests {
         );
         assert_eq!(
             state
+                .models
                 .library
                 .local_play_counts
                 .get(&SongId::new(SourceKind::BILIBILI, "b1")),
@@ -824,12 +851,12 @@ mod tests {
         });
         request_play_count(&mut state, &client);
 
-        state.browse.view.switch_to(View::Playlists);
+        state.ui.browse.view.switch_to(View::Playlists);
         request_play_count(&mut state, &client);
-        state.browse.view.switch_to(View::Library);
+        state.ui.browse.view.switch_to(View::Library);
         request_play_count(&mut state, &client);
 
-        assert_eq!(state.library.local_play_counts.get(&id), None);
+        assert_eq!(state.models.library.local_play_counts.get(&id), None);
         assert_eq!(
             *queries
                 .lock()
@@ -873,7 +900,13 @@ mod tests {
                 .map_err(|e| color_eyre::eyre::eyre!("任务探针锁中毒: {e}"))?
                 .is_empty()
         );
-        assert!(state.library.local_play_counts.has_no_cached_values());
+        assert!(
+            state
+                .models
+                .library
+                .local_play_counts
+                .has_no_cached_values()
+        );
         Ok(())
     }
 
@@ -882,12 +915,12 @@ mod tests {
     #[test]
     fn collects_playing_track_and_queue_neighbors() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.browse.view.switch_to(View::Playlists);
+        state.ui.browse.view.switch_to(View::Playlists);
         let queue = (0..10)
             .map(song_with_cover)
             .collect::<color_eyre::Result<Vec<Song>>>()?;
-        state.playback.track = queue.get(5).cloned();
-        state.player.queue = queue;
+        state.models.playback.track = queue.get(5).cloned();
+        state.models.player.queue = queue;
 
         // 在播曲 idx 5,半径 3 → idx 2..=8 应全部入集。
         for i in 2..=8 {
@@ -906,9 +939,9 @@ mod tests {
     #[test]
     fn collects_playing_track_even_when_absent_from_queue() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.browse.view.switch_to(View::Playlists);
-        state.player.queue = Vec::new();
-        state.playback.track = Some(song_with_cover(42)?);
+        state.ui.browse.view.switch_to(View::Playlists);
+        state.models.player.queue = Vec::new();
+        state.models.playback.track = Some(song_with_cover(42)?);
 
         assert!(collected_has(&state, 42)?, "在播曲不在队列时仍应单独入集");
         Ok(())
@@ -940,7 +973,8 @@ mod tests {
         let fetcher = CoverFetcher::spawn(cfg.tui().cover().clone(), /*capacity*/ 0, None).await?;
         let mut state = AppState::test_default()?;
         state.cfg = Arc::clone(&cfg);
-        state.images = ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty((8, 16)));
+        state.resources.images =
+            ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty((8, 16)));
 
         let playing = Song::builder()
             .id(SongId::new(SourceKind::NETEASE, "playing"))
@@ -950,13 +984,13 @@ mod tests {
         // 队列第二首无封面:本 tick 唯一可能的解码目标就是在播曲封面自己。
         let mut no_cover = song_with_cover(1)?;
         no_cover.cover_url = None;
-        state.player.queue = vec![playing.clone(), no_cover];
-        state.playback.track = Some(playing);
+        state.models.player.queue = vec![playing.clone(), no_cover];
+        state.models.playback.track = Some(playing);
 
         super::tick(&mut state, &TestClient::default(), Vec::new());
         let ready = tokio::time::timeout(Duration::from_secs(5), async {
-            while !state.images.palettes.contains_key(&url) {
-                state.images.tick(
+            while !state.resources.images.palettes.contains_key(&url) {
+                state.resources.images.tick(
                     Some(url.clone()),
                     /*advance*/ None,
                     /*fullscreen_stable*/ false,
@@ -982,9 +1016,9 @@ mod tests {
         use crate::test_support::entry_views;
 
         let mut state = AppState::test_default()?;
-        state.browse.view.switch_to(View::Playlists);
+        state.ui.browse.view.switch_to(View::Playlists);
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-        state.library.playlists = vec![PlaylistView {
+        state.models.library.playlists = vec![PlaylistView {
             data: Playlist::builder()
                 .id(pid.clone())
                 .name("pl".to_owned())
@@ -995,7 +1029,7 @@ mod tests {
             .map(song_with_cover)
             .collect::<color_eyre::Result<Vec<Song>>>()?;
         let views = entry_views(songs);
-        state.library.tracks.insert(
+        state.models.library.tracks.insert(
             pid,
             crate::runtime::state::PlaylistTracks {
                 entries: views,
@@ -1003,7 +1037,7 @@ mod tests {
                 next_offset: None,
             },
         );
-        state.browse.playlists.scroll.set_sel(0);
+        state.ui.browse.playlists.select(0);
 
         assert!(
             collected_has(&state, 0)?,
@@ -1034,10 +1068,10 @@ mod tests {
                 ]))
                 .build(),
         );
-        state.caps = caps;
-        state.channel_search.enter(&state.caps);
-        state.channel_search.active.set(true);
-        if let Some(s) = state.channel_search.current_mut() {
+        state.models.caps = caps;
+        state.ui.channel_search.enter(&state.models.caps);
+        state.ui.channel_search.active.set(true);
+        if let Some(s) = state.ui.channel_search.current_mut() {
             s.set_query("q");
         }
         let album = mineral_model::Album::builder()
@@ -1053,7 +1087,7 @@ mod tests {
             has_more: None,
         });
         // 把选中时刻推到过去，越过 detail 驻留防抖窗（checked_sub 防单调时钟下溢）。
-        state.channel_search.last_sel_change = Instant::now()
+        state.ui.channel_search.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
         Ok(state)
@@ -1074,6 +1108,7 @@ mod tests {
     ///   - `state`: 已进入搜索布局并载入结果的测试状态
     fn detail_cover_frame(state: &mut AppState) -> color_eyre::Result<&mut DetailFrame> {
         state
+            .ui
             .channel_search
             .active_results_mut()
             .and_then(|results| results.detail.current_mut())
@@ -1275,12 +1310,12 @@ mod tests {
         state.cfg = prefetch_radius_config(2)?;
         assert!(!collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty).is_empty());
 
-        let settled_selection = state.channel_search.last_sel_change;
-        state.channel_search.last_sel_change = Instant::now();
+        let settled_selection = state.ui.channel_search.last_sel_change;
+        state.ui.channel_search.last_sel_change = Instant::now();
         assert!(collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty).is_empty());
 
-        state.channel_search.last_sel_change = settled_selection;
-        state.channel_search.active.set(false);
+        state.ui.channel_search.last_sel_change = settled_selection;
+        state.ui.channel_search.active.set(false);
         assert!(collect_detail_cover_candidates(&state, GraphicsProtocol::Kitty).is_empty());
         Ok(())
     }
@@ -1336,7 +1371,7 @@ mod tests {
     #[test]
     fn request_detail_skips_when_inactive() -> color_eyre::Result<()> {
         let mut state = searching_album_state()?;
-        state.channel_search.active.set(false);
+        state.ui.channel_search.active.set(false);
         let tasks = drive_detail(&mut state)?;
         assert!(tasks.is_empty(), "未进 search 布局态不派 detail");
         Ok(())
@@ -1346,7 +1381,7 @@ mod tests {
     #[test]
     fn request_detail_holds_within_dwell_window() -> color_eyre::Result<()> {
         let mut state = searching_album_state()?;
-        state.channel_search.last_sel_change = std::time::Instant::now();
+        state.ui.channel_search.last_sel_change = std::time::Instant::now();
         let tasks = drive_detail(&mut state)?;
         assert!(tasks.is_empty(), "驻留窗内不应派 detail");
         Ok(())

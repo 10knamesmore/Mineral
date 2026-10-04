@@ -79,12 +79,12 @@ impl App {
     ///
     /// queue 浮层不在此(它走 overlay 路由,见 [`App::open_queue_copy_menu`]),是唯一接缝。
     pub(crate) fn current_list_selection(&self) -> Option<ListSelection> {
-        if self.state.browse.fullscreen.on() {
+        if self.state.ui.browse.fullscreen.on() {
             return None;
         }
-        if self.state.channel_search.active.on() {
-            let entity = self.state.channel_search.selected_entity()?;
-            return match self.state.channel_search.focus {
+        if self.state.ui.channel_search.active.on() {
+            let entity = self.state.ui.channel_search.selected_entity()?;
+            return match self.state.ui.channel_search.focus {
                 SearchFocus::Results => Some(ListSelection {
                     entity,
                     anchor: self.search_row_anchor()?,
@@ -101,7 +101,7 @@ impl App {
                 SearchFocus::Prompt => None,
             };
         }
-        match self.state.browse.view.current() {
+        match self.state.ui.browse.view.current() {
             View::Library => Some(ListSelection {
                 entity: EntityRef::Song(Box::new(self.selected_track_song()?)),
                 anchor: self.library_row_anchor(),
@@ -145,7 +145,7 @@ impl App {
     /// 与全站复制同一套;queue 是 [`Self::current_list_selection`] resolver 之外的唯一接缝
     /// (浮层持私有光标,锚点只能由它自算后随动作带回)。
     pub(crate) fn open_queue_copy_menu(&mut self, idx: usize, anchor: Rect) {
-        let Some(song) = self.state.player.queue.get(idx).cloned() else {
+        let Some(song) = self.state.models.player.queue.get(idx).cloned() else {
             return;
         };
         let items = self.copy_items(&EntityRef::Song(Box::new(song)));
@@ -166,7 +166,7 @@ impl App {
     /// 菜单分三段——本行操作 / 整队操作 / 脚本变换。**不放** "Play now" 与 "Favorite":
     /// 激活键与收藏键已经能做同样的事,进菜单只让列表变长而不增加能力。
     pub(crate) fn open_queue_action_menu(&mut self, idx: usize, anchor: Rect) {
-        let Some(song) = self.state.player.queue.get(idx).cloned() else {
+        let Some(song) = self.state.models.player.queue.get(idx).cloned() else {
             return;
         };
         let at = QueueAnchor::new(idx, song.id.clone());
@@ -326,6 +326,7 @@ impl App {
             }
             SurfaceKind::SearchResults => {
                 self.state
+                    .ui
                     .channel_search
                     .active_results()
                     .and_then(|kr| match &kr.results {
@@ -342,6 +343,7 @@ impl App {
             // 走容器动作不取此）。
             SurfaceKind::SearchDetail => self
                 .state
+                .ui
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
@@ -365,8 +367,8 @@ impl App {
                     name: Some(p.data.name.clone()),
                 },
             ),
-            SurfaceKind::SearchResults => self.state.channel_search.search_context(),
-            SurfaceKind::SearchDetail => self.state.channel_search.detail_context(),
+            SurfaceKind::SearchResults => self.state.ui.channel_search.search_context(),
+            SurfaceKind::SearchDetail => self.state.ui.channel_search.detail_context(),
             SurfaceKind::BrowsePlaylists => mineral_protocol::QueueContextWire::Unknown,
         }
     }
@@ -375,7 +377,7 @@ impl App {
     /// 声明模板者)与模板。全站(browse / search results / search detail / queue)共用。
     fn copy_items(&self, entity: &EntityRef) -> Vec<MenuItem> {
         let templates = self.state.cfg.tui().copy().templates();
-        let caps = self.state.caps.get(&entity_source(entity));
+        let caps = self.state.models.caps.get(&entity_source(entity));
         match entity {
             EntityRef::Song(song) => {
                 let url = caps.and_then(|c| c.song_web_url().as_deref());
@@ -396,6 +398,7 @@ impl App {
                 if pl.entries.is_empty() {
                     pl.entries = self
                         .state
+                        .models
                         .library
                         .tracks
                         .get(&pl.id)
@@ -435,7 +438,7 @@ impl App {
     /// Referer / UA,裸链接贴出去 403)拼成 curl 片段,无头源给裸 URL / 本地路径。
     /// 非在播歌没有随 current snapshot 下发的 direct media,因此不提供该项。
     fn stream_copy_item(&self, song_id: &mineral_model::SongId) -> Option<MenuItem> {
-        let direct = self.state.playback.direct_media.as_ref()?;
+        let direct = self.state.models.playback.direct_media.as_ref()?;
         if &direct.info().song_id != song_id {
             return None;
         }
@@ -462,8 +465,8 @@ impl App {
     ///
     /// 走结果列的 [`ScrollList`] 读取 offset 还原屏幕行，与左栏 `row_anchor` 使用同一算法。
     fn search_row_anchor(&self) -> Option<Rect> {
-        let panel = compute_search(self.state.frame_area, self.state.cfg.tui().layout()).left;
-        let kr = self.state.channel_search.active_results()?;
+        let panel = compute_search(self.state.ui.frame_area, self.state.cfg.tui().layout()).left;
+        let kr = self.state.ui.channel_search.active_results()?;
         Some(row_anchor(panel, kr.list(), kr.len()))
     }
 
@@ -473,9 +476,9 @@ impl App {
     /// block 边框，[`borderless_row_anchor`] 据此还原行 y）。`.right` 为 `Option`（搜索布局恒
     /// `Some`）、空栈无栈顶帧 → `None`。
     fn search_detail_row_anchor(&self) -> Option<Rect> {
-        let kr = self.state.channel_search.active_results()?;
+        let kr = self.state.ui.channel_search.active_results()?;
         let dframe = kr.detail.current()?;
-        let panel = compute_search(self.state.frame_area, self.state.cfg.tui().layout()).right?;
+        let panel = compute_search(self.state.ui.frame_area, self.state.cfg.tui().layout()).right?;
         let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
         let list_area = detail_list_area(panel_inner(panel), is_artist);
         Some(borderless_row_anchor(
@@ -489,7 +492,7 @@ impl App {
     fn selected_track_song(&self) -> Option<Song> {
         self.state
             .filtered_tracks()
-            .get(self.state.browse.tracks.scroll.sel())
+            .get(self.state.ui.browse.tracks.scroll().sel())
             .map(|entry| entry.data.song.clone())
     }
 
@@ -497,7 +500,7 @@ impl App {
     fn library_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            &self.state.browse.tracks.scroll,
+            self.state.ui.browse.tracks.scroll(),
             self.state.filtered_tracks().len(),
         )
     }
@@ -506,14 +509,14 @@ impl App {
     fn playlist_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            &self.state.browse.playlists.scroll,
+            self.state.ui.browse.playlists.scroll(),
             self.state.filtered_playlists().len(),
         )
     }
 
     /// 由上一帧面积重算浏览态布局,取左栏面板矩形。
     fn left_panel(&self) -> Rect {
-        compute(self.state.frame_area, self.state.cfg.tui().layout()).left
+        compute(self.state.ui.frame_area, self.state.cfg.tui().layout()).left
     }
 }
 
@@ -951,7 +954,12 @@ mod tests {
     #[test]
     fn filtered_o_menu_play_defaults_to_full_collection() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.browse.tracks.search.set_query("Gjs");
+        app.state
+            .ui
+            .browse
+            .tracks
+            .test_search_mut()
+            .set_query("Gjs");
         let want_id = app
             .state
             .filtered_tracks()
@@ -979,7 +987,12 @@ mod tests {
     fn filtered_o_menu_play_can_play_matches_only() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
         set_filter_play_scope(&mut app, "matches")?;
-        app.state.browse.tracks.search.set_query("Gjs");
+        app.state
+            .ui
+            .browse
+            .tracks
+            .test_search_mut()
+            .set_query("Gjs");
         let want_id = app
             .state
             .filtered_tracks()
@@ -1040,7 +1053,7 @@ mod tests {
         assert_eq!(app.overlays.len(), 1, "Playlists 歌单 o 弹容器操作菜单");
 
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.browse.fullscreen.set(true);
+        app.state.ui.browse.fullscreen.set(true);
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 0, "全屏态屏蔽操作菜单");
         Ok(())
@@ -1142,7 +1155,7 @@ mod tests {
             .first()
             .map(|entry| entry.data.song.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有首曲"))?;
-        app.state.playback.direct_media = Some(mineral_model::DirectMedia::remote(
+        app.state.models.playback.direct_media = Some(mineral_model::DirectMedia::remote(
             mineral_model::PlaybackMediaInfo {
                 song_id: playing.id.clone(),
                 bitrate_bps: None,
@@ -1396,7 +1409,7 @@ mod tests {
     #[test]
     fn y_in_search_anchors_copy_menu_to_result_row() -> color_eyre::Result<()> {
         let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Song])?;
-        if let Some(session) = app.state.channel_search.current_mut() {
+        if let Some(session) = app.state.ui.channel_search.current_mut() {
             session.set_kind(SearchKind::Song);
             session.apply_page(
                 SearchKind::Song,
@@ -1408,14 +1421,14 @@ mod tests {
                 kr.set_sel(2);
             }
         }
-        app.state.channel_search.set_focus(SearchFocus::Results);
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
         // 准备一帧确定 frame_area(锚点计算依赖)。
         draw_once(&mut app)?;
 
         let anchor = app
             .search_row_anchor()
             .ok_or_else(|| color_eyre::eyre::eyre!("有结果时应能算出锚点"))?;
-        let results = compute_search(app.state.frame_area, app.state.cfg.tui().layout()).left;
+        let results = compute_search(app.state.ui.frame_area, app.state.cfg.tui().layout()).left;
         assert_eq!(anchor.x, results.x + 1, "锚点在 results 面板内(去左边框)");
         assert_eq!(
             anchor.y,
@@ -1433,7 +1446,7 @@ mod tests {
     fn o_in_search_results_opens_action_menu_for_song_and_container() -> color_eyre::Result<()> {
         // Song 结果:o 弹菜单。
         let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Song])?;
-        if let Some(session) = app.state.channel_search.current_mut() {
+        if let Some(session) = app.state.ui.channel_search.current_mut() {
             session.set_kind(SearchKind::Song);
             session.apply_page(
                 SearchKind::Song,
@@ -1442,14 +1455,14 @@ mod tests {
                 /*has_more*/ None,
             );
         }
-        app.state.channel_search.set_focus(SearchFocus::Results);
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
         draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 1, "结果列 Song 的 o 应弹操作菜单");
 
         // Album 容器结果:o 弹容器菜单(Play all / Append all)。
         let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Album])?;
-        if let Some(session) = app.state.channel_search.current_mut() {
+        if let Some(session) = app.state.ui.channel_search.current_mut() {
             session.set_kind(SearchKind::Album);
             session.apply_page(
                 SearchKind::Album,
@@ -1463,7 +1476,7 @@ mod tests {
                 /*has_more*/ None,
             );
         }
-        app.state.channel_search.set_focus(SearchFocus::Results);
+        app.state.ui.channel_search.set_focus(SearchFocus::Results);
         draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 1, "Album 容器 o 应弹容器操作菜单");
@@ -1484,7 +1497,7 @@ mod tests {
     fn app_in_album_detail() -> color_eyre::Result<App> {
         let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Album])?;
         let al_id = AlbumId::new(SourceKind::NETEASE, "al1");
-        if let Some(session) = app.state.channel_search.current_mut() {
+        if let Some(session) = app.state.ui.channel_search.current_mut() {
             session.set_kind(SearchKind::Album);
             session.apply_page(
                 SearchKind::Album,
@@ -1501,7 +1514,7 @@ mod tests {
                 kr.fill_album_detail(&al_id, &album_with_tracks(&al_id, 3));
             }
         }
-        app.state.channel_search.set_focus(SearchFocus::Detail);
+        app.state.ui.channel_search.set_focus(SearchFocus::Detail);
         draw_once(&mut app)?;
         Ok(app)
     }
@@ -1522,7 +1535,7 @@ mod tests {
         let anchor = app
             .search_detail_row_anchor()
             .ok_or_else(|| color_eyre::eyre::eyre!("有详情应能算出锚点"))?;
-        let right = compute_search(app.state.frame_area, app.state.cfg.tui().layout())
+        let right = compute_search(app.state.ui.frame_area, app.state.cfg.tui().layout())
             .right
             .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail 面板"))?;
         assert!(

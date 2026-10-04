@@ -24,7 +24,7 @@ fn input<'a>(
     let playlist = browse.selected_playlist_in_list(model);
     let track = browse
         .filtered_tracks(model)
-        .get(browse.tracks.scroll.sel());
+        .get(browse.tracks.scroll().sel());
     let tracks = playlist.and_then(|p| library.tracks.get(&p.data.id));
     NowPlayingInput {
         playlist,
@@ -35,11 +35,11 @@ fn input<'a>(
         upcoming_cover: tracks
             .and_then(|tracks| tracks.first())
             .and_then(|entry| entry.data.song.cover_url.clone()),
-        duration_ms: tracks.map(|tracks| {
+        duration_ms: tracks.and_then(|tracks| {
             tracks
                 .iter()
                 .filter_map(|entry| entry.data.song.duration_ms)
-                .sum()
+                .reduce(|total, duration| total + duration)
         }),
         switch: browse.view,
     }
@@ -48,20 +48,20 @@ fn input<'a>(
 /// 构造只读面板。
 pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> NowPlayingView<'a> {
     NowPlayingView {
-        panel: &state.browse.now_playing,
+        panel: &state.ui.browse.now_playing,
         input: input(
-            &state.browse,
-            &state.library,
-            &state.playback,
+            &state.ui.browse,
+            &state.models.library,
+            &state.models.playback,
             &state.cfg,
-            state.images.ready(),
+            state.resources.images.ready(),
         ),
         frame: FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
-        images: state.images.ready(),
+        images: state.resources.images.ready(),
         phase: state.image_render_phase(),
     }
 }
@@ -69,23 +69,23 @@ pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> NowPlayingView<
 /// 准备局部状态与图片需求。
 pub(crate) fn prepare(area: Rect, state: &mut AppState, cover_in_flight: bool) {
     let input = input(
-        &state.browse,
-        &state.library,
-        &state.playback,
+        &state.ui.browse,
+        &state.models.library,
+        &state.models.playback,
         &state.cfg,
-        state.images.ready(),
+        state.resources.images.ready(),
     );
-    let mut images = ImageNeeds::new(state.images.ready());
+    let mut images = ImageNeeds::new(state.resources.images.ready());
     let phase = state.image_render_phase();
-    state.browse.now_playing.prepare(
+    state.ui.browse.now_playing.prepare(
         area,
         &input,
-        state.frame_now,
+        state.ui.frame_now,
         &mut images,
         phase,
         cover_in_flight,
     );
-    state.images.reconcile(images.finish());
+    state.resources.images.reconcile(images.finish());
 }
 
 /// 绘制当前选择的面板。
@@ -108,7 +108,7 @@ pub(crate) fn draw(
 
 /// 返回面板当前主封面的 URL。
 pub(crate) fn url(state: &AppState) -> Option<MediaUrl> {
-    url_for_view(state, state.browse.view.current())
+    url_for_view(state, state.ui.browse.view.current())
 }
 
 /// 返回指定视图的选中项封面，供过渡两端独立取图。
@@ -121,14 +121,14 @@ pub(crate) fn url_for_view(state: &AppState, view: View) -> Option<MediaUrl> {
         View::Playlists => {
             let playlist = state.selected_playlist_in_list()?;
             crate::image::collage::effective_cover_url(
-                &state.library,
-                state.images.ready(),
+                &state.models.library,
+                state.resources.images.ready(),
                 &playlist.data,
             )
         }
         View::Library => {
             let tracks = state.filtered_tracks();
-            let song = &tracks.get(state.browse.tracks.scroll.sel())?.data.song;
+            let song = &tracks.get(state.ui.browse.tracks.scroll().sel())?.data.song;
             song.cover_url.clone()
         }
     }

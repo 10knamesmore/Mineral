@@ -22,3 +22,6 @@ pub(crate) mod flight;
 mod status;
 
 pub(crate) mod search;
+
+mod root;
+pub(crate) use root::RootView;

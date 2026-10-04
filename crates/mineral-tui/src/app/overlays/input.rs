@@ -11,40 +11,40 @@ pub(crate) fn environment<'a>(state: &'a AppState, theme: &'a Theme) -> OverlayE
         frame: FrameEnv {
             config: &state.cfg,
             theme,
-            now: state.frame_now,
+            now: state.ui.frame_now,
         },
-        dock_right: state.browse.fullscreen.on(),
+        dock_right: state.ui.browse.fullscreen.on(),
     }
 }
 
 /// 队列不借用整个播放器或歌曲库，只接收本面板实际使用的事实。
 pub(crate) fn queue(state: &AppState) -> QueueInput<'_> {
     QueueInput {
-        queue: &state.player.queue,
+        queue: &state.models.player.queue,
         current: state.queue_current_index(),
-        attached: state.player.cursor.is_attached(),
-        position_ms: state.playback.position_ms,
-        playing: state.playback.playing,
-        liked: &state.library.liked_ids,
+        attached: state.models.player.cursor.is_attached(),
+        position_ms: state.models.playback.position_ms,
+        playing: state.models.playback.playing,
+        liked: &state.models.library.liked_ids,
         cfg: &state.cfg,
-        now: state.now,
-        frame_now: state.frame_now,
+        now: state.ui.now,
+        frame_now: state.ui.frame_now,
         panel_area: dock_full_rect(
-            state.frame_area,
+            state.ui.frame_area,
             state.cfg.tui().layout(),
-            state.browse.fullscreen.on(),
+            state.ui.browse.fullscreen.on(),
         ),
-        images: state.images.ready(),
+        images: state.resources.images.ready(),
     }
 }
 
 /// 下载面板只借用当前明细和汇总。
 pub(crate) fn downloads(state: &AppState) -> DownloadInput<'_> {
     DownloadInput {
-        downloads: &state.downloads,
-        downloads_summary: &state.downloads_summary,
+        downloads: &state.models.downloads,
+        downloads_summary: &state.models.downloads_summary,
         cfg: &state.cfg,
-        frame_now: state.frame_now,
+        frame_now: state.ui.frame_now,
     }
 }
 
@@ -68,7 +68,7 @@ pub(crate) fn all(state: &AppState) -> OverlayInputs<'_> {
     OverlayInputs {
         queue: queue(state),
         downloads: downloads(state),
-        output: state.playback.output.as_deref(),
+        output: state.models.playback.output.as_deref(),
         behavior: state.cfg.tui().behavior(),
     }
 }
