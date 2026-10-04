@@ -24,6 +24,9 @@ struct Entry {
 
     /// 上次被准备入口登记的单调序号;最小者最久未用,优先逐出。
     last_used: u64,
+
+    /// 这份像素写入时的序号，不随可见性记账改变。
+    revision: u64,
 }
 
 /// 封面像素缓存:字节预算 LRU。
@@ -70,6 +73,11 @@ impl CoverCache {
     pub(crate) fn get(&self, url: &MediaUrl) -> Option<&Arc<DynamicImage>> {
         let entry = self.entries.get(url)?;
         Some(&entry.image)
+    }
+
+    /// 已解码内容的版本；逐出后缺失，重新装入会得到新版本。
+    pub(crate) fn revision(&self, url: &MediaUrl) -> Option<u64> {
+        self.entries.get(url).map(|entry| entry.revision)
     }
 
     /// 是否已缓存该 URL。**不**更新 LRU 顺序(探测用,非显示,不该借此续命)。
@@ -149,6 +157,7 @@ impl CoverCache {
                 fingerprint,
                 bytes,
                 last_used,
+                revision: last_used,
             },
         ) {
             self.total_bytes = self.total_bytes.saturating_sub(old.bytes);

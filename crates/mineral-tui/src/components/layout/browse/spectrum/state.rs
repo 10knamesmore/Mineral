@@ -64,7 +64,7 @@ struct ColorParams {
 ///
 /// 命令只有 [`SpectrumState::begin_cover_transition`] / [`SpectrumState::clear_cover`] 两个,
 /// "当前是哪张封面"的身份判定全在 app 层,故本态机能脱离播放器单测。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum SpectrumColor {
     /// 默认 / 无封面:全列同色,沿用 `hue_phase` 驱动的色相漂移(现状逐像素等价)。
     Hue,
@@ -322,6 +322,37 @@ pub struct SpectrumState {
 
     /// 时间制旋钮折算后的运行时拍数/系数(构造时由 `cfg` + 帧间隔派生)。
     timing: Timing,
+}
+
+impl crate::components::lifecycle::PaintView for SpectrumState {
+    /// 声明各画法读取的显示数据，不比较 FFT carry、峰值速度或缓存记账。
+    fn dependencies(
+        &self,
+        _area: ratatui::layout::Rect,
+        _env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&self.cfg);
+        inputs.observe(&(self.timing.hue_cycle_ticks, self.timing.fade_ticks));
+        inputs.observe(&self.bars);
+        inputs.observe(&self.peaks);
+        inputs.observe(&self.peak_pos);
+        inputs.observe(&self.hue_phase);
+        inputs.observe(&self.color);
+        inputs.observe(&self.water_hist);
+        inputs.observe(&self.terrain.layers);
+        inputs.observe(&(self.terrain_scroll_phase(), self.terrain_progress()));
+        inputs.observe(&self.wave);
+    }
+
+    fn paint(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: ratatui::layout::Rect,
+        env: crate::components::frame::FrameEnv<'_>,
+    ) {
+        super::draw(frame, area, self, env.theme);
+    }
 }
 
 impl SpectrumState {

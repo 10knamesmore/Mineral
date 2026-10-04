@@ -9,7 +9,7 @@ use mineral_model::SourceKind;
 use ratatui::style::{Color, Modifier, Style};
 
 /// 一组完整的 UI 颜色 token。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// 主背景。
     pub base: Color,
@@ -71,7 +71,7 @@ pub struct Theme {
 }
 
 /// 文本层级 alpha,千分比。四档语义与静态 token 的对应关系见各字段。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextAlpha {
     /// 次级文本(≈ `subtext`)。
     pub strong: u16,

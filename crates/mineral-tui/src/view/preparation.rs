@@ -1,10 +1,11 @@
 //! 主视图的准备与只读借用：按页面组合调用组件准备，终端提交由主循环单独执行。
 
 use crate::app::App;
-use crate::components::layout::browse::{lyrics, spectrum};
+use crate::components::layout::browse::lyrics;
 use crate::components::layout::flight;
 use crate::components::layout::shared::compute::{compute, compute_fullscreen, compute_search};
 use crate::components::layout::shared::transform;
+use crate::components::lifecycle::{Component, ComponentView};
 use crate::image::{ImageContent, ImageRenderPhase};
 use crate::render::ambient::{self, AmbientField};
 use crate::runtime::state::AppState;
@@ -20,25 +21,27 @@ pub(crate) struct FrameView<'a> {
     pub(super) browse: super::browse::BrowseView<'a>,
 
     /// 选中项详情视图。
-    pub(super) selected: crate::components::layout::browse::now_playing::NowPlayingView<'a>,
+    pub(super) selected:
+        ComponentView<'a, crate::components::layout::browse::now_playing::NowPlayingView<'a>>,
 
     /// 歌词组件视图。
-    pub(super) lyrics: crate::components::layout::browse::lyrics::LyricsView<'a>,
+    pub(super) lyrics: ComponentView<'a, crate::components::layout::browse::lyrics::LyricsView<'a>>,
 
     /// 搜索结果与输入视图。
-    pub(super) search: crate::components::layout::search::SearchView<'a>,
+    pub(super) search: ComponentView<'a, crate::components::layout::search::SearchView<'a>>,
 
     /// 当前详情栈。
     pub(super) detail: crate::components::layout::search::detail::DetailView<'a>,
 
     /// 播放栏视图。
-    pub(super) transport: crate::components::layout::shared::transport::TransportView<'a>,
+    pub(super) transport:
+        ComponentView<'a, crate::components::layout::shared::transport::TransportView<'a>>,
 
     /// 顶栏事实。
     pub(super) status: crate::components::layout::shared::top_status::StatusInput<'a>,
 
     /// 频谱的本帧显示状态。
-    pub(super) spectrum: &'a crate::components::layout::browse::spectrum::SpectrumState,
+    pub(super) spectrum: &'a Component<crate::components::layout::browse::spectrum::SpectrumState>,
 
     /// 全屏页面过渡。
     pub(super) fullscreen: &'a crate::render::anim::Toggle,
@@ -77,7 +80,7 @@ pub(crate) struct FrameView<'a> {
     pub(super) overlays: &'a crate::components::popup::OverlayStack<crate::app::AppOverlay>,
 
     /// 已更新生命周期的通知。
-    pub(super) notifications: &'a crate::components::toast::notifications::Notifications,
+    pub(super) notifications: &'a Component<crate::components::toast::notifications::Notifications>,
 
     /// 通知关闭键提示。
     pub(super) notice_hint: &'a str,
@@ -121,7 +124,7 @@ impl App {
                 field.color_at(rect.x + rect.width / 2, rect.y + rect.height / 2)
             })
         };
-        if !self.state.ui.browse.fullscreen.at_min() {
+        let (spectrum_area, transport_area) = if !self.state.ui.browse.fullscreen.at_min() {
             if self.state.ui.browse.fullscreen.at_max() {
                 if let Some(cover) = full.cover {
                     prepare_fullscreen_cover(cover, full.cover, &mut self.state);
@@ -133,15 +136,10 @@ impl App {
                         &self.theme,
                         lyrics::LyricMode::Immersive,
                         sample,
+                        advance,
                     );
                 }
-                if let Some(spectrum) = full.spectrum {
-                    spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
-                }
-                self.state
-                    .ui
-                    .transport
-                    .prepare(full.transport, &self.state.models.playback, now);
+                (full.spectrum, full.transport)
             } else {
                 let current = transform::morph_areas(
                     &normal,
@@ -151,7 +149,13 @@ impl App {
                 let flight = crate::view::flight::plan_fullscreen(&normal, &full, &self.state);
                 crate::view::browse::prepare(normal.left, &mut self.state, &self.theme, advance);
                 if let Some(right) = normal.right {
-                    crate::view::now_playing::prepare(right, &mut self.state, flight.is_some());
+                    crate::view::now_playing::prepare(
+                        right,
+                        &mut self.state,
+                        &self.theme,
+                        flight.is_some(),
+                        advance,
+                    );
                 }
                 if let Some(plan) = flight {
                     let mut images =
@@ -168,6 +172,7 @@ impl App {
                         &self.theme,
                         lyrics::LyricMode::Compact,
                         sample,
+                        advance,
                     );
                 }
                 if let Some(lyric) = full.lyrics {
@@ -177,16 +182,10 @@ impl App {
                         &self.theme,
                         lyrics::LyricMode::Immersive,
                         sample,
+                        advance,
                     );
                 }
-                if let Some(spectrum) = current.spectrum {
-                    spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
-                }
-                self.state.ui.transport.prepare(
-                    current.transport,
-                    &self.state.models.playback,
-                    now,
-                );
+                (current.spectrum, current.transport)
             }
         } else if !self.state.ui.channel_search.active.at_min() {
             let moving = !self.state.ui.channel_search.active.at_max();
@@ -196,7 +195,13 @@ impl App {
             if moving {
                 crate::view::browse::prepare(normal.left, &mut self.state, &self.theme, advance);
                 if let Some(right) = normal.right {
-                    crate::view::now_playing::prepare(right, &mut self.state, flight.is_some());
+                    crate::view::now_playing::prepare(
+                        right,
+                        &mut self.state,
+                        &self.theme,
+                        flight.is_some(),
+                        advance,
+                    );
                 }
                 if let Some(lyric) = normal.lyrics {
                     crate::view::lyrics::prepare(
@@ -205,10 +210,8 @@ impl App {
                         &self.theme,
                         lyrics::LyricMode::Compact,
                         sample,
+                        advance,
                     );
-                }
-                if let Some(spectrum) = normal.spectrum {
-                    spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
                 }
             }
             crate::view::search::prepare(
@@ -229,14 +232,20 @@ impl App {
                 &search,
                 self.state.ui.channel_search.active.eased_in_out(),
             );
-            self.state
-                .ui
-                .transport
-                .prepare(current.transport, &self.state.models.playback, now);
+            (
+                if moving { normal.spectrum } else { None },
+                current.transport,
+            )
         } else {
             crate::view::browse::prepare(normal.left, &mut self.state, &self.theme, advance);
             if let Some(right) = normal.right {
-                crate::view::now_playing::prepare(right, &mut self.state, false);
+                crate::view::now_playing::prepare(
+                    right,
+                    &mut self.state,
+                    &self.theme,
+                    false,
+                    advance,
+                );
             }
             if let Some(lyric) = normal.lyrics {
                 crate::view::lyrics::prepare(
@@ -245,16 +254,30 @@ impl App {
                     &self.theme,
                     lyrics::LyricMode::Compact,
                     sample,
+                    advance,
                 );
             }
-            if let Some(spectrum) = normal.spectrum {
-                spectrum::prepare(spectrum, &mut self.state.ui.spectrum);
-            }
-            self.state
-                .ui
-                .transport
-                .prepare(normal.transport, &self.state.models.playback, now);
+            (normal.spectrum, normal.transport)
+        };
+        let mut cx = crate::components::frame::PrepareCx {
+            frame: crate::components::frame::FrameEnv {
+                config: &self.state.cfg,
+                theme: &self.theme,
+                now,
+            },
+            images: crate::image::ImageNeeds::new(self.state.resources.images.ready()),
+            motion: crate::runtime::scroll::list::ScrollMotion::Frozen,
+            image_phase: self.state.image_render_phase(),
+            advance,
+        };
+        if let Some(area) = spectrum_area {
+            self.state.ui.spectrum.prepare(area, (), &mut cx);
         }
+        self.state
+            .ui
+            .transport
+            .prepare(transport_area, &self.state.models.playback, &mut cx);
+        self.state.resources.images.reconcile(cx.images.finish());
         if self.transition.is_none() {
             self.overlays
                 .prepare_content(area, &mut self.state, &self.theme, advance);
@@ -263,16 +286,17 @@ impl App {
     }
 
     /// 只借出绘制所需的状态；该借用存续期间不能更新应用。
-    pub(crate) fn frame_view(&self) -> FrameView<'_> {
+    pub(crate) fn frame_view(&self) -> ComponentView<'_, FrameView<'_>> {
         let state = &self.state;
         let theme = &self.theme;
         let normal = compute(state.ui.frame_area, state.cfg.tui().layout());
-        FrameView {
-            env: crate::components::frame::FrameEnv {
-                config: &state.cfg,
-                theme,
-                now: state.ui.frame_now,
-            },
+        let env = crate::components::frame::FrameEnv {
+            config: &state.cfg,
+            theme,
+            now: state.ui.frame_now,
+        };
+        state.ui.bind_view(env, |_| FrameView {
+            env,
             browse: super::browse::view(state, theme),
             selected: super::now_playing::view(state, theme),
             lyrics: super::lyrics::view(state, theme),
@@ -313,7 +337,7 @@ impl App {
             notice_hint: &self.notice_hint,
             transition: &self.transition,
             launch_anchor: self.launch_anchor,
-        }
+        })
     }
 }
 

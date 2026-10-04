@@ -99,6 +99,26 @@ impl LyricColors {
         }
     }
 
+    /// 比较本面板实际显示的词色；动画结束后时间继续前进也不会使结果失效。
+    pub(super) fn dependencies(
+        &self,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+        cfg: &LyricsConfig,
+        motion: LyricMode,
+        now: Instant,
+    ) {
+        let colors = match motion {
+            LyricMode::Compact => &self.state.compact,
+            LyricMode::Immersive => &self.state.immersive,
+        };
+        let mut displayed = colors
+            .iter()
+            .map(|(key, fade)| ((key.line, key.word), fade.current(now, cfg)))
+            .collect::<Vec<_>>();
+        displayed.sort_unstable_by_key(|(key, _)| *key);
+        inputs.observe(&displayed);
+    }
+
     /// 借用已准备的字词动画和本次时钟，绘制不创建或推进动画。
     pub(super) fn begin<'a>(
         &'a self,

@@ -191,6 +191,21 @@ impl DownloadOverlay {
 }
 
 impl Overlay for DownloadOverlay {
+    fn dependencies(
+        &self,
+        ctx: &DownloadInput<'_>,
+        env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.borrowed(ctx.downloads);
+        inputs.observe(ctx.downloads_summary);
+        let viewport = usize::from(inputs.area().height.saturating_sub(3));
+        self.list
+            .dependencies(inputs, ctx.downloads.len(), viewport);
+        self.title
+            .dependencies(inputs, env.config.tui().animation(), env.now);
+    }
+
     type Input<'a> = DownloadInput<'a>;
 
     fn chrome(&self) -> Chrome {

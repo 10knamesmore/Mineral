@@ -131,6 +131,17 @@ impl HelpOverlay {
 impl Overlay for HelpOverlay {
     type Input<'a> = mineral_config::BehaviorConfig;
 
+    fn dependencies(
+        &self,
+        _ctx: &mineral_config::BehaviorConfig,
+        _env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&self.entries);
+        inputs.observe(&self.close_hint);
+        inputs.observe(&self.scroll);
+    }
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 80,

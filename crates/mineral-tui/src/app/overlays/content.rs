@@ -80,6 +80,25 @@ impl AppOverlay {
 impl Overlay for AppOverlay {
     type Input<'a> = OverlayInputs<'a>;
 
+    fn dependencies(
+        &self,
+        ctx: &OverlayInputs<'_>,
+        env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&std::mem::discriminant(self));
+        match self {
+            Self::TextPrompt(o) => o.dependencies(&(), env, inputs),
+            Self::AudioSettings(o) => o.dependencies(&ctx.output, env, inputs),
+            Self::Queue(o) => o.dependencies(&ctx.queue, env, inputs),
+            Self::Downloads(o) => o.dependencies(&ctx.downloads, env, inputs),
+            Self::Confirm(o) => o.dependencies(&(), env, inputs),
+            Self::Disconnect(o) => o.dependencies(&(), env, inputs),
+            Self::Menu(o) => o.dependencies(&(), env, inputs),
+            Self::Help(o) => o.dependencies(ctx.behavior, env, inputs),
+        }
+    }
+
     fn chrome(&self) -> Chrome {
         match self {
             Self::TextPrompt(o) => o.chrome(),

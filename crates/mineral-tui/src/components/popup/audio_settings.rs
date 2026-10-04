@@ -182,6 +182,22 @@ impl AudioSettingsOverlay {
 impl Overlay for AudioSettingsOverlay {
     type Input<'a> = Option<&'a mineral_audio::AudioOutput>;
 
+    fn dependencies(
+        &self,
+        ctx: &Option<&mineral_audio::AudioOutput>,
+        _env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&self.devices);
+        inputs.observe(&(
+            self.cursor.sel(),
+            self.viewport_offset,
+            self.switching,
+            self.error,
+        ));
+        inputs.optional(*ctx);
+    }
+
     fn chrome(&self) -> Chrome {
         let rows = self
             .devices

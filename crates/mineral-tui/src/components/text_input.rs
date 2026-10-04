@@ -25,6 +25,13 @@ impl TextInput {
             input: LineInput::new(),
         }
     }
+    /// 文本和光标都属于显示依赖，提交回调不参与绘制。
+    pub(crate) fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        let (before, after) = self.input.split();
+        inputs.borrowed(before);
+        inputs.borrowed(after);
+    }
+
     /// 返回完整编辑文本。
     pub(crate) fn text(&self) -> &str {
         self.input.text()

@@ -354,18 +354,18 @@ mod tests {
             "tui": { "animation": { "minimap_cursor_ms": 0 } }
         }))?);
         assert_eq!(app.state.ui.browse.tracks.scroll().position(101), slow);
-        app.state.ui.browse.tracks.test_scroll_mut().prepare(
-            101,
-            10,
-            motion,
-            crate::components::frame::FrameEnv {
-                config: &app.state.cfg,
-                theme: &app.theme,
-                now: app.state.ui.frame_now,
-            }
-            .cursor_ticks(),
-            true,
-        );
+        let cursor_ticks = crate::components::frame::FrameEnv {
+            config: &app.state.cfg,
+            theme: &app.theme,
+            now: app.state.ui.frame_now,
+        }
+        .cursor_ticks();
+        app.state
+            .ui
+            .browse
+            .tracks
+            .test_scroll_mut()
+            .prepare(101, 10, motion, cursor_ticks, true);
         assert_eq!(
             app.state.ui.browse.tracks.scroll().position(101),
             Some(POSITION_SCALE)

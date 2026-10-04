@@ -154,6 +154,21 @@ impl ScrollList {
         self.scroll.target_rows()
     }
 
+    /// 声明绘制可观察的滚动、选择与位置标记，不比较隐藏的动画目标和计数。
+    pub(crate) fn dependencies(
+        &self,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+        len: usize,
+        viewport: usize,
+    ) {
+        inputs.observe(&(
+            self.sel(),
+            self.offset(len, viewport),
+            self.position(len),
+            self.magnet.frozen(),
+        ));
+    }
+
     /// 本帧视口首行 offset(喂 `TableState::offset`);高亮行另经 `pin_cursor` 钳边。
     ///
     /// # Params:

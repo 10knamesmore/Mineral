@@ -75,6 +75,86 @@ pub(crate) struct Notifications {
     anim_ticks: u16,
 }
 
+/// 通知组本次位置与内容借用，不持有绘制缓存。
+pub(crate) struct NotificationsView<'a> {
+    /// 已更新生命周期的通知组。
+    notifications: &'a Notifications,
+
+    /// 当前终端画布，用于裁切占据区域。
+    screen: Rect,
+
+    /// 通知锚定的顶栏。
+    bar: Rect,
+
+    /// 沉浸模式的布局进度。
+    immersive: u16,
+
+    /// 卡片关闭键提示。
+    close_hint: &'a str,
+}
+
+impl NotificationsView<'_> {
+    /// 返回本组会读取或覆盖的区域；没有通知时不登记绘制。
+    pub(crate) fn area(&self) -> Option<Rect> {
+        let state = self.notifications;
+        if state.entries.is_empty() && state.cards.is_empty() {
+            return None;
+        }
+        let height = state
+            .cards
+            .iter()
+            .fold(state.entries.len().saturating_add(1), |height, card| {
+                height.saturating_add(usize::from(card.height()))
+            });
+        Some(
+            Rect::new(
+                self.bar.x,
+                self.bar.y,
+                self.bar.width,
+                u16::try_from(height).unwrap_or(u16::MAX),
+            )
+            .intersection(self.screen),
+        )
+    }
+}
+
+impl crate::components::lifecycle::PaintView for NotificationsView<'_> {
+    fn dependencies(
+        &self,
+        _area: Rect,
+        env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        let state = self.notifications;
+        inputs.observe(&(self.screen, self.bar, self.immersive));
+        inputs.borrowed(self.close_hint);
+        inputs.observe(&(state.entries.len(), state.cards.len()));
+        for entry in &state.entries {
+            inputs.observe(&matches!(entry.life, Life::Live { .. }));
+            entry.toast.dependencies(inputs);
+        }
+        for card in &state.cards {
+            card.dependencies(inputs, env.now);
+        }
+    }
+
+    fn paint(
+        &self,
+        frame: &mut Frame<'_>,
+        _area: Rect,
+        env: crate::components::frame::FrameEnv<'_>,
+    ) {
+        self.notifications.render(
+            frame,
+            self.bar,
+            env.theme,
+            self.immersive,
+            self.close_hint,
+            env.now,
+        );
+    }
+}
+
 impl Notifications {
     /// 新建空通知管理器。
     ///
@@ -288,6 +368,23 @@ impl Notifications {
         self.entries.len()
     }
 
+    /// 借出通知组与本次布局选项；空组不占据合成层。
+    pub(crate) fn view<'a>(
+        &'a self,
+        screen: Rect,
+        bar: Rect,
+        immersive: u16,
+        close_hint: &'a str,
+    ) -> NotificationsView<'a> {
+        NotificationsView {
+            notifications: self,
+            screen,
+            bar,
+            immersive,
+            close_hint,
+        }
+    }
+
     /// 当前卡片数(含退场动画中的)。仅测试断言用。
     #[cfg(test)]
     pub(crate) fn card_count(&self) -> usize {
@@ -419,7 +516,7 @@ impl Notifications {
 }
 
 /// 纯文本通知的语义级别 → 渲染时映射主题色(普通 `text` / 警告 `yellow` / 错误 `red`)。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum TextTint {
     /// 普通信息。
     Normal,
@@ -515,6 +612,11 @@ impl TextItem {
 }
 
 impl ToastItem for TextItem {
+    fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        inputs.observe(&self.spans);
+        inputs.observe(&self.tint);
+    }
+
     fn width(&self) -> u16 {
         self.spans
             .iter()

@@ -49,6 +49,16 @@ impl TextPrompt {
 impl Overlay for TextPrompt {
     type Input<'a> = ();
 
+    fn dependencies(
+        &self,
+        _ctx: &(),
+        _env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&self.title);
+        self.input.dependencies(inputs);
+    }
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 50,

@@ -45,6 +45,14 @@ impl SearchState {
         }
     }
 
+    /// 搜索词、文本光标和输入模式会改变显示，匹配器缓存不会。
+    pub(crate) fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        let (before, after) = self.query_split();
+        inputs.borrowed(before);
+        inputs.borrowed(after);
+        inputs.observe(&self.typing);
+    }
+
     /// 当前搜索词(只读)。
     pub fn query(&self) -> &str {
         self.input.text()

@@ -2,8 +2,9 @@
 
 use crate::components::frame::{FrameEnv, PrepareCx};
 use crate::components::layout::search::detail::{DetailPaint, DetailView};
-use crate::components::layout::search::{SearchView, detail, panel};
+use crate::components::layout::search::{SearchPreparation, SearchView};
 use crate::components::layout::shared::spinner;
+use crate::components::lifecycle::ComponentView;
 use crate::image::ImageNeeds;
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::ScrollMotion;
@@ -11,17 +12,18 @@ use crate::runtime::state::{AppState, SearchFocus};
 use ratatui::layout::Rect;
 
 /// 结果和提示行只接收搜索组件本身及来源能力。
-pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> SearchView<'a> {
-    SearchView {
-        page: &state.ui.channel_search,
+pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> ComponentView<'a, SearchView<'a>> {
+    let env = FrameEnv {
+        config: &state.cfg,
+        theme,
+        now: state.ui.frame_now,
+    };
+    state.ui.channel_search.bind_view(env, |page| SearchView {
+        page,
         caps: &state.models.caps,
-        frame: FrameEnv {
-            config: &state.cfg,
-            theme,
-            now: state.ui.frame_now,
-        },
+        frame: env,
         dock_right: state.ui.browse.fullscreen.on(),
-    }
+    })
 }
 
 /// 详情栈和正文输入，隔离搜索页其他会话及任务执行能力。
@@ -81,14 +83,13 @@ pub(super) fn prepare(
         image_phase: state.image_render_phase(),
         advance,
     };
-    panel::prepare_results(left, &mut state.ui.channel_search, &cx);
-    if let Some(right) = right {
-        detail::prepare(
-            right,
-            &mut state.ui.channel_search,
-            &mut cx,
+    state.ui.channel_search.prepare(
+        left,
+        SearchPreparation {
+            detail_area: right,
             cover_in_flight,
-        );
-    }
+        },
+        &mut cx,
+    );
     state.resources.images.reconcile(cx.images.finish());
 }

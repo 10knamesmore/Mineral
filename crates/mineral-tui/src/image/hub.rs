@@ -78,6 +78,7 @@ impl PreviewTarget {
 
 /// 一段进行中的全屏切歌封面转场:新旧两图按样式逐帧合成 halfblock,推满落定回
 /// 终端图协议高清。转场窗口恰好盖住新图的离线编码期,落定无占位闪。
+#[derive(Clone, PartialEq)]
 pub struct CoverTransition {
     /// 退场封面(切歌前封面区显示的图)。
     pub from_url: MediaUrl,

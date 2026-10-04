@@ -24,6 +24,9 @@ struct Slot {
 
     /// 上次被准备入口登记的单调序号;最小者最久未使用,优先逐出。
     last_used: u64,
+
+    /// 成品内容写入版本，不随准备或协议提交改变。
+    revision: u64,
 }
 
 /// 缓存条目、使用顺序与当前显示需求。
@@ -169,16 +172,31 @@ impl TerminalImageCache {
             slot.image = image;
             slot.bytes = bytes;
             slot.last_used = last_used;
+            slot.revision = last_used;
         } else {
             slots.push(Slot {
                 key: key.clone(),
                 image,
                 bytes,
                 last_used,
+                revision: last_used,
             });
         }
         inner.total_bytes = inner.total_bytes.saturating_add(bytes);
         Self::evict_over_budget(inner, self.budget, Some(key));
+    }
+
+    /// 仅观察一个图片身份的就绪尺寸与内容版本，不续命也不保留像素。
+    pub(crate) fn revisions(&self, identity: &ImageIdentity) -> Vec<(TerminalImageKey, u64)> {
+        self.inner
+            .entries
+            .get(identity)
+            .map_or_else(Vec::new, |slots| {
+                slots
+                    .iter()
+                    .map(|slot| (slot.key.clone(), slot.revision))
+                    .collect()
+            })
     }
 
     /// 移除某图片身份的全部尺寸槽。

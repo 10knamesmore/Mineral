@@ -542,6 +542,22 @@ impl TransportBar {
         self.elapsed_press.retempo(anim);
     }
 
+    /// 声明绘制实际消费的反馈外观，不把未到期的绝对时刻当作逐帧变化。
+    pub(super) fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        inputs.observe(&self.heading());
+        inputs.observe(&self.mode_caption());
+        inputs.observe(&self.controls_opacity());
+        inputs.observe(&self.elapsed_press_strength());
+        for button in [
+            ControlButton::Previous,
+            ControlButton::PlayPause,
+            ControlButton::Next,
+            ControlButton::Mode,
+        ] {
+            inputs.observe(&self.button(button));
+        }
+    }
+
     /// 左侧时间的按压底色强度。
     pub(super) fn elapsed_press_strength(&self) -> u16 {
         self.elapsed_press.strength()

@@ -17,6 +17,7 @@ use serde::Deserialize;
 
 /// 频谱面板配置。
 #[config_section]
+#[derive(PartialEq)]
 pub struct SpectrumConfig {
     /// 渲染风格。
     style: SpectrumStyle,
@@ -103,6 +104,7 @@ pub enum SpectrumStyle {
 
 /// 柱形频谱
 #[config_section]
+#[derive(PartialEq)]
 pub struct BarsConfig {
     /// 显示峰值横线
     show_peak_cap: bool,
@@ -128,6 +130,7 @@ pub struct BarsConfig {
 
 /// 波形示波器
 #[config_section]
+#[derive(PartialEq)]
 pub struct ScopeConfig {
     /// 每列音频时长
     column_ms: u32,
@@ -135,6 +138,7 @@ pub struct ScopeConfig {
 
 /// 瀑布频谱
 #[config_section]
+#[derive(PartialEq)]
 pub struct WaterfallConfig {
     /// 推行间隔，半格为此值一半
     push_ms: u32,
@@ -145,6 +149,7 @@ pub struct WaterfallConfig {
 
 /// 山脊频谱
 #[config_section]
+#[derive(PartialEq)]
 pub struct TerrainConfig {
     /// 推层间隔
     push_ms: u32,

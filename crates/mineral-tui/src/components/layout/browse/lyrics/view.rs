@@ -50,6 +50,35 @@ impl LyricsPanel {
 }
 
 impl LyricsView<'_> {
+    /// 为本次布局选择歌词模式，不改变组件实例或准备状态。
+    pub(crate) fn with_mode(
+        &self,
+        mode: super::LyricMode,
+    ) -> impl crate::components::lifecycle::PaintView + '_ {
+        LyricsPaint { view: self, mode }
+    }
+
+    /// 歌词面板比较当前歌词、位置和已采样外观，不以原始时钟作为统一失效条件。
+    fn dependencies(
+        &self,
+        motion: super::LyricMode,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&motion);
+        inputs.optional(self.input.song);
+        inputs.optional(self.input.lyrics);
+        inputs.observe(&(self.input.position_ms, self.input.trust));
+        inputs.observe(&self.panel.extra);
+        inputs.observe(&self.panel.extra_press.strength());
+        inputs.observe(&(self.manual_anchor(), self.manual_focus()));
+        self.panel.colors.dependencies(
+            inputs,
+            self.frame.config.tui().lyrics(),
+            motion,
+            self.frame.now,
+        );
+    }
+
     /// 当前曲目确实具备的副歌词档。
     pub(super) fn active_extra(&self) -> Option<LyricExtra> {
         let lyrics = self.input.lyrics?;
@@ -81,6 +110,35 @@ impl LyricsView<'_> {
             .scroll
             .as_ref()
             .and_then(|scroll| usize::try_from(scroll.target_line()).ok())
+    }
+}
+
+/// 同一歌词实例在紧凑或沉浸布局中的绘制选项。
+struct LyricsPaint<'a> {
+    /// 已准备状态及共享歌词借用。
+    view: &'a LyricsView<'a>,
+
+    /// 本次布局的歌词显示模式。
+    mode: super::LyricMode,
+}
+
+impl crate::components::lifecycle::PaintView for LyricsPaint<'_> {
+    fn dependencies(
+        &self,
+        _area: ratatui::layout::Rect,
+        _env: FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        self.view.dependencies(self.mode, inputs);
+    }
+
+    fn paint(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: ratatui::layout::Rect,
+        env: FrameEnv<'_>,
+    ) {
+        super::draw(frame, area, self.view, env.theme, self.mode);
     }
 }
 

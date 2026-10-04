@@ -7,13 +7,17 @@ use crate::components::layout::browse::sidebar::{
     sweep,
 };
 use crate::components::layout::shared::thumbnails::thumbnail_phase;
+use crate::components::lifecycle::ComponentView;
 use crate::image::ImageNeeds;
 use crate::render::theme::Theme;
 use crate::runtime::state::AppState;
 use ratatui::{Frame, layout::Rect};
 
 /// 借出当前曲目列表所需的数据，不把应用状态传入组件。
-pub(crate) fn tracks<'a>(state: &'a AppState, theme: &'a Theme) -> TrackView<'a> {
+pub(crate) fn tracks<'a>(
+    state: &'a AppState,
+    theme: &'a Theme,
+) -> ComponentView<'a, TrackView<'a>> {
     let playlist = state.opened_playlist();
     let input = TrackInput {
         playlist,
@@ -21,31 +25,36 @@ pub(crate) fn tracks<'a>(state: &'a AppState, theme: &'a Theme) -> TrackView<'a>
         generation: state.models.library.tracks_generation,
         playing: state.models.playback.track.as_ref().map(|song| &song.id),
     };
-    state.ui.browse.tracks.view(
-        input,
-        FrameEnv {
-            config: &state.cfg,
-            theme,
-            now: state.ui.frame_now,
-        },
-        state.resources.images.ready(),
-    )
+    let env = FrameEnv {
+        config: &state.cfg,
+        theme,
+        now: state.ui.frame_now,
+    };
+    state.ui.browse.tracks.bind_view(env, |list| {
+        list.view(input, env, state.resources.images.ready())
+    })
 }
 
 /// 借出歌单模型与加载状态。
-pub(crate) fn playlists<'a>(state: &'a AppState, theme: &'a Theme) -> PlaylistView<'a> {
-    state.ui.browse.playlists.view(
-        PlaylistInput {
-            library: &state.models.library,
-            loading: state.models.tasks_snapshot.running > 0,
-        },
-        FrameEnv {
-            config: &state.cfg,
-            theme,
-            now: state.ui.frame_now,
-        },
-        state.resources.images.ready(),
-    )
+pub(crate) fn playlists<'a>(
+    state: &'a AppState,
+    theme: &'a Theme,
+) -> ComponentView<'a, PlaylistView<'a>> {
+    let env = FrameEnv {
+        config: &state.cfg,
+        theme,
+        now: state.ui.frame_now,
+    };
+    state.ui.browse.playlists.bind_view(env, |list| {
+        list.view(
+            PlaylistInput {
+                library: &state.models.library,
+                loading: state.models.tasks_snapshot.running > 0,
+            },
+            env,
+            state.resources.images.ready(),
+        )
+    })
 }
 
 /// 页面形变中的列表保留稳定视口目标。
@@ -119,10 +128,10 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
 /// 浏览页组合：分别借入两个子列表视图。
 pub(crate) struct BrowseView<'a> {
     /// 歌单列表。
-    playlists: PlaylistView<'a>,
+    playlists: ComponentView<'a, PlaylistView<'a>>,
 
     /// 曲目列表。
-    tracks: TrackView<'a>,
+    tracks: ComponentView<'a, TrackView<'a>>,
 
     /// 两端共用的过渡位置。
     switch: crate::runtime::state::ViewSwitch,
@@ -142,6 +151,17 @@ pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> BrowseView<'a> 
 }
 
 impl BrowseView<'_> {
+    /// 稳态直接使用已有列表实例；切换期间由页面合成两端内容。
+    pub(crate) fn plan<'a>(&'a self, area: Rect, plan: &mut crate::render::memo::FramePlan<'a>) {
+        if self.switch.at_min() {
+            plan.add(area, self.playlists.as_ref());
+        } else if self.switch.at_max() {
+            plan.add(area, self.tracks.as_ref());
+        } else {
+            plan.moving(move |frame| self.paint(frame, area));
+        }
+    }
+
     /// 两个列表只画自己的内容，页面负责组合过渡。
     pub(crate) fn paint(&self, frame: &mut Frame<'_>, area: Rect) {
         if self.switch.at_min() {

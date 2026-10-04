@@ -48,3 +48,42 @@ pub(crate) struct NowPlayingView<'a> {
     /// 当前图片布局阶段。
     pub(crate) phase: ImageRenderPhase,
 }
+
+impl crate::components::lifecycle::PaintView for NowPlayingView<'_> {
+    /// 详情依赖当前选择与已就绪封面，不依赖播放位置或离屏图片记账。
+    fn dependencies(
+        &self,
+        _area: ratatui::layout::Rect,
+        _env: FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.optional(self.input.playlist);
+        inputs.optional(self.input.track);
+        inputs.optional(self.input.playing);
+        inputs.observe(&self.input.playlist_cover);
+        inputs.observe(&self.input.duration_ms);
+        inputs.observe(&self.input.switch.raw());
+        inputs.observe(&self.phase);
+        self.panel
+            .title
+            .dependencies(inputs, self.frame.config.tui().animation(), self.frame.now);
+        self.images.dependencies(
+            inputs,
+            [
+                self.input.playlist_cover.clone(),
+                self.input
+                    .track
+                    .and_then(|entry| entry.data.song.cover_url.clone()),
+            ],
+        );
+    }
+
+    fn paint(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: ratatui::layout::Rect,
+        env: FrameEnv<'_>,
+    ) {
+        super::panel::draw(frame, area, self, env.theme, false);
+    }
+}

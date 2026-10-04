@@ -14,7 +14,10 @@ use crate::render::clear::Clear;
 use crate::render::theme::Theme;
 
 /// 一段可放进 [`Toast`] 的内容:自报宽度、自渲染。实现方决定怎么画。
-pub(crate) trait ToastItem {
+pub(crate) trait ToastItem: std::any::Any {
+    /// 声明内容的绘制输入，替换 boxed 内容不等同于显示发生变化。
+    fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>);
+
     /// 期望内容宽度(字符,**不含**两侧括号);决定括号区总宽与居中。
     fn width(&self) -> u16;
 
@@ -84,6 +87,16 @@ impl Toast {
     /// 是否彻底休眠:动画归零且无内容 —— 管理器可安全丢弃这条。
     pub(crate) fn dormant(&self) -> bool {
         !self.anim.active() && self.item.is_none()
+    }
+
+    /// 内容与当前揭示进度组成显示输入，绝对到期时间由管理器独立消费。
+    pub(crate) fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        inputs.observe(&self.anim);
+        inputs.observe(&self.item.is_some());
+        if let Some(item) = &self.item {
+            inputs.observe(&item.as_ref().type_id());
+            item.dependencies(inputs);
+        }
     }
 
     /// 当前内容是否「必要」通知(见 [`ToastItem::essential`];无内容视为非必要)。

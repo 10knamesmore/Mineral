@@ -7,3 +7,6 @@ pub mod toast;
 pub(crate) mod text_input;
 
 pub(crate) mod frame;
+pub(crate) mod lifecycle;
+#[cfg(test)]
+mod lifecycle_tests;

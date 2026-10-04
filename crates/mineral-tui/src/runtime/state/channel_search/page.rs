@@ -159,6 +159,30 @@ impl SearchPage {
         self.whitelist = whitelist;
     }
 
+    /// 声明提示栏、焦点与当前会话，不让隐藏会话和空闲 spinner 使页面失效。
+    pub(crate) fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        inputs.observe(&(self.source, self.focus, self.prev_focus));
+        inputs.observe(&self.focus_ring);
+        inputs.observe(&(
+            self.prompt_seg,
+            self.seg_open,
+            self.seg_sel,
+            self.reveal_seg,
+        ));
+        inputs.observe(&self.seg_reveal);
+        inputs.observe(&self.current_loading());
+        if self.current_loading() {
+            inputs.observe(&self.spinner);
+        }
+        inputs.observe(&self.current().is_some());
+        if let Some(session) = self.current() {
+            inputs.observe(&session.kind);
+            let (before, after) = session.query_split();
+            inputs.borrowed(before);
+            inputs.borrowed(after);
+        }
+    }
+
     /// loading spinner 帧计数（每帧 +1）。字形选取交渲染层（按配置 `animation.spinner_frames`
     /// 取当前格，见 shared `spinner`），状态层只持帧号、不知道画什么字符。
     pub fn spinner_counter(&self) -> u32 {

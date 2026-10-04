@@ -1,6 +1,7 @@
 //! 应用根状态的所有权组合；组件不会接收该聚合类型。
 
 use super::{models::AppModels, resources::ClientResources};
+use crate::components::lifecycle::Component;
 use crate::image::ImageEngine;
 use crate::render::anim::ticks16_from_ms;
 use crate::view::RootView;
@@ -12,7 +13,7 @@ pub struct AppState {
     pub(crate) models: AppModels,
 
     /// 自己保留交互状态的组件实例。
-    pub(crate) ui: RootView,
+    pub(crate) ui: Component<RootView>,
 
     /// 图片任务、终端协议及计算资源。
     pub(crate) resources: ClientResources,
@@ -25,7 +26,7 @@ impl AppState {
     /// 装配独立的模型、界面和资源所有者。
     pub fn new(cfg: Arc<mineral_config::Config>, images: ImageEngine) -> Self {
         let models = AppModels::new();
-        let ui = RootView::new(&cfg, models.playback.mode);
+        let ui = Component::new(RootView::new(&cfg, models.playback.mode));
         let resources = ClientResources::new(images, &cfg);
         Self {
             models,

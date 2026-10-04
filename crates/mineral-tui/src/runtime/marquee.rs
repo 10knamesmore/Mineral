@@ -86,6 +86,9 @@ impl Tempo {
 pub(crate) struct Marquee {
     /// 显示身份和本次起步时间，组件销毁时一起释放。
     binding: Option<Binding>,
+
+    /// 最近准备的窗口是否确实需要滚动。
+    overflowing: bool,
 }
 
 /// 一次标题显示的起点。
@@ -101,6 +104,7 @@ struct Binding {
 impl Marquee {
     /// 身份改变或内容完整可见时重置起点；不自行读取时钟。
     pub(crate) fn prepare(&mut self, identity: &str, content_w: u16, window_w: u16, now: Instant) {
+        self.overflowing = content_w > window_w;
         let phase = self.binding.get_or_insert_with(|| Binding {
             identity: identity.to_owned(),
             start: now,
@@ -111,6 +115,19 @@ impl Marquee {
         }
         if content_w <= window_w {
             phase.start = now;
+        }
+    }
+
+    /// 只有可见标题溢出且滚动开启时，绘制结果才依赖本帧时间。
+    pub(crate) fn dependencies(
+        &self,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+        anim: &mineral_config::AnimationConfig,
+        now: Instant,
+    ) {
+        inputs.observe(&self.overflowing);
+        if self.overflowing && *anim.marquee().mode() != mineral_config::MarqueeMode::Off {
+            inputs.time(now);
         }
     }
 

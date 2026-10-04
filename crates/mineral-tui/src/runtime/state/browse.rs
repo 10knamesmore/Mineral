@@ -18,6 +18,7 @@ use super::track_filter::FilteredTracks;
 use super::view_switch::ViewSwitch;
 use crate::components::layout::browse::lyrics::LyricsPanel;
 use crate::components::layout::browse::sidebar::{library::TrackList, playlists::PlaylistList};
+use crate::components::lifecycle::Component;
 
 /// Browse 视图逻辑所需的只读模型借用:歌曲库 + 配置——过滤 / 深度搜索 / 选中都读它,
 /// 但这些是 model 数据(留在外层聚合态),故借入而非拥有。
@@ -42,7 +43,7 @@ pub(crate) struct LibraryQueueProjection {
 /// Browse 布局层的 view 状态(光标 / 视图 / 全屏 / 歌词 / 过滤)。
 pub struct BrowsePage {
     /// 当前选中项的详情面板。
-    pub now_playing: crate::components::layout::browse::now_playing::NowPlaying,
+    pub(crate) now_playing: Component<crate::components::layout::browse::now_playing::NowPlaying>,
 
     /// 左栏视图切换:Playlists ↔ Library 两态 + 横向过渡,由 [`ViewSwitch`] 合一。
     /// `current()` 给路由 / 选中语义、`eased_in_out()` 给渲染;`== View::X` 直接可比。
@@ -58,16 +59,16 @@ pub struct BrowsePage {
     pub ambient_reveal: TrailingToggle,
 
     /// 歌词面板显示态(副歌词档 + 全屏手动滚动脱离态)。
-    pub lyrics: LyricsPanel,
+    pub(crate) lyrics: Component<LyricsPanel>,
 
     /// 列表浏览态(两个列表的光标 + 视口滚动、跨歌单位置记忆、选中变化时刻)。
     pub nav: NavState,
 
     /// 歌单列表组件，返回时保留自己的查询和光标。
-    pub playlists: PlaylistList,
+    pub(crate) playlists: Component<PlaylistList>,
 
     /// 已打开歌单的曲目列表组件。
-    pub tracks: TrackList,
+    pub(crate) tracks: Component<TrackList>,
 }
 
 impl BrowsePage {
@@ -86,10 +87,10 @@ impl BrowsePage {
                 trail_leg(trail.enter(), tick_ms),
                 trail_leg(trail.exit(), tick_ms),
             ),
-            lyrics: LyricsPanel::new(),
+            lyrics: Component::new(LyricsPanel::new()),
             nav: NavState::new(),
-            playlists: PlaylistList::new(),
-            tracks: TrackList::new(),
+            playlists: Component::new(PlaylistList::new()),
+            tracks: Component::new(TrackList::new()),
         }
     }
 

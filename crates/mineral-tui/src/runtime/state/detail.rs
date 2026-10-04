@@ -50,7 +50,7 @@ impl DetailFetch {
 }
 
 /// 栈帧指向的实体，携带结果列/上钻已有的完整数据（头部不必等 fetch）。
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum EntityRef {
     /// 歌曲：详情等同其所属专辑（头图=专辑封面、列表=同专辑曲目）。
     Song(Box<Song>),
@@ -128,7 +128,7 @@ impl EntityRef {
 }
 
 /// 一帧补拉到的数据。
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum DetailData {
     /// Playlist membership 列表（歌单帧），保留 authoritative CollectionIndex。
     PlaylistEntries(Vec<PlaylistEntry>),
@@ -212,6 +212,69 @@ pub struct DetailFrame {
 }
 
 impl DetailFrame {
+    /// 声明当前详情实际显示的内容、列表位置与图片；非显示的请求记账不参与比较。
+    fn dependencies(
+        &self,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+        area: ratatui::layout::Rect,
+        paint: &crate::components::layout::search::detail::DetailPaint<'_>,
+    ) {
+        inputs.observe(&self.entity);
+        inputs.observe(&self.data);
+        inputs.observe(&(self.section, self.section_eased(), self.desc_scroll));
+        inputs.observe(&self.artist_sections);
+        let inner = ratatui::widgets::Block::new()
+            .borders(ratatui::widgets::Borders::ALL)
+            .inner(area);
+        let list = crate::components::layout::search::detail::detail_list_area(
+            inner,
+            matches!(self.entity, EntityRef::Artist(_)),
+        );
+        self.list.dependencies(
+            inputs,
+            self.list_len(),
+            usize::from(list.height.saturating_sub(1)),
+        );
+        self.title.dependencies(
+            inputs,
+            paint.frame.config.tui().animation(),
+            paint.frame.now,
+        );
+        let mut covers = vec![self.entity.cover().cloned()];
+        let loading = match &self.data {
+            None => true,
+            Some(DetailData::Album(album)) => {
+                covers.extend(
+                    album
+                        .tracks
+                        .iter()
+                        .map(|track| track.song.cover_url.clone()),
+                );
+                false
+            }
+            Some(DetailData::PlaylistEntries(entries)) => {
+                covers.extend(entries.iter().map(|entry| entry.song.cover_url.clone()));
+                false
+            }
+            Some(DetailData::Artist { detail, albums }) => {
+                if let Some(detail) = detail {
+                    covers.extend(detail.songs.iter().map(|song| song.cover_url.clone()));
+                }
+                if let Some(albums) = albums {
+                    covers.extend(albums.items().iter().map(|album| album.cover_url.clone()));
+                }
+                let transitioning = self.section_eased().is_some();
+                ((self.section == ArtistSection::Hot || transitioning) && detail.is_none())
+                    || ((self.section == ArtistSection::Albums || transitioning)
+                        && albums.as_ref().is_none_or(ArtistAlbums::is_loading))
+            }
+        };
+        if loading {
+            inputs.borrowed(paint.loading);
+        }
+        paint.images.dependencies(inputs, covers);
+    }
+
     /// 新帧：光标归零、未拉数据、分区回热门曲、简介滚回顶、未派拉取。
     fn new(entity: EntityRef) -> Self {
         Self {
@@ -640,6 +703,29 @@ pub struct DetailStack {
 }
 
 impl DetailStack {
+    /// 面包屑取各层标题，正文只观察当前帧及尚未退场的旧端。
+    pub(crate) fn dependencies(
+        &self,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+        area: ratatui::layout::Rect,
+        paint: &crate::components::layout::search::detail::DetailPaint<'_>,
+    ) {
+        inputs.observe(&self.frames.len());
+        for frame in &self.frames {
+            inputs.observe(&frame.entity.kind());
+            inputs.borrowed(frame.entity.name());
+        }
+        inputs.observe(&self.transition);
+        inputs.observe(&self.sweep_from.is_some());
+        if let Some((from, direction)) = &self.sweep_from {
+            inputs.observe(direction);
+            from.dependencies(inputs, area, paint);
+        }
+        if let Some(current) = self.current() {
+            current.dependencies(inputs, area, paint);
+        }
+    }
+
     /// 空栈（无选中实体）。
     pub fn empty() -> Self {
         Self {

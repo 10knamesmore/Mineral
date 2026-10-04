@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, Borders};
 
 use mineral_config::SearchFocusTransition;
 
+use super::layers::{RootLayer, SearchLayer};
 use super::preparation::FrameView;
 use crate::components::layout::browse::{lyrics, spectrum};
 use crate::components::layout::search::panel;
@@ -17,13 +18,102 @@ use crate::components::layout::shared::compute::{
     Areas, compute, compute_fullscreen, compute_search,
 };
 use crate::components::layout::shared::{transform, vinyl};
+use crate::components::lifecycle::ComponentView;
 use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
 use crate::render::ambient;
 use crate::runtime::state::SearchFocus;
 
 /// 渲染当前页面；形变期间合成两端稳定排版，封面和播放信息独立移动。
 /// 通知与浮层叠在页面之上，最后绘制启动或退出的整屏边框。
-pub(crate) fn draw(frame: &mut Frame<'_>, app: &FrameView<'_>) {
+#[cfg(test)]
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &ComponentView<'_, FrameView<'_>>) {
+    plan(frame.area(), app).paint(frame, &[]);
+}
+
+/// 先声明既有组件的绘制依赖；没有变化时主循环可以不向终端提交帧。
+pub(crate) fn plan<'a>(
+    area: Rect,
+    app: &'a ComponentView<'a, FrameView<'a>>,
+) -> crate::render::memo::FramePlan<'a> {
+    let mut plan = crate::render::memo::FramePlan::default();
+    if app.transition.is_some() || !app.fullscreen.settled() || !app.search.page.active.settled() {
+        plan.moving(move |frame| draw_uncached(frame, app));
+        return plan;
+    }
+    let layout_cfg = app.env.config.tui().layout();
+    let normal = compute(area, layout_cfg);
+    let full = app.fullscreen.at_max();
+    let search = app.search.page.active.at_max();
+    let areas = if full {
+        compute_fullscreen(area, layout_cfg)
+    } else if search {
+        compute_search(area, layout_cfg)
+    } else {
+        normal
+    };
+    plan.add(
+        area,
+        app.as_ref().map(|app| RootLayer {
+            app,
+            normal,
+            areas,
+            full,
+            search,
+        }),
+    );
+    if search {
+        plan.add(
+            area,
+            app.search.as_ref().map(|_| SearchLayer { app, areas }),
+        );
+    } else if !full {
+        app.browse.plan(areas.left, &mut plan);
+        if let Some(right) = areas.right {
+            plan.add(right, app.selected.as_ref());
+        }
+    }
+    if let Some(lyrics) = areas.lyrics.and_then(nonempty) {
+        let mode = if full {
+            lyrics::LyricMode::Immersive
+        } else {
+            lyrics::LyricMode::Compact
+        };
+        plan.add(lyrics, app.lyrics.as_ref().map(|view| view.with_mode(mode)));
+    }
+    if let Some(spectrum) = areas.spectrum.and_then(nonempty) {
+        plan.add(spectrum, app.spectrum.bind_view(app.env, |state| state));
+    }
+    plan.add(
+        areas.transport,
+        app.transport
+            .as_ref()
+            .map(|view| view.with_background(full)),
+    );
+    let notices = app.notifications.bind_view(app.env, |notices| {
+        notices.view(
+            area,
+            compute(area, layout_cfg).top_status,
+            app.fullscreen.eased_in_out(),
+            app.notice_hint,
+        )
+    });
+    if let Some(area) = notices.area() {
+        plan.add(area, notices);
+    }
+    app.overlays.plan(
+        area,
+        &app.overlay_inputs,
+        crate::components::popup::OverlayEnv {
+            frame: app.env,
+            dock_right: app.fullscreen.on(),
+        },
+        &mut plan,
+    );
+    plan
+}
+
+/// 跨页面形变按照既有合成路径绘制，两端内容与几何在同一帧交接。
+fn draw_uncached(frame: &mut Frame<'_>, app: &FrameView<'_>) {
     let theme = app.env.theme;
     let layout_cfg = app.env.config.tui().layout();
     let normal = compute(frame.area(), layout_cfg);
@@ -45,6 +135,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &FrameView<'_>) {
         let search = compute_search(frame.area(), layout_cfg);
         if app.search.page.active.at_max() {
             paint_search(frame, &search, app, /*cover_in_flight*/ false);
+            app.transport.paint(frame, search.transport, theme.base);
         } else {
             page_morph::search(frame, &normal, &search, app);
         }
@@ -115,7 +206,12 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
 ///
 /// `cover_in_flight`:page morph 封面飞行层已接管主图(now_playing 封面 / detail 头图),
 /// 面板跳过自画防双画。
-fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>, cover_in_flight: bool) {
+pub(super) fn paint_search(
+    frame: &mut Frame<'_>,
+    areas: &Areas,
+    app: &FrameView<'_>,
+    cover_in_flight: bool,
+) {
     let theme = app.env.theme;
     let rs = app.search.page;
     let sliding = matches!(
@@ -173,7 +269,6 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>, cover
     if let Some(prompt) = areas.search_prompt {
         panel::draw_prompt_dropdown(frame, prompt, &app.search, theme);
     }
-    app.transport.paint(frame, areas.transport, theme.base);
 }
 
 /// 焦点对应的面板矩形(prompt 行 / results 左 / detail 右);该面板在当前端点不存在为 `None`。
@@ -214,7 +309,7 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
 /// 铺 `theme.background`(默认 = `base` = 氛围场在浓度 0 时的底色),两端连续。氛围场再叠
 /// 其上,浓度由**滞后跟随**进度驱动(慢半拍跟随全屏形变)。Sixel / iTerm2 实际图区
 /// 避开背景重绘，防止首 cell 改色触发图协议载荷重发；其他区域保留动态背景。
-fn paint_backdrop(
+pub(super) fn paint_backdrop(
     frame: &mut Frame<'_>,
     app: &FrameView<'_>,
     normal: &Areas,

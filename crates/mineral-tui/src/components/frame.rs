@@ -1,15 +1,19 @@
 //! 组件共享的本帧配置与准备能力；业务数据由各组件独立声明。
 
+use std::sync::Arc;
+use std::time::Instant;
+
+use mineral_config::Config;
+
 use crate::image::{ImageNeeds, ImageRenderPhase};
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::ScrollMotion;
-use std::time::Instant;
 
 /// 本次更新所用的只读配置、主题和显式采样时间。
 #[derive(Clone, Copy)]
 pub(crate) struct FrameEnv<'a> {
     /// 当前有效配置，热更新后替换借用，不在组件构造时复制。
-    pub(crate) config: &'a mineral_config::Config,
+    pub(crate) config: &'a Arc<Config>,
 
     /// 本次有效主题。
     pub(crate) theme: &'a Theme,

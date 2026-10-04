@@ -1500,8 +1500,8 @@ mod tests {
             has_more: bool,
         ) -> color_eyre::Result<(App, Arc<TestClient>)> {
             let (mut app, _) = app_with_channel_search_probed(vec![kind])?;
-            let browse = app_with_long_library(64, 22)?;
-            app.state.ui.browse = browse.state.ui.browse;
+            let mut browse = app_with_long_library(64, 22)?;
+            std::mem::swap(&mut app.state.ui.browse, &mut browse.state.ui.browse);
             app.state.models.library = browse.state.models.library;
             app.state.ui.browse.active_search_mut().set_query("Track");
             app.state.ui.browse.tracks.place(22, 4);

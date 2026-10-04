@@ -34,10 +34,14 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Th
     }
 }
 
-/// 根据本次布局设置采样分辨率；绘制只消费既有频谱状态。
-pub(crate) fn prepare(area: Rect, state: &mut SpectrumState) {
-    let inner = Block::new().borders(Borders::ALL).inner(area);
-    if !inner.is_empty() {
-        state.target_bars = usize::from(inner.width).max(1);
+impl crate::components::lifecycle::Prepare for SpectrumState {
+    type Input<'a> = ();
+
+    /// 根据本次布局设置采样分辨率；绘制只消费既有频谱状态。
+    fn prepare(&mut self, area: Rect, (): (), _cx: &mut crate::components::frame::PrepareCx<'_>) {
+        let inner = Block::new().borders(Borders::ALL).inner(area);
+        if !inner.is_empty() {
+            self.target_bars = usize::from(inner.width).max(1);
+        }
     }
 }

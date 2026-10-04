@@ -1,7 +1,10 @@
 //! 将浏览页选择连接到封面面板；资源需求交回图片管线。
 
-use crate::components::frame::FrameEnv;
-use crate::components::layout::browse::now_playing::{NowPlayingInput, NowPlayingView};
+use crate::components::frame::{FrameEnv, PrepareCx};
+use crate::components::layout::browse::now_playing::{
+    NowPlayingInput, NowPlayingPreparation, NowPlayingView,
+};
+use crate::components::lifecycle::ComponentView;
 use crate::image::{ImageNeeds, ReadyImages};
 use crate::render::theme::Theme;
 use crate::runtime::playback::Playback;
@@ -46,28 +49,42 @@ fn input<'a>(
 }
 
 /// 构造只读面板。
-pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> NowPlayingView<'a> {
-    NowPlayingView {
-        panel: &state.ui.browse.now_playing,
-        input: input(
-            &state.ui.browse,
-            &state.models.library,
-            &state.models.playback,
-            &state.cfg,
-            state.resources.images.ready(),
-        ),
-        frame: FrameEnv {
-            config: &state.cfg,
-            theme,
-            now: state.ui.frame_now,
-        },
-        images: state.resources.images.ready(),
-        phase: state.image_render_phase(),
-    }
+pub(crate) fn view<'a>(
+    state: &'a AppState,
+    theme: &'a Theme,
+) -> ComponentView<'a, NowPlayingView<'a>> {
+    let env = FrameEnv {
+        config: &state.cfg,
+        theme,
+        now: state.ui.frame_now,
+    };
+    state
+        .ui
+        .browse
+        .now_playing
+        .bind_view(env, |panel| NowPlayingView {
+            panel,
+            input: input(
+                &state.ui.browse,
+                &state.models.library,
+                &state.models.playback,
+                &state.cfg,
+                state.resources.images.ready(),
+            ),
+            frame: env,
+            images: state.resources.images.ready(),
+            phase: state.image_render_phase(),
+        })
 }
 
 /// 准备局部状态与图片需求。
-pub(crate) fn prepare(area: Rect, state: &mut AppState, cover_in_flight: bool) {
+pub(crate) fn prepare(
+    area: Rect,
+    state: &mut AppState,
+    theme: &Theme,
+    cover_in_flight: bool,
+    advance: bool,
+) {
     let input = input(
         &state.ui.browse,
         &state.models.library,
@@ -75,17 +92,26 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, cover_in_flight: bool) {
         &state.cfg,
         state.resources.images.ready(),
     );
-    let mut images = ImageNeeds::new(state.resources.images.ready());
-    let phase = state.image_render_phase();
+    let mut cx = PrepareCx {
+        frame: FrameEnv {
+            config: &state.cfg,
+            theme,
+            now: state.ui.frame_now,
+        },
+        images: ImageNeeds::new(state.resources.images.ready()),
+        motion: crate::runtime::scroll::list::ScrollMotion::Frozen,
+        image_phase: state.image_render_phase(),
+        advance,
+    };
     state.ui.browse.now_playing.prepare(
         area,
-        &input,
-        state.ui.frame_now,
-        &mut images,
-        phase,
-        cover_in_flight,
+        NowPlayingPreparation {
+            selection: input,
+            cover_in_flight,
+        },
+        &mut cx,
     );
-    state.resources.images.reconcile(images.finish());
+    state.resources.images.reconcile(cx.images.finish());
 }
 
 /// 绘制当前选择的面板。

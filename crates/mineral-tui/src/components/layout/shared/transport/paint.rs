@@ -20,9 +20,16 @@ use crate::runtime::format::{format_ms, format_ms_opt};
 use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage};
 
 /// 标题窗口在绘制前确定，重复绘制不会重置跑马灯。
-impl TransportBar {
+impl crate::components::lifecycle::Prepare for TransportBar {
+    type Input<'a> = &'a Playback;
+
     /// 根据当前播放标题与布局更新自己的滚动起点。
-    pub(crate) fn prepare(&mut self, area: Rect, playback: &Playback, now: std::time::Instant) {
+    fn prepare(
+        &mut self,
+        area: Rect,
+        playback: &Playback,
+        cx: &mut crate::components::frame::PrepareCx<'_>,
+    ) {
         let inner = Block::new().borders(Borders::ALL).inner(area);
         if !inner.is_empty()
             && let Some(song) = playback.track.as_ref()
@@ -31,7 +38,7 @@ impl TransportBar {
                 &mut self.title,
                 song,
                 inner.width,
-                now,
+                cx.frame.now,
             );
         }
     }

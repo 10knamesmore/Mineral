@@ -1,6 +1,5 @@
 //! 名称前的 Kitty 行内封面：复用半径预取的低清像素，不从可见行发起下载或完整解码。
 
-use std::io::Write as _;
 use std::sync::Arc;
 
 use mineral_model::MediaUrl;
@@ -139,20 +138,6 @@ impl ImageEngine {
             image,
             target: area,
         });
-    }
-
-    /// 在 ratatui 输出本帧 cell 前发送图片指令，每个占位字符保持单格 Unicode 宽度。
-    ///
-    /// # Error:
-    ///   终端输出失败时返回 I/O 错误，与本帧绘制一起终止。
-    pub(crate) fn flush_graphics_commands(&mut self) -> std::io::Result<()> {
-        let commands = self.take_graphics_commands();
-        if commands.is_empty() {
-            return Ok(());
-        }
-        let mut output = std::io::stdout().lock();
-        output.write_all(commands.as_bytes())?;
-        output.flush()
     }
 
     /// 消费本次实际提交所需的协议指令；重复绘制不会调用此入口。

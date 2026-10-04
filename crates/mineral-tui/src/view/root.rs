@@ -2,6 +2,7 @@
 
 use crate::components::layout::browse::spectrum::SpectrumState;
 use crate::components::layout::shared::transport::TransportBar;
+use crate::components::lifecycle::Component;
 use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::state::{BrowsePage, SearchPage, search_whitelist};
 use ratatui::layout::Rect;
@@ -14,7 +15,7 @@ pub(crate) struct RootView {
 
     /// channel 搜索布局态:与 [`BrowsePage::fullscreen`] 同级的全屏级布局态(两者逻辑 `on` 互斥)。
     /// 含布局开关 + 当前源 + 输入焦点 + 焦点环 + per-源会话。
-    pub(crate) channel_search: SearchPage,
+    pub(crate) channel_search: Component<SearchPage>,
 
     /// 顶栏失焦变灰:`on()` = 已变灰(终端未聚焦)、`eased_in_out()` = 变灰深度。
     /// 初始 `off`(聚焦)——mode 1004 只报变化、
@@ -22,10 +23,10 @@ pub(crate) struct RootView {
     pub(crate) dim: Toggle,
 
     /// 播放栏本地反馈；动作唤起，显式 tick 推进，绘制只读。
-    pub(crate) transport: TransportBar,
+    pub(crate) transport: Component<TransportBar>,
 
     /// 频谱状态(条高 + 平滑)。
-    pub(crate) spectrum: SpectrumState,
+    pub(crate) spectrum: Component<SpectrumState>,
 
     /// 最近一次准备的主帧面积；输入路径据此计算弹出菜单锚点。
     pub(crate) frame_area: Rect,
@@ -48,16 +49,18 @@ impl RootView {
         let tick_ms = *anim.frame_tick_ms();
         Self {
             browse: BrowsePage::new(anim),
-            channel_search: SearchPage::new(
-                ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
-                ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
-            )
-            .with_whitelist(search_whitelist::SearchWhitelist::from(
-                cfg.tui().search().channel(),
-            )),
+            channel_search: Component::new(
+                SearchPage::new(
+                    ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
+                    ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
+                )
+                .with_whitelist(search_whitelist::SearchWhitelist::from(
+                    cfg.tui().search().channel(),
+                )),
+            ),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
-            transport: TransportBar::new(mode, anim),
-            spectrum: SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms),
+            transport: Component::new(TransportBar::new(mode, anim)),
+            spectrum: Component::new(SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms)),
             vinyl: crate::components::layout::shared::vinyl::VinylSpin::from_config(
                 *anim.vinyl_rev_ms(),
                 tick_ms,

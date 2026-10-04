@@ -25,7 +25,7 @@ use crate::render::palette::{CoverPalette, Rgb};
 /// 与动态 accent 并行驱动(同一个封面身份 diff 触发),时长独立(配置
 /// `ambient.fade_ms`)。打断(渐变途中换目标)把当前插值色冻结为新起点,不跳变。
 /// 漂移时钟 / 轮转相位与色过渡无关,各自开着就随 tick 前进。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AmbientGradient {
     /// 过渡起点锚点色(设目标那刻的可见色,已冻结);`None` = 底色场(启动初态)。
     from: Option<Vec<Rgb>>,

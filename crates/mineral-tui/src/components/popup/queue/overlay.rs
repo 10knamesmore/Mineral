@@ -213,6 +213,41 @@ impl QueueOverlay {
 }
 
 impl Overlay for QueueOverlay {
+    fn dependencies(
+        &self,
+        ctx: &QueueInput<'_>,
+        env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.borrowed(ctx.queue);
+        inputs.observe(ctx.liked);
+        inputs.observe(&(ctx.current, ctx.attached, ctx.playing));
+        inputs.observe(&(self.reveal.own, self.reveal.above));
+        inputs.observe(&super::footer::remaining_label(
+            ctx,
+            ctx.panel_area.width.saturating_sub(2),
+        ));
+        self.search.dependencies(inputs);
+        let visible = self.visible(ctx);
+        let viewport = usize::from(ctx.panel_area.height.saturating_sub(3));
+        self.list.dependencies(inputs, visible.len(), viewport);
+        self.title
+            .dependencies(inputs, env.config.tui().animation(), env.now);
+        inputs.observe(&self.expansion.active.is_some());
+        if self.expansion.active.is_some() {
+            inputs.time(env.now);
+        }
+        let offset = self.list.offset(visible.len(), viewport);
+        ctx.images.dependencies(
+            inputs,
+            visible.iter().skip(offset).take(viewport).map(|index| {
+                ctx.queue
+                    .get(*index)
+                    .and_then(|song| song.cover_url.clone())
+            }),
+        );
+    }
+
     type Input<'a> = QueueInput<'a>;
 
     fn chrome(&self) -> Chrome {

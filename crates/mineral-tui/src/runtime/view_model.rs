@@ -6,7 +6,7 @@
 use mineral_model::{Playlist, PlaylistEntry};
 
 /// 一条歌单 + UI 装饰。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlaylistView {
     /// 底层 model。
     pub data: Playlist,
@@ -15,7 +15,7 @@ pub struct PlaylistView {
 /// 一条 Playlist membership + Song UI 装饰。
 ///
 /// Relation 保留 authoritative CollectionIndex；non-collection Song 不伪造 membership。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlaylistEntryView {
     /// 底层 model relation。
     pub data: PlaylistEntry,

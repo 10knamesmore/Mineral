@@ -13,6 +13,25 @@ pub(crate) struct ReadyImages<'a> {
 }
 
 impl ReadyImages<'_> {
+    /// 声明本组件实际使用的图片；其他图片的回填与 LRU 记账不使它失效。
+    pub(crate) fn dependencies(
+        self,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+        urls: impl IntoIterator<Item = Option<MediaUrl>>,
+    ) {
+        inputs.observe(&self.engine.graphics_generation());
+        inputs.observe(&self.engine.cell_pixels());
+        for url in urls {
+            inputs.observe(&url);
+            if let Some(url) = url {
+                let identity = super::key::ImageIdentity::Url(url.clone());
+                inputs.observe(&self.engine.cache.revision(&url));
+                inputs.observe(&self.engine.preview_images.revisions(&identity));
+                inputs.observe(&self.engine.terminal_images.revisions(&identity));
+            }
+        }
+    }
+
     /// 绘制已经完成的图片或预览。
     pub(crate) fn render(
         self,

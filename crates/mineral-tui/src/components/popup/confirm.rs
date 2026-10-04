@@ -18,6 +18,14 @@ pub(crate) struct ConfirmOverlay;
 impl Overlay for ConfirmOverlay {
     type Input<'a> = ();
 
+    fn dependencies(
+        &self,
+        _ctx: &(),
+        _env: crate::components::frame::FrameEnv<'_>,
+        _inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+    }
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 35,

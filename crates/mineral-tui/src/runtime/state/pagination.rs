@@ -5,7 +5,7 @@ use mineral_channel_core::Page;
 /// 从已收到的首页建立分页状态，供搜索结果桶与艺人专辑列表共同使用。
 ///
 /// 页大小沿用首页请求；同一列表在消费成功或失败回包前只登记一页续页。
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct ListPagination {
     /// 下一页请求；offset 按每页 limit 推进，不能按实际条数推进，
     /// 否则页码型来源的短页会导致页号折回或跳页。

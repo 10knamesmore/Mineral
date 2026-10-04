@@ -66,7 +66,7 @@ pub struct Playback {
 /// 当前曲的振幅包络 + 它的入场揭示动画。
 ///
 /// 归属与动画相位同生共死:换曲或包络数据变化才重建,其余情况原地保留相位。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EnvelopeState {
     /// 包络归属的歌曲 id;与当前 track 不符时整份不可见(见 [`Playback::current_envelope`])。
     owner: SongId,
@@ -119,7 +119,7 @@ impl EnvelopeState {
 }
 
 /// 下一曲 gapless 预排状态:audio snapshot next_* 字段在 view-model 侧的聚合。
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Prefetch {
     /// 是否已预排进引擎队列(prefetch 已 append)。
     pub ready: bool,

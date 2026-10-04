@@ -95,6 +95,10 @@ impl DownloadItem {
 }
 
 impl ToastItem for DownloadItem {
+    fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        inputs.observe(&self.summary);
+    }
+
     fn width(&self) -> u16 {
         u16::try_from(UnicodeWidthStr::width(self.label().as_str())).unwrap_or(0)
     }
@@ -155,6 +159,10 @@ impl CompleteItem {
 }
 
 impl ToastItem for CompleteItem {
+    fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        inputs.observe(&self.wave);
+    }
+
     fn width(&self) -> u16 {
         u16::try_from(UnicodeWidthStr::width(self.label().as_str()))
             .unwrap_or(0)

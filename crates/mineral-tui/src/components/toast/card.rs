@@ -125,6 +125,19 @@ impl Card {
         }
     }
 
+    /// 只比较卡片内容与已采样外观，不让驻留卡片受系统时间持续失效。
+    pub(crate) fn dependencies(
+        &self,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+        now: Instant,
+    ) {
+        inputs.observe(&self.tint);
+        inputs.observe(&self.title);
+        inputs.observe(&self.body);
+        inputs.observe(&self.anim);
+        inputs.observe(&self.burn_progress(now));
+    }
+
     /// 顶替键(管理器做同 id 替换用)。
     pub(crate) fn id(&self) -> Option<&str> {
         self.id.as_deref()

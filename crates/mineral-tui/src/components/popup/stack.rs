@@ -1,14 +1,15 @@
 //! 浮层的挂载、开合动画与遍历；应用通过回调接入具体内容。
 
 use super::component::{Overlay, full_rect};
+use crate::components::lifecycle::{Component, PaintView};
 use crate::render::anim::Transition;
 use crate::runtime::state::OverlayReveal;
 use ratatui::layout::Rect;
 
 /// 一层内容及其容器托管的开合状态。
 struct Mounted<C> {
-    /// 调用方提供的内容。
-    content: C,
+    /// 内容及与此次挂载一起创建和释放的绘制缓存。
+    content: Component<C>,
 
     /// 当前开合动画。
     animation: Transition,
@@ -36,6 +37,60 @@ pub(crate) struct OverlayStack<C> {
     animation_ticks: u16,
 }
 
+/// 浮层外框与内容的只读绘制输入，绑定原挂载实例。
+struct OverlayView<'a, C: Overlay> {
+    /// 此次挂载的业务内容。
+    content: &'a C,
+
+    /// 应用为各类浮层投影的输入。
+    ctx: &'a C::Input<'a>,
+
+    /// 容器据此定位完整外框。
+    screen: Rect,
+
+    /// 外框揭开进度。
+    scale: u16,
+
+    /// 本层是否持有键盘焦点。
+    focused: bool,
+
+    /// 停靠面板是否位于右侧。
+    dock_right: bool,
+}
+
+impl<C: Overlay> PaintView for OverlayView<'_, C> {
+    fn dependencies(
+        &self,
+        _area: Rect,
+        env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&self.content.chrome());
+        inputs.observe(&(self.screen, self.scale, self.focused, self.dock_right));
+        self.content.dependencies(self.ctx, env, inputs);
+    }
+
+    fn paint(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        _area: Rect,
+        env: crate::components::frame::FrameEnv<'_>,
+    ) {
+        super::component::render_overlay(
+            frame,
+            self.screen,
+            self.content,
+            self.scale,
+            self.focused,
+            self.ctx,
+            super::component::OverlayEnv {
+                frame: env,
+                dock_right: self.dock_right,
+            },
+        );
+    }
+}
+
 impl<C: Overlay> OverlayStack<C> {
     /// 创建尚未挂载内容的栈。
     pub(crate) fn new(animation_ticks: u16) -> Self {
@@ -54,7 +109,10 @@ impl<C: Overlay> OverlayStack<C> {
         };
         let mut animation = Transition::new(ticks);
         animation.enter();
-        self.layers.push(Mounted { content, animation });
+        self.layers.push(Mounted {
+            content: Component::new(content),
+            animation,
+        });
     }
 
     /// 修改开合速度，保留每层当前进度。
@@ -117,6 +175,56 @@ impl<C: Overlay> OverlayStack<C> {
         }
     }
 
+    /// 稳态每个挂载实例独立复用，开合期间仍按原裁剪与遮挡顺序合成。
+    pub(crate) fn plan<'a>(
+        &'a self,
+        area: Rect,
+        ctx: &'a C::Input<'a>,
+        env: super::component::OverlayEnv<'a>,
+        plan: &mut crate::render::memo::FramePlan<'a>,
+    ) {
+        let top = self
+            .layers
+            .iter()
+            .rposition(|layer| !layer.animation.leaving());
+        for (index, layer) in self.layers.iter().enumerate() {
+            let focused = Some(index) == top;
+            let scale = layer.animation.eased_settle();
+            if !layer.animation.settled() {
+                plan.moving(move |frame| {
+                    super::component::render_overlay(
+                        frame,
+                        area,
+                        &*layer.content,
+                        scale,
+                        focused,
+                        ctx,
+                        env,
+                    )
+                });
+                continue;
+            }
+            let chrome = layer.content.chrome();
+            let (full, _) = full_rect(
+                &chrome,
+                area,
+                env.frame.config.tui().layout(),
+                env.dock_right,
+            );
+            plan.add(
+                full,
+                layer.content.bind_view(env.frame, |content| OverlayView {
+                    content,
+                    ctx,
+                    screen: area,
+                    scale,
+                    focused,
+                    dock_right: env.dock_right,
+                }),
+            );
+        }
+    }
+
     /// 自底向上访问显示中的内容，绘制次数不修改栈。
     pub(crate) fn visit(&self, mut paint: impl FnMut(&C, u16, bool)) {
         let top = self
@@ -147,12 +255,12 @@ impl<C: Overlay> OverlayStack<C> {
 
     /// 借用所有已挂载内容。
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &C> {
-        self.layers.iter().map(|layer| &layer.content)
+        self.layers.iter().map(|layer| &*layer.content)
     }
 
     /// 更新已挂载内容自己的状态。
     pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut C> {
-        self.layers.iter_mut().map(|layer| &mut layer.content)
+        self.layers.iter_mut().map(|layer| &mut *layer.content)
     }
 
     /// 借用尚未开始离场的内容。
@@ -160,7 +268,7 @@ impl<C: Overlay> OverlayStack<C> {
         self.layers
             .iter()
             .filter(|layer| !layer.animation.leaving())
-            .map(|layer| &layer.content)
+            .map(|layer| &*layer.content)
     }
 
     /// 更新尚未开始离场的内容。
@@ -168,7 +276,7 @@ impl<C: Overlay> OverlayStack<C> {
         self.layers
             .iter_mut()
             .filter(|layer| !layer.animation.leaving())
-            .map(|layer| &mut layer.content)
+            .map(|layer| &mut *layer.content)
     }
 
     /// 输入由最后一个尚未离场的内容接收。

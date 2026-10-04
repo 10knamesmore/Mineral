@@ -31,6 +31,17 @@ pub(crate) struct StatusInput<'a> {
     pub(crate) loading_images: usize,
 }
 
+impl StatusInput<'_> {
+    /// 顶栏只依赖展示出的播放、设备、任务和焦点事实，不依赖歌曲进度。
+    pub(crate) fn dependencies(&self, inputs: &mut crate::render::memo::Dependencies<'_>) {
+        inputs.observe(&(self.view, self.dim, self.playback.playing));
+        inputs.observe(&self.playback.audio_backend);
+        inputs.observe(&self.playback.output);
+        inputs.observe(&self.tasks.by_kind);
+        inputs.observe(&self.loading_images);
+    }
+}
+
 /// 渲染状态行到给定 [`Rect`]。`queue_open` 由浮层栈给出,决定是否显示 `[queue]` tab。
 pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme: &Theme) {
     let [left, right] =

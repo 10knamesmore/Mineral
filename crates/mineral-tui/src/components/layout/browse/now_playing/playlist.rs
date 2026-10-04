@@ -139,7 +139,13 @@ mod tests {
             "前置:尚未准备,encode_pending 为空"
         );
         app.state.resources.images.begin_preparation();
-        crate::view::now_playing::prepare(Rect::new(0, 0, 40, 20), &mut app.state, false);
+        crate::view::now_playing::prepare(
+            Rect::new(0, 0, 40, 20),
+            &mut app.state,
+            &app.theme,
+            false,
+            false,
+        );
         app.state.resources.images.finish_preparation();
 
         let pending = app.state.resources.images.encode_pending;

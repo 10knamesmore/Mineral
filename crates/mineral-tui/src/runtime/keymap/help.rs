@@ -44,7 +44,7 @@ impl HelpGroup {
 }
 
 /// cheatsheet 目录里的一行:一个(或一对合并的)动作的分组、描述与全部绑定键。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HelpEntry {
     /// 所属分组。
     group: HelpGroup,

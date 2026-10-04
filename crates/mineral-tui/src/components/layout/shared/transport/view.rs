@@ -44,7 +44,74 @@ impl TransportBar {
     }
 }
 
+/// 播放栏的底色采样策略属于本次绘制输入，身份仍由原组件持有。
+struct TransportPaint<'a> {
+    /// 已准备播放栏及当前播放模型。
+    view: &'a TransportView<'a>,
+
+    /// 全屏标题从下层氛围背景淡出，普通页面使用主题底色。
+    sample_background: bool,
+}
+
+impl crate::components::lifecycle::PaintView for TransportPaint<'_> {
+    fn dependencies(
+        &self,
+        _area: Rect,
+        _env: FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        self.view.dependencies(self.sample_background, inputs);
+    }
+
+    fn paint(&self, frame: &mut Frame<'_>, area: Rect, env: FrameEnv<'_>) {
+        let fade = if self.sample_background {
+            match crate::components::layout::shared::text::center_bg(frame, area) {
+                color @ Color::Rgb(..) => color,
+                _ => env.theme.base,
+            }
+        } else {
+            env.theme.base
+        };
+        self.view.paint(frame, area, fade);
+    }
+}
+
 impl TransportView<'_> {
+    /// 为本次布局指定标题是否从下层画布采样底色。
+    pub(crate) fn with_background(
+        &self,
+        sample_background: bool,
+    ) -> impl crate::components::lifecycle::PaintView + '_ {
+        TransportPaint {
+            view: self,
+            sample_background,
+        }
+    }
+
+    /// 声明播放事实、局部反馈与标题时间依赖。
+    fn dependencies(
+        &self,
+        sample_background: bool,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        let env = self.environment;
+        let pb = self.input.playback;
+        inputs.observe(&sample_background);
+        inputs.observe(&pb.track);
+        inputs.observe(&pb.position_ms);
+        inputs.observe(&(pb.playing, pb.volume_pct, pb.mode));
+        inputs.observe(&pb.media_info);
+        inputs.observe(&pb.play_origin);
+        inputs.observe(&pb.buffered_bps);
+        inputs.observe(&(pb.sample_rate_hz, pb.engine_duration_ms, pb.prefetch));
+        inputs.optional(pb.current_envelope());
+        inputs.optional(self.input.palette);
+        self.component.dependencies(inputs);
+        self.component
+            .title
+            .dependencies(inputs, env.config.tui().animation(), env.now);
+    }
+
     /// 根据当前背景绘制标题、播放进度和已经更新的操作反馈。
     pub(crate) fn paint(&self, frame: &mut Frame<'_>, area: Rect, fade_to: Color) {
         let env = self.environment;

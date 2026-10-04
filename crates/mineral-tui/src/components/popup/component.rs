@@ -24,6 +24,7 @@ use crate::runtime::action::Action;
 pub(crate) const FULL_SCALE: u16 = 1000;
 
 /// 浮层外框声明:居中尺寸约束 + 是否播放弹出动画。纯静态配置,不含数据/状态。
+#[derive(Clone, PartialEq)]
 pub(crate) struct Chrome {
     /// 宽度相对主帧的百分比。
     pub(crate) pct_w: u16,
@@ -178,6 +179,14 @@ pub(crate) trait Overlay {
 
     /// 外框尺寸约束 + 是否动画。每帧调用,可据自身状态返回不同尺寸。
     fn chrome(&self) -> Chrome;
+
+    /// 声明绘制消费的状态与共享数据；容器负责统一比较和复用。
+    fn dependencies(
+        &self,
+        ctx: &Self::Input<'_>,
+        env: FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    );
 
     /// 构造外框 Block(标题 / 边框色 / 底部提示)。
     ///

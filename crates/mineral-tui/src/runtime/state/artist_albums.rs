@@ -9,7 +9,7 @@ use super::pagination::ListPagination;
 /// 是否结束由分页信号决定。
 ///
 /// 详情帧在首页到货时构造，后续只追加已请求的页；随帧保留或销毁，动画副本可克隆。
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct ArtistAlbums {
     /// 已接受的各页专辑，按回包顺序累积。
     albums: Vec<Album>,

@@ -11,7 +11,7 @@ use crate::app::AppOverlay;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::runtime::window_title::TitleContext;
 use crate::tui::Tui;
-use crate::view::draw;
+use crate::view::plan;
 
 use super::App;
 
@@ -95,10 +95,13 @@ impl App {
             if self.overlays.is_disconnected() {
                 // 只渲染断连提示 + 推进其弹出动画 + 等按键退出;daemon 没了,正常路径全是
                 // 兜底默认值,跳过后端同步。fatal 态直接退出(不走 dispatch,不玩退出收缩动画)。
-                tui.draw(|f| {
-                    draw(f, &self.frame_view());
-                    self.state.resources.images.flush_graphics_commands()
-                })?;
+                let graphics = self.state.resources.images.take_graphics_commands();
+                let view = self.frame_view();
+                tui.present(
+                    plan(area, &view),
+                    &graphics,
+                    self.state.resources.images.graphics_protocol(),
+                )?;
                 if event::poll(self.frame_tick())?
                     && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press
@@ -110,10 +113,15 @@ impl App {
                 continue;
             }
 
-            tui.draw(|f| {
-                draw(f, &self.frame_view());
-                self.state.resources.images.flush_graphics_commands()
-            })?;
+            let graphics = self.state.resources.images.take_graphics_commands();
+            {
+                let view = self.frame_view();
+                tui.present(
+                    plan(area, &view),
+                    &graphics,
+                    self.state.resources.images.graphics_protocol(),
+                )?;
+            }
 
             let timeout = self.frame_tick().saturating_sub(self.last_tick.elapsed());
             if event::poll(timeout)? {

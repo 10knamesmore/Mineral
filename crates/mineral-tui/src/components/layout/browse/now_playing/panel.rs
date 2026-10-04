@@ -7,25 +7,38 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders};
 
 use super::{NowPlaying, NowPlayingInput, NowPlayingView};
+use crate::components::frame::PrepareCx;
 use crate::components::layout::transition;
-use crate::image::{ImageNeeds, ImageRenderPhase};
+use crate::image::ImageRenderPhase;
 use crate::render::theme::Theme;
 use crate::runtime::state::View;
 
 use super::{cover_transition, playlist, track};
 
-/// 准备主封面、进入曲目的预热以及标题相位；页面飞行层接管主图时只准备文字。
-impl NowPlaying {
-    /// 按布局更新标题，并声明封面需求。
-    pub(crate) fn prepare(
+/// 当前选择的准备输入；飞行层接管封面时仍准备标题。
+pub(crate) struct NowPlayingPreparation<'a> {
+    /// 本次选择与共享模型。
+    pub(crate) selection: NowPlayingInput<'a>,
+
+    /// 页面转场是否接管主封面。
+    pub(crate) cover_in_flight: bool,
+}
+
+/// 准备主封面、进入曲目的预热以及标题相位。
+impl crate::components::lifecycle::Prepare for NowPlaying {
+    type Input<'a> = NowPlayingPreparation<'a>;
+
+    fn prepare(
         &mut self,
         area: Rect,
-        input: &NowPlayingInput<'_>,
-        now: std::time::Instant,
-        images: &mut ImageNeeds<'_>,
-        phase: ImageRenderPhase,
-        cover_in_flight: bool,
+        preparation: NowPlayingPreparation<'_>,
+        cx: &mut PrepareCx<'_>,
     ) {
+        let input = &preparation.selection;
+        let now = cx.frame.now;
+        let phase = cx.image_phase;
+        let images = &mut cx.images;
+        let cover_in_flight = preparation.cover_in_flight;
         let Some([cover_area, kv, _]) = super::main_cover::sections(area) else {
             return;
         };

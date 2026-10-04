@@ -4,7 +4,7 @@
 //! 必然恢复终端,即使发生 panic(我们在 enter 时安装了一个 chained panic hook)。
 
 use std::fmt;
-use std::io::{self, BufWriter, Stdout};
+use std::io::{self, BufWriter, Stdout, Write as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -19,10 +19,11 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     is_raw_mode_enabled,
 };
-use ratatui::Frame;
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend as _, CrosstermBackend};
 use ratatui::layout::Position;
+
+use crate::image::graphics::GraphicsProtocol;
 
 /// 终端 backend 的 RAII 持有者。
 pub struct Tui {
@@ -36,6 +37,12 @@ pub struct Tui {
     /// 是否已成功 push 终端标题栈。panic hook 与正常恢复路径共用此 Arc,
     /// 保证只有真正 push 过才 pop。
     title_pushed: Arc<AtomicBool>,
+
+    /// 与终端同生命周期的保留画布和区域输出参照。
+    compositor: crate::render::memo::Compositor,
+
+    /// 已连续省略的帧数，恢复提交时记录，避免逐帧日志。
+    skipped_frames: u64,
 }
 
 impl Tui {
@@ -47,6 +54,8 @@ impl Tui {
             terminal,
             launch_cursor: None,
             title_pushed: Arc::new(AtomicBool::new(false)),
+            compositor: crate::render::memo::Compositor::default(),
+            skipped_frames: 0,
         })
     }
 
@@ -120,12 +129,44 @@ impl Tui {
         Ok(self.terminal.get_frame().area())
     }
 
-    /// 渲染一帧；回调可在 cell 输出前发送图片指令，失败则终止本帧。
-    pub fn draw<F>(&mut self, f: F) -> io::Result<()>
-    where
-        F: FnOnce(&mut Frame<'_>) -> io::Result<()>,
-    {
-        self.terminal.try_draw(f)?;
+    /// 输入或合成变化才提交；图片指令独立检查，始终先于引用它的 cell 输出。
+    pub(crate) fn present(
+        &mut self,
+        plan: crate::render::memo::FramePlan<'_>,
+        graphics: &str,
+        protocol: GraphicsProtocol,
+    ) -> io::Result<()> {
+        let area = self.terminal.get_frame().area();
+        if !self.compositor.needs_frame(&plan, area) && graphics.is_empty() {
+            if self.skipped_frames == 0 {
+                mineral_log::debug!(target: "tui::render", "visible components unchanged; suspend frame submissions");
+            }
+            self.skipped_frames = self.skipped_frames.saturating_add(1);
+            return Ok(());
+        }
+        let whole_frame_graphics =
+            matches!(protocol, GraphicsProtocol::Sixel | GraphicsProtocol::Iterm2);
+        let update =
+            self.compositor
+                .render(plan, &mut self.terminal.get_frame(), whole_frame_graphics);
+        if !graphics.is_empty() {
+            let mut output = io::stdout().lock();
+            output.write_all(graphics.as_bytes())?;
+            output.flush()?;
+        }
+        if !update.is_empty() || !graphics.is_empty() {
+            self.terminal
+                .backend_mut()
+                .draw(self.compositor.updates(&update))?;
+            self.terminal.hide_cursor()?;
+            ratatui::backend::Backend::flush(self.terminal.backend_mut())?;
+        }
+        if self.skipped_frames > 0 {
+            mineral_log::debug!(target: "tui::render", skipped_frames = self.skipped_frames,
+                painted_components = update.painted_components, changed_cells = update.len(),
+                "frame composition resumed");
+            self.skipped_frames = 0;
+        }
         Ok(())
     }
 

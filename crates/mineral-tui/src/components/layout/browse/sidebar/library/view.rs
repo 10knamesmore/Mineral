@@ -65,6 +65,61 @@ impl TrackList {
     }
 }
 
+impl crate::components::lifecycle::PaintView for TrackView<'_> {
+    /// 列表实例声明可见数据、位置、搜索和图片输入；共享曲库不复制进缓存。
+    fn dependencies(
+        &self,
+        area: ratatui::layout::Rect,
+        _env: FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.optional(self.input.playlist);
+        inputs.observe(&self.input.generation);
+        inputs.optional(self.input.playing);
+        inputs.observe(
+            &self
+                .input
+                .tracks
+                .map(|tracks| (tracks.complete, tracks.next_offset)),
+        );
+        self.list.search.dependencies(inputs);
+        let tracks = self.rows();
+        let total = tracks.len();
+        let viewport = usize::from(area.height.saturating_sub(3));
+        inputs.observe(&total);
+        self.list.scroll.dependencies(inputs, total, viewport);
+        self.list
+            .title
+            .dependencies(inputs, self.frame.config.tui().animation(), self.frame.now);
+        inputs.observe(&self.list.stable);
+        inputs.observe(&self.list.expansion.active.is_some());
+        if self.list.stable && self.list.expansion.active.is_some() {
+            inputs.time(self.frame.now);
+        }
+        for entry in tracks.iter() {
+            inputs.observe(&(entry.data.index, entry.loved));
+        }
+        let offset = self.list.scroll.offset(total, viewport);
+        let mut covers = Vec::new();
+        for index in offset..offset.saturating_add(viewport).min(total) {
+            if let Some(entry) = tracks.get(index) {
+                inputs.observe(entry);
+                covers.push(entry.data.song.cover_url.clone());
+            }
+        }
+        self.images.dependencies(inputs, covers);
+    }
+
+    fn paint(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: ratatui::layout::Rect,
+        _env: FrameEnv<'_>,
+    ) {
+        self.paint(area, frame.buffer_mut());
+    }
+}
+
 impl TrackView<'_> {
     /// 按组件当前查询借出行，不暴露其可变交互状态。
     pub(super) fn rows(&self) -> FilteredTracks<'_> {

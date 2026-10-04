@@ -47,6 +47,49 @@ impl PlaylistList {
     }
 }
 
+impl crate::components::lifecycle::PaintView for PlaylistView<'_> {
+    /// 过滤与时长使用数据版本，图片只观察可见歌单。
+    fn dependencies(
+        &self,
+        area: ratatui::layout::Rect,
+        _env: FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.borrowed(self.input.library.playlists.as_slice());
+        inputs.observe(&self.input.library.tracks_generation);
+        inputs.observe(&self.input.loading);
+        inputs.observe(&self.indexing_count());
+        self.list.search.dependencies(inputs);
+        let rows = self.rows();
+        let total = rows.len();
+        let viewport = usize::from(area.height.saturating_sub(3));
+        self.list.scroll.dependencies(inputs, total, viewport);
+        inputs.observe(&self.list.stable);
+        inputs.observe(&self.list.expansion.active.is_some());
+        if self.list.stable && self.list.expansion.active.is_some() {
+            inputs.time(self.frame.now);
+        }
+        let offset = self.list.scroll.offset(total, viewport);
+        let covers = rows.iter().skip(offset).take(viewport).map(|playlist| {
+            crate::image::collage::effective_cover_url(
+                self.input.library,
+                self.images,
+                &playlist.data,
+            )
+        });
+        self.images.dependencies(inputs, covers);
+    }
+
+    fn paint(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: ratatui::layout::Rect,
+        _env: FrameEnv<'_>,
+    ) {
+        self.paint(area, frame.buffer_mut());
+    }
+}
+
 impl PlaylistView<'_> {
     /// 当前显示顺序；只复制引用，不复制曲目或歌单。
     pub(super) fn rows(&self) -> Vec<&crate::runtime::view_model::PlaylistView> {

@@ -112,9 +112,11 @@ impl TrackLayout {
 }
 
 /// 用本次视口协调列表状态，并声明可见行的图片需求。
-impl TrackList {
+impl crate::components::lifecycle::Prepare for TrackList {
+    type Input<'a> = TrackInput<'a>;
+
     /// 更新本列表的显示状态；图片只声明需求，交由组合根协调。
-    pub(crate) fn prepare(&mut self, area: Rect, input: TrackInput<'_>, cx: &mut PrepareCx<'_>) {
+    fn prepare(&mut self, area: Rect, input: TrackInput<'_>, cx: &mut PrepareCx<'_>) {
         let frame = cx.frame;
         let theme = frame.theme;
         let advance = cx.advance;

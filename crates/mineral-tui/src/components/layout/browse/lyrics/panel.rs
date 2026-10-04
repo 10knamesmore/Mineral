@@ -19,7 +19,6 @@ use mineral_model::LyricLine;
 use super::sweep::LyricPaint;
 
 use super::{LyricsInput, LyricsPanel, LyricsView};
-use crate::components::frame::FrameEnv;
 use crate::components::layout::shared::text::center_bg;
 use crate::render::anim::ease_in_out;
 use crate::render::color::{lerp_color, lerp_permille};
@@ -98,17 +97,32 @@ pub fn draw(
     paint_window(frame, inner, window, theme, &lyric_paint);
 }
 
+/// 歌词准备所需的播放输入、显示模式和只读背景采样。
+pub(crate) struct LyricsPreparation<'a> {
+    /// 当前歌曲的歌词与播放位置。
+    pub(crate) playback: LyricsInput<'a>,
+
+    /// 本次准备的是紧凑还是沉浸面板。
+    pub(crate) mode: LyricMode,
+
+    /// 对已确定氛围场采样，不借用可变画布。
+    pub(crate) background: &'a dyn Fn(Rect) -> Color,
+}
+
 /// 根据可见歌词和背景采样更新字词颜色；不生成任何字符格。
-impl LyricsPanel {
-    /// 根据当前布局和显式播放事实更新字词颜色，绘制不再更新它。
-    pub(crate) fn prepare(
+impl crate::components::lifecycle::Prepare for LyricsPanel {
+    type Input<'a> = LyricsPreparation<'a>;
+
+    fn prepare(
         &mut self,
         area: Rect,
-        input: LyricsInput<'_>,
-        frame: FrameEnv<'_>,
-        motion: LyricMode,
-        background: impl Fn(Rect) -> Color,
+        preparation: LyricsPreparation<'_>,
+        cx: &mut crate::components::frame::PrepareCx<'_>,
     ) {
+        let input = preparation.playback;
+        let frame = cx.frame;
+        let motion = preparation.mode;
+        let background = preparation.background;
         let state = self.view(input, frame);
         let theme = frame.theme;
         let targets =

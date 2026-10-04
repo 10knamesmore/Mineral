@@ -10,7 +10,7 @@ pub(crate) use view::{LyricsInput, LyricsView};
 
 pub(crate) use morph::draw_transition;
 pub use panel::LyricMode;
-pub(crate) use panel::draw;
+pub(crate) use panel::{LyricsPreparation, draw};
 pub(crate) use sweep::LyricColors;
 
 mod glide;

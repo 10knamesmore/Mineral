@@ -19,3 +19,36 @@ pub(crate) struct SearchView<'a> {
     /// 内联下拉框的布局环境。
     pub(crate) dock_right: bool,
 }
+
+impl SearchView<'_> {
+    /// 搜索页沿用自身状态边界，声明当前结果与详情，不复制隐藏 source 的会话。
+    pub(crate) fn dependencies(
+        &self,
+        areas: &crate::components::layout::shared::compute::Areas,
+        detail: &super::detail::DetailView<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        self.page.dependencies(inputs);
+        inputs.observe(self.caps);
+        inputs.observe(&self.dock_right);
+        inputs.observe(&self.page.active_results().is_some());
+        if let Some(results) = self.page.active_results() {
+            inputs.observe(&results.results);
+            inputs.observe(&results.exhausted());
+            results.list().dependencies(
+                inputs,
+                results.len(),
+                usize::from(areas.left.height.saturating_sub(3)),
+            );
+            results
+                .title
+                .dependencies(inputs, self.frame.config.tui().animation(), self.frame.now);
+        }
+        inputs.observe(detail.paint.liked);
+        inputs.observe(&(detail.paint.focus, detail.paint.phase));
+        inputs.observe(&detail.stack.is_some());
+        if let (Some(stack), Some(area)) = (detail.stack, areas.right) {
+            stack.dependencies(inputs, area, &detail.paint);
+        }
+    }
+}

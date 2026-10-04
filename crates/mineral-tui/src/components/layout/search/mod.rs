@@ -4,5 +4,7 @@
 pub mod detail;
 pub mod panel;
 
+mod preparation;
+pub(crate) use preparation::SearchPreparation;
 mod view;
 pub(crate) use view::SearchView;

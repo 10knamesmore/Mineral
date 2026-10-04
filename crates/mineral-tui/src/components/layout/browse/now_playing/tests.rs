@@ -65,7 +65,7 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
 
 /// 通过生产入口绘制右栏以触发封面编码请求。
 fn render(state: &mut AppState, theme: &Theme, cover_in_flight: bool) -> color_eyre::Result<()> {
-    crate::view::now_playing::prepare(PANEL, state, cover_in_flight);
+    crate::view::now_playing::prepare(PANEL, state, theme, cover_in_flight, false);
     let mut terminal = Terminal::new(TestBackend::new(52, 28))?;
     terminal.draw(|frame| draw(frame, PANEL, state, theme, cover_in_flight))?;
     Ok(())

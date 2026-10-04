@@ -7,6 +7,7 @@ use ratatui::layout::Position;
 use rustc_hash::FxHashMap;
 
 use crate::app::AppOverlay;
+use crate::components::lifecycle::Component;
 use crate::components::popup::OverlayStack;
 use crate::components::toast::download_toast::DownloadNotifier;
 use crate::components::toast::notifications::Notifications;
@@ -85,7 +86,7 @@ pub struct App {
     pub(crate) client: Arc<dyn Backend>,
 
     /// topbar 通知层:多条堆叠的提示通道(flash / 常驻进度),与具体业务解耦。
-    pub(crate) notifications: Notifications,
+    pub(crate) notifications: Component<Notifications>,
 
     /// 下载 → 通知层的翻译器(持下载专属去重状态);通知层之上的众多使用方之一。
     pub(super) download_notifier: DownloadNotifier,
@@ -154,10 +155,10 @@ impl App {
         );
         let ambient_pulse = crate::render::ambient::LoudnessPulse::new(tick_ms);
         let overlays = OverlayStack::new(ticks16_from_ms(*anim.popup_anim_ms(), tick_ms));
-        let notifications = Notifications::new(
+        let notifications = Component::new(Notifications::new(
             *tui_cfg.toast().flash_ttl_secs(),
             ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
-        );
+        ));
         let window_title = WindowTitle::new(tui_cfg.window_title());
         let mut state = AppState::new(cfg, images);
         // 各源能力声明:连接后自举一次进镜像,UI 据此画入口。

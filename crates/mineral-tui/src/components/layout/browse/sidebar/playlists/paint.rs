@@ -28,9 +28,11 @@ use crate::runtime::view_model::PlaylistView;
 const HIGHLIGHT_SYMBOL: &str = "▌ ";
 
 /// 先更新列表视口，再收集同一可见窗口的缩略图需求。
-impl PlaylistList {
+impl crate::components::lifecycle::Prepare for PlaylistList {
+    type Input<'a> = PlaylistInput<'a>;
+
     /// 在稳定布局中更新自己的视口并声明可见图片。
-    pub(crate) fn prepare(&mut self, area: Rect, input: PlaylistInput<'_>, cx: &mut PrepareCx<'_>) {
+    fn prepare(&mut self, area: Rect, input: PlaylistInput<'_>, cx: &mut PrepareCx<'_>) {
         let frame = cx.frame;
         let theme = frame.theme;
         let advance = cx.advance;

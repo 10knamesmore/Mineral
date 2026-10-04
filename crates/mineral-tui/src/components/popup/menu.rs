@@ -119,6 +119,7 @@ pub(crate) enum ContainerRef {
 }
 
 /// 一个菜单项。
+#[derive(Clone, PartialEq)]
 pub(crate) struct MenuItem {
     /// 快捷字母:按下直达并执行。`None` = 仅导航 + 确认可达。
     /// 避开 `j`/`k`/`h`/`q`/`l`(见模块文档)。
@@ -279,6 +280,17 @@ impl PopMenu {
 
 impl Overlay for PopMenu {
     type Input<'a> = ();
+
+    fn dependencies(
+        &self,
+        _ctx: &(),
+        _env: crate::components::frame::FrameEnv<'_>,
+        inputs: &mut crate::render::memo::Dependencies<'_>,
+    ) {
+        inputs.observe(&self.title);
+        inputs.observe(&self.items);
+        inputs.observe(&(self.sel, self.reveal.own, self.reveal.above));
+    }
 
     fn prepare(
         &mut self,

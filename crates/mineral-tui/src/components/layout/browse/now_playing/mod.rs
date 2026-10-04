@@ -9,7 +9,7 @@ pub use state::NowPlaying;
 pub mod playlist;
 pub mod track;
 
-pub(crate) use panel::draw;
+pub(crate) use panel::{NowPlayingPreparation, draw};
 mod view;
 pub(crate) use view::{NowPlayingInput, NowPlayingView};
 
