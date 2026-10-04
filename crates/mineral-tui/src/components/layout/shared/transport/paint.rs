@@ -1,8 +1,8 @@
 //! 五行 Transport 面板:上边框状态 / 曲名 / 元数据 / 进度 / 下边框时间与控件。
 
 use super::feedback::{ButtonAppearance, ControlButton, Heading, TransportBar};
+use super::progress;
 
-use mineral_audio::Bps;
 use mineral_model::AudioFormat;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -10,9 +10,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use crate::components::frame::FrameEnv;
 use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::components::layout::shared::text::{alias_span, center_bg, char_width, display_width};
-use crate::components::layout::shared::waveform::{PlayState, WaveformCtx, waveform_spans};
 use crate::render::color::lerp_color;
 use crate::render::control_press::background as button_background;
 use crate::render::theme::{Ink, Theme};
@@ -51,9 +51,9 @@ pub(crate) fn draw(
     pb: &Playback,
     feedback: &TransportBar,
     marquee: &MarqueeCtx<'_>,
-    wave: &WaveformCtx<'_>,
-    theme: &Theme,
+    env: FrameEnv<'_>,
 ) {
+    let theme = env.theme;
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -87,7 +87,7 @@ pub(crate) fn draw(
 
     paint_now(frame, now, pb, marquee, theme, ink);
     paint_meta(frame, meta, pb, ink);
-    paint_progress(frame, prog, pb, wave, theme, ink);
+    progress::draw(frame, prog, pb, env);
 }
 
 /// 按终端列宽裁切，留得下一列时用省略号提示；不切断宽字符。
@@ -220,67 +220,6 @@ fn paint_meta(frame: &mut Frame<'_>, area: Rect, pb: &Playback, ink: Ink) {
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
 }
 
-/// 进度条占满面板内宽；波形开启且当前曲包络就绪时，轨道原地化身振幅波形。
-fn paint_progress(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    pb: &Playback,
-    wave: &WaveformCtx<'_>,
-    theme: &Theme,
-    ink: Ink,
-) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-    let bar_w = usize::from(area.width);
-    let filled = pb.ratio_bps().of(bar_w);
-    if wave.enabled
-        && let Some(envelope) = wave.envelope
-    {
-        frame.render_widget(
-            Paragraph::new(Line::from(waveform_spans(
-                envelope,
-                bar_w,
-                PlayState {
-                    // 连续比例:软边混色要亚列精度,量化在 waveform 内部做
-                    progress: pb.ratio_bps(),
-                    buffered: pb.buffered_bps,
-                },
-                wave,
-                theme,
-                ink,
-            ))),
-            area,
-        );
-        return;
-    }
-    let fill = "━".repeat(filled);
-    let mut spans = vec![Span::styled(fill, Style::new().fg(theme.accent_2))];
-    if filled < bar_w {
-        spans.push(Span::styled(
-            "●",
-            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-        ));
-        // 播放头之后的轨道再分两段:已缓冲(亮)+ 未缓冲(暗)。同一 `─` 字形仅靠颜色区分,
-        // cell 数守恒,布局不抖。muted 档比 ghost 档明显亮一大档但不抢已播的亮蓝,
-        // 形成「已播亮蓝 > 已缓冲中灰 > 未缓冲暗灰」的三级层次,缓冲进度即这段亮轨道的长度。
-        let (buffered, unbuffered) = split_buffered_track(bar_w, filled, pb.buffered_bps);
-        if buffered > 0 {
-            spans.push(Span::styled(
-                "─".repeat(buffered),
-                Style::new().fg(ink.muted),
-            ));
-        }
-        if unbuffered > 0 {
-            spans.push(Span::styled(
-                "─".repeat(unbuffered),
-                Style::new().fg(ink.ghost),
-            ));
-        }
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
 /// 底边框时间和预取状态独立于控件显隐；返回控件可用的中间列区间。
 fn paint_footer(
     frame: &mut Frame<'_>,
@@ -330,27 +269,6 @@ fn paint_footer(
         }
     }
     Some((left_limit, right_limit))
-}
-
-/// 播放头之后的轨道按缓冲进度拆成 `(已缓冲亮段, 未缓冲暗段)` 的 cell 数。
-///
-/// 缓冲位永远不早于播放头(已播部分必然已缓冲),两段之和恒等于 `bar_w - filled - 1`
-/// ——即原本整条未播放轨道的长度,故不改变进度条总宽,布局不抖。
-///
-/// # Params:
-///   - `bar_w`: 进度条总 cell 宽
-///   - `filled`: 已播放实心 cell 数,调用方保证 `< bar_w`
-///   - `buffered`: 已缓冲比例
-///
-/// # Return:
-///   `(亮段 cell 数, 暗段 cell 数)`,二者之和 = `bar_w - filled - 1`。
-pub(crate) fn split_buffered_track(bar_w: usize, filled: usize, buffered: Bps) -> (usize, usize) {
-    let track_len = bar_w.saturating_sub(filled).saturating_sub(1);
-    let bright = buffered
-        .of(bar_w)
-        .saturating_sub(filled.saturating_add(1))
-        .min(track_len);
-    (bright, track_len - bright)
 }
 
 /// 四个按钮占下边框的局部列；播放图标始终落在面板几何中心附近。
@@ -736,46 +654,5 @@ fn fmt_tier_color(lossless: bool, bitrate_bps: Option<u32>, theme: &Theme, ink: 
         (false, Some(b)) if b >= 320_000 => theme.green,   // 高码有损
         (false, Some(b)) if b >= 192_000 => theme.text,    // 中码
         _ => ink.muted,                                    // 低码 / 码率未知
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use proptest::{prop_assert, prop_assert_eq, prop_assume, proptest};
-
-    use mineral_audio::Bps;
-
-    use super::split_buffered_track;
-
-    proptest! {
-        /// 亮段 + 暗段恒等于「播放头之后的轨道长度」(`bar_w - filled - 1`),
-        /// 即缓冲 overlay 永不改变进度条总宽——布局不会因缓冲值抖动。
-        #[test]
-        fn prop_split_track_conserves_width(
-            bar_w in 1usize..200,
-            filled in 0usize..200,
-            bps in 0u16..=10_000,
-        ) {
-            prop_assume!(filled < bar_w);
-            let (bright, dim) = split_buffered_track(bar_w, filled, Bps::new(bps));
-            prop_assert_eq!(bright + dim, bar_w - filled - 1);
-            // 缓冲比例单调:bps↑ ⇒ 亮段不减。
-            let (bright_more, _) = split_buffered_track(bar_w, filled, Bps::new(bps.saturating_add(1)));
-            prop_assert!(bright_more >= bright);
-        }
-    }
-
-    /// `split_buffered_track`:满格全亮 / 缓冲≤已播则无亮段 / 半缓冲分两段。
-    #[test]
-    fn split_buffered_track_cases() {
-        // bar_w=11,filled=2(播放头占 1),轨道 = 11-2-1 = 8 cell。
-        // 满缓冲:整条轨道都亮。
-        assert_eq!(split_buffered_track(11, 2, Bps::FULL), (8, 0));
-        // 零缓冲:全暗(等价改动前行为)。
-        assert_eq!(split_buffered_track(11, 2, Bps::ZERO), (0, 8));
-        // 缓冲 50% → buffered_cells = 5;亮段 = 5-(2+1)=2,暗段 = 8-2=6。
-        assert_eq!(split_buffered_track(11, 2, Bps::new(5_000)), (2, 6));
-        // 缓冲落在播放头之内(25% → buffered_cells=2 ≤ filled+1)→ 无亮段。
-        assert_eq!(split_buffered_track(11, 2, Bps::new(2_500)), (0, 8));
     }
 }

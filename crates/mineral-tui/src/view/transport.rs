@@ -20,7 +20,6 @@ pub(super) fn view<'a>(
         bar.view(
             TransportInput {
                 playback: &state.models.playback,
-                palette: state.resources.images.current_palette.as_ref(),
             },
             env,
         )

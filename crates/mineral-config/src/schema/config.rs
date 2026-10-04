@@ -19,6 +19,7 @@ use super::layout::LayoutConfig;
 use super::lyrics::LyricsConfig;
 use super::minimap::MinimapConfig;
 use super::prefetch::PrefetchConfig;
+use super::progress::ProgressConfig;
 use super::queue::QueueConfig;
 use super::script::ScriptConfig;
 use super::search::SearchConfig;
@@ -75,6 +76,9 @@ pub struct TuiConfig {
 
     /// 频谱面板
     spectrum: SpectrumConfig,
+
+    /// 播放进度条配色
+    progress: ProgressConfig,
 
     /// 进度条波形
     waveform: WaveformConfig,

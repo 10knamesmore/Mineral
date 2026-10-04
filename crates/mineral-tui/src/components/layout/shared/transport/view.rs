@@ -2,8 +2,7 @@
 
 use super::TransportBar;
 use crate::components::frame::FrameEnv;
-use crate::components::layout::shared::{marquee::MarqueeCtx, waveform::WaveformCtx};
-use crate::render::palette::CoverPalette;
+use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::runtime::playback::Playback;
 use ratatui::{Frame, layout::Rect, style::Color};
 
@@ -12,9 +11,6 @@ use ratatui::{Frame, layout::Rect, style::Color};
 pub(crate) struct TransportInput<'a> {
     /// 当前播放、缓冲与包络信息。
     pub(crate) playback: &'a Playback,
-
-    /// 当前歌曲已经应用的封面色板。
-    pub(crate) palette: Option<&'a CoverPalette>,
 }
 
 /// 播放栏在这一帧的只读状态。
@@ -105,7 +101,6 @@ impl TransportView<'_> {
         inputs.observe(&pb.buffered_bps);
         inputs.observe(&(pb.sample_rate_hz, pb.engine_duration_ms, pb.prefetch));
         inputs.optional(pb.current_envelope());
-        inputs.optional(self.input.palette);
         self.component.dependencies(inputs);
         self.component
             .title
@@ -122,20 +117,13 @@ impl TransportView<'_> {
             env.theme,
             fade_to,
         );
-        let waveform = WaveformCtx::new(
-            env.config.tui().waveform(),
-            self.input.playback,
-            self.input.palette,
-            env.theme,
-        );
         super::paint::draw(
             frame,
             area,
             self.input.playback,
             self.component,
             &marquee,
-            &waveform,
-            env.theme,
+            env,
         );
     }
 }

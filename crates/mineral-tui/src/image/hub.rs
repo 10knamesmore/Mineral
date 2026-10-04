@@ -115,10 +115,9 @@ pub struct ImageEngine {
     /// `None` = 频谱在 hue 漂移(无封面 / 取色未就绪)。`sync_cover_palette` 身份判定用。
     pub spectrum_cover: Option<MediaUrl>,
 
-    /// 当前播放封面的色板拷贝(频谱 / 波形共用的稳定源),与 `spectrum_cover` 同处维护。
-    /// **刻意不每帧读 `palettes`**:那是原图 LRU 的派生物,browse 滚动 churn 会把在播曲
-    /// 的色板逐出又重取,直接读它会让已播段渐变在 Gradient↔Solid 间闪烁;持一份拷贝
-    /// 只随封面**身份变化**更新,对逐出免疫。`None` = 取色失败 / 无封面(回落单色)。
+    /// 当前播放封面的色板拷贝，与 `spectrum_cover` 同处维护，供配置重载时重设氛围背景。
+    /// 不依赖原图 LRU 的派生色板表，浏览其他封面导致缓存逐出时仍保留当前歌曲配色。
+    /// `None` 表示取色失败或无封面。
     pub current_palette: Option<CoverPalette>,
 
     /// 正在执行的 preview 或 decode URL；只表达真实 in-flight。

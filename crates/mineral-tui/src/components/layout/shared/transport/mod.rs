@@ -2,8 +2,9 @@
 
 mod feedback;
 mod paint;
+mod progress;
 mod view;
+mod waveform;
 pub(crate) use view::{TransportInput, TransportView};
 
 pub(crate) use feedback::TransportBar;
-pub(crate) use paint::split_buffered_track;

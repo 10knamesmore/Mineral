@@ -38,7 +38,7 @@ pub struct Theme {
     /// 主强调色:选中 / 聚焦边框 / 当前播放。
     pub accent: Color,
 
-    /// 副强调色:进度条填充 / 频谱顶段。
+    /// 副强调色：频谱顶段。
     pub accent_2: Color,
 
     /// 错误 / 删除 / love 标记。
@@ -86,11 +86,10 @@ pub struct TextAlpha {
     pub ghost: u16,
 }
 
-/// 对「实际背景色」现算出的四档次级文本色(alpha compositing:`lerp(bg, text, alpha)`)。
+/// 对实际背景现算的三档次级文本色：`lerp(bg, text, alpha)`。
 ///
-/// 一处渲染面采样一次背景、换出一组 `Ink` 共用。回落链见 [`Theme::text_over`]:
-/// 采不到真彩背景按 `base` 混合;`base` / `text` 也非真彩才回落静态 token
-/// (`subtext` / `overlay` / `surface1` / `surface0`)。
+/// 一处渲染面采样一次背景、换出一组 `Ink` 共用。采不到真彩背景时按 `base` 混合；
+/// `base` 或 `text` 也非真彩才回落静态 token（`subtext` / `overlay` / `surface1`）。
 #[derive(Clone, Copy, Debug)]
 pub struct Ink {
     /// 次级文本:metadata / 面板标题 / 时间戳。
@@ -99,11 +98,8 @@ pub struct Ink {
     /// 暗淡标签:按键提示 / 别名后缀。
     pub muted: Color,
 
-    /// 弱线条:未聚焦边框 / 已缓冲轨道。
+    /// 弱线条：未聚焦边框。
     pub faint: Color,
-
-    /// 近背景:淡出终点 / 空槽 / 未缓冲轨道。
-    pub ghost: Color,
 }
 
 impl Theme {
@@ -199,14 +195,14 @@ impl Theme {
         }
     }
 
-    /// 按实际背景现算四档次级文本色;回落链(bg → `base` → 静态 token)见
+    /// 按实际背景现算三档次级文本色;回落链(bg → `base` → 静态 token)见
     /// [`Theme::text_over`]。
     ///
     /// # Params:
     ///   - `bg`: 所在渲染面的实际背景色(先铺 bg 后画字,从 buffer 采样)
     ///
     /// # Return:
-    ///   四档 [`Ink`]。
+    ///   三档 [`Ink`]。
     pub fn ink_over(&self, bg: Color) -> Ink {
         Ink {
             strong: self
@@ -218,14 +214,11 @@ impl Theme {
             faint: self
                 .text_over(bg, self.text_alpha.faint)
                 .unwrap_or(self.surface1),
-            ghost: self
-                .text_over(bg, self.text_alpha.ghost)
-                .unwrap_or(self.surface0),
         }
     }
 
     /// `lerp(bg, text, alpha)`:主文本色对实际背景按千分比混合(连续 alpha,歌词
-    /// 距离淡出用;四档离散层级走 [`Theme::ink_over`])。
+    /// 距离淡出用;三档离散层级走 [`Theme::ink_over`])。
     ///
     /// 采样给的 `bg` 非真彩(无人铺 bg 的面采到 Reset / ANSI cell)时按「背景 ≈
     /// `base`」混合——browse 面板不铺底色、观感即 base 是仓库既有假设(marquee

@@ -1,6 +1,5 @@
-//! 封面色的消费协调:当前播放封面的色板就绪后,同时驱动频谱色场过渡、
-//! waveform 的在播色板(`images.current_palette`)与动态 accent 渐变
-//! (共用同一次封面身份 diff,过渡时长各自独立)。
+//! 封面色的消费协调：当前播放封面的色板就绪后，同时驱动频谱色场、
+//! 动态强调色与全屏氛围背景；各自从当前可见配色过渡，时长独立。
 //!
 //! 身份判定(`cover_url` 变化、色带是否就绪)全在 app 层;频谱与 accent 状态机
 //! 只收命令,不持有歌曲 / URL 身份。
@@ -11,9 +10,9 @@ use crate::image::colors::derive_accents;
 
 impl crate::app::App {
     /// 协调当前播放封面的配色消费:新封面取色就绪则从**当前可见配色**缓动过去,
-    /// 否则保持现状。频谱走 `begin_cover_transition` / `clear_cover`,waveform 现读
-    /// `images.current_palette`，动态 accent 走 `accent_fade.set_target`、全屏氛围背景
-    /// 走 `ambient.set_target`(两者关闭时恒投 `None`)。
+    /// 否则保持现状。频谱走 `begin_cover_transition` / `clear_cover`，
+    /// 动态强调色走 `accent_fade.set_target`，全屏氛围背景走 `ambient.set_target`
+    /// （后两者关闭时恒投 `None`）。
     ///
     /// - 当前封面与 `spectrum_cover` 一致 → 不动。
     /// - 当前封面变了 + 色带已就绪 → 频谱过渡 + accent / 氛围渐变到封面色,记下 key。

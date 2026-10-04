@@ -15,6 +15,5 @@ pub mod top_status;
 pub mod transform;
 pub mod transport;
 pub mod vinyl;
-pub mod waveform;
 
 pub(crate) mod filter_input;
