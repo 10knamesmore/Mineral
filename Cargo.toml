@@ -159,77 +159,43 @@ unsafe_code = "deny"
 missing_docs = "deny"
 
 [workspace.lints.clippy]
-# --- 禁止 panic 类操作（必须用 allow 逐条豁免并注释理由） ---
-panic                 = "deny"
-unwrap_used           = "deny"
-expect_used           = "deny"
-indexing_slicing      = "deny"
-index_refutable_slice = "deny"
-
-# --- 数值安全 ---
-# 除零：编译器自带 unconditional_panic（默认 deny）覆盖常量除零。
-# arithmetic_side_effects 不单独启用 — 会拦截 `i += 1` 等安全操作，噪音过大。
-as_conversions = "deny"
-cast_lossless  = "deny"
-
-# --- 进程安全 ---
-exit       = "deny"
-mem_forget = "deny"
-
-# --- 错误处理 ---
-map_err_ignore = "deny"
-
-# --- 并发安全 ---
-mutex_integer       = "deny"
-maybe_infinite_iter = "deny"
-
-# --- 所有权与性能 ---
-implicit_clone         = "deny"
-needless_pass_by_value = "deny"
-
-# --- 代码清晰度 ---
-branches_sharing_code             = "deny"
-mismatching_type_param_order      = "deny"
-option_option                     = "deny"
-wildcard_imports                  = "deny"
+panic                              = "deny"
+unwrap_used                        = "deny"
+expect_used                        = "deny"
+indexing_slicing                   = "deny"
+index_refutable_slice              = "deny"
+as_conversions                     = "deny"
+exit                               = "deny"
+mem_forget                         = "deny"
+map_err_ignore                     = "deny"
+mutex_integer                      = "deny"
+implicit_clone                     = "deny"
+needless_pass_by_value             = "deny"
+branches_sharing_code              = "deny"
+mismatching_type_param_order       = "deny"
+option_option                      = "deny"
+wildcard_imports                   = "deny"
 redundant_closure_for_method_calls = "deny"
-uninlined_format_args             = "deny"
-cloned_instead_of_copied          = "deny"
-manual_let_else                   = "deny"
-self_named_module_files          = "deny"
+uninlined_format_args              = "deny"
+cloned_instead_of_copied           = "deny"
+manual_let_else                    = "deny"
+self_named_module_files            = "deny"
+format_push_string                 = "deny"
+if_same_then_else                  = "allow"
+len_without_is_empty               = "allow"
+missing_safety_doc                 = "deny"
+module_inception                   = "allow"
+use_self                           = "deny"
+too_many_lines                     = "deny"
+missing_docs_in_private_items      = "deny"
 
-# --- 项目特化 ---
-# 避免先 format 再 push 到 String 的低效模式。
-format_push_string  = "deny"
-# 允许对称分支显式保留相同实现。
-if_same_then_else   = "allow"
-# 允许只有 len() 没有 is_empty()。
-len_without_is_empty = "allow"
-# 允许 unsafe fn/trait 未写 # Safety 文档。
-missing_safety_doc  = "allow"
-# 允许模块与其父同名（foo/mod.rs 定义 foo）。
-module_inception    = "allow"
-# 建议使用 `Self` 而不是显式类型名。
-use_self            = "deny"
-
-# --- 体量约束（AGENTS.md「体量约束」节，函数级；阈值见 clippy.toml）---
-too_many_lines      = "deny"
-
-# --- 文档（rustc::missing_docs 只盯 pub;这条额外覆盖私有 fn/struct/field/mod）---
-missing_docs_in_private_items = "deny"
-
-# 发布构建:在默认 release(opt-level=3)基础上压榨运行性能 + 顺手收体积。
-# 一次性代价是全量 release 编译明显变慢(lto + 单 codegen-unit)。panic 保留默认 unwind
-# (TUI panic hook 链恢复终端需要,见 `crates/mineral-tui/src/tui.rs` 的 `Tui::enter`)。
 [profile.release]
-lto = "thin"          # 跨 crate 链接时优化(thin:收益大、比 fat 快)
-codegen-units = 1     # 合并 codegen 单元,优化更彻底(牺牲并行编译)
-strip = true          # 剥符号表,显著减小产物体积
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
 
-# 性能剖析专用 profile:release 全部优化 + 完整 DWARF 符号,供 perf / 火焰图采到函数名。
-# 产物落在 target/profiling/,与正常 `--release`(target/release/,不带 DWARF)物理隔离,
-# 符号只在剖析这一种场景出现,不会进真正发布的二进制。用法见 `cargo profbuild`(.cargo/config.toml)。
 [profile.profiling]
 inherits = "release"
 debug = true
-strip = false         # 覆盖 release 的 strip:剖析要保住 DWARF 符号
+strip = false

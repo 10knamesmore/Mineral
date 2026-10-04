@@ -16,6 +16,8 @@
 
 <img src="assets/screenshot-search.png" alt="Mineral 搜索:来源过滤 / 艺人 / 单曲 / 专辑" width="800"/>
 
+<img src="assets/screenshot-fuzzy-search.png" alt="Mineral 模糊搜索:拼音命中 / 歌单内命中高亮" width="800"/>
+
 <img src="assets/screenshot-immersive.png" alt="Mineral 全屏沉浸态:封面 / 逐字歌词 / 频谱" width="800"/>
 
 </div>
