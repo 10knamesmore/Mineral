@@ -1,7 +1,7 @@
 //! 在曲目列表、歌单列表和队列的右边框上绘制位置缩略图，展示喜欢、在播和缓动光标。
 //!
 //! 调用方提供过滤后的序号与本帧光标输入（见 [`MinimapCursor`]）；每帧按轨道高度合并标记。
-//! 光标位置与吸附进度都是列表级的跨帧动画，本模块只读取与推进，不自己持有。
+//! 光标位置与吸附进度都是列表级的跨帧动画，准备入口更新吸附目标，绘制入口只读。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -10,9 +10,7 @@ use ratatui::symbols::braille;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
-use crate::runtime::scroll::position::{
-    MagnetProgress, POSITION_SCALE, boundary_position, relative_position,
-};
+use crate::runtime::scroll::position::{POSITION_SCALE, boundary_position, relative_position};
 
 /// 盲文字符每格的纵向点数，光标以四分之一格移动。
 const DOT_ROWS_PER_CELL: u64 = 4;
@@ -22,18 +20,12 @@ const TRACK_DOTS: u8 = 0xB8;
 
 /// 本帧 minimap 的输入：位置与吸附进度是列表级动画，几何旋钮每帧现读配置。
 #[derive(Clone, Copy)]
-pub(crate) struct MinimapCursor<'a> {
+pub(crate) struct MinimapCursor {
     /// 光标在整份列表中的归一化位置，范围为 `0..=POSITION_SCALE`；`None` = 没有光标。
     pub(crate) position: Option<u32>,
 
     /// 吸附进度：`0` = 在播色 + 光晕照常，满值 = 光标色 + 光晕熄灭。
-    pub(crate) magnet: &'a MagnetProgress,
-
-    /// 从配置折算的光标移动 / 吸附过渡拍数。
-    pub(crate) ticks: u16,
-
-    /// 稳态实拍推进动画；离屏合成与形变帧只读采样。
-    pub(crate) advancing: bool,
+    pub(crate) magnet: u16,
 
     /// 最小光晕半径（轨道行数），与条目平分范围取较大值。
     pub(crate) halo_rows: u64,
@@ -42,34 +34,57 @@ pub(crate) struct MinimapCursor<'a> {
     pub(crate) magnet_dots: u64,
 }
 
-impl<'a> MinimapCursor<'a> {
+impl MinimapCursor {
     /// 从列表的光标动画、本帧渲染模式与 minimap 配置组装输入。
     ///
     /// # Params:
     ///   - `list`: 该列表的滚动 / 动画态；光标位置与吸附进度都从它取。
     ///   - `len`: 当前显示列表长度。
-    ///   - `motion`: 稳态实拍推进一拍，离屏合成只读采样。
-    ///   - `ticks`: 当前配置折算的光标移动拍数。
     ///   - `minimap`: 当前 `tui.minimap` 段（现读，热更即生效）。
     pub(crate) fn new(
-        list: &'a ScrollList,
+        list: &ScrollList,
         len: usize,
-        motion: ScrollMotion,
-        ticks: u16,
         minimap: &mineral_config::MinimapConfig,
     ) -> Self {
         Self {
-            position: list.position(len, motion, ticks),
-            magnet: list.magnet(),
-            ticks,
-            advancing: matches!(motion, ScrollMotion::Advancing { .. }),
+            position: list.position(len),
+            magnet: list.magnet().frozen(),
             halo_rows: *minimap.halo_rows(),
             magnet_dots: *minimap.magnet_dots(),
         }
     }
 }
 
+/// 根据轨道几何和在播位置更新列表吸附状态，不访问绘制 buffer。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_minimap(
+    list: &mut ScrollList,
+    total: usize,
+    track: Rect,
+    playing: impl Iterator<Item = usize>,
+    motion: ScrollMotion,
+    ticks: u16,
+    cfg: &mineral_config::MinimapConfig,
+    advance: bool,
+) {
+    if track.is_empty() || matches!(motion, ScrollMotion::Frozen) {
+        return;
+    }
+    let span = u64::from(track.height) * DOT_ROWS_PER_CELL - 1;
+    let cursor = list
+        .position(total)
+        .map(|position| nearest_dot_row(u64::from(position) * span));
+    let absorbed = cursor.is_some_and(|cursor| {
+        playing
+            .filter_map(|index| relative_position(index, total))
+            .map(|position| nearest_dot_row(u64::from(position) * span))
+            .any(|dot| cursor.abs_diff(dot) <= *cfg.magnet_dots())
+    });
+    list.prepare_magnet(absorbed, ticks, advance);
+}
+
 /// 一首曲目在当前过滤视图中的位置及需要显示的标记。
+#[derive(Clone, Copy)]
 pub(crate) struct MinimapEntry {
     /// 从零开始的过滤视图序号；大于等于列表总数时不参与绘制。
     pub(crate) index: usize,
@@ -111,7 +126,7 @@ pub(crate) fn render_minimap(
     buf: &mut Buffer,
     track: Rect,
     total: usize,
-    cursor: MinimapCursor<'_>,
+    cursor: MinimapCursor,
     entries: impl Iterator<Item = MinimapEntry>,
     theme: &Theme,
 ) {
@@ -122,8 +137,6 @@ pub(crate) fn render_minimap(
     let MinimapCursor {
         position,
         magnet,
-        ticks,
-        advancing,
         halo_rows,
         magnet_dots,
     } = cursor;
@@ -173,11 +186,7 @@ pub(crate) fn render_minimap(
         _ => false,
     };
     // 吸附的颜色是缓动过渡：在播格淡向光标色，光晕同步淡出。
-    let absorb = u64::from(if advancing {
-        magnet.advance(absorbed, ticks)
-    } else {
-        magnet.frozen()
-    });
+    let absorb = u64::from(magnet);
     let cursor_dot = cursor_dot.filter(|_| !absorbed);
     // 光晕在字符格中心采样；首末点超出中心范围时贴到端点，保持端点光标明亮。
     let halo_position = cursor_position.map(|position| {

@@ -20,6 +20,21 @@ use crate::runtime::format::{format_ms, format_ms_opt};
 use crate::runtime::marquee::Slot;
 use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage};
 
+/// 标题窗口在绘制前确定，重复绘制不会重置跑马灯。
+pub(crate) fn prepare(area: Rect, state: &mut crate::runtime::state::AppState) {
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    if !inner.is_empty()
+        && let Some(song) = state.playback.track.as_ref()
+    {
+        crate::components::layout::shared::marquee::prepare_song(
+            &mut state.marquees,
+            Slot::Transport,
+            song,
+            inner.width,
+        );
+    }
+}
+
 /// 渲染 Transport 面板到给定 [`Rect`]。
 pub(crate) fn draw(
     frame: &mut Frame<'_>,

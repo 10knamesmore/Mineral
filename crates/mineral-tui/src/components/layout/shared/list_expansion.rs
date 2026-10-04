@@ -8,9 +8,7 @@ use ratatui::style::Color;
 
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::state::{
-    FilteredListFrame, ListExpansion, ListExpansionScope, ListExpansionState, ListRowIdentity,
-};
+use crate::runtime::state::{ListExpansion, ListExpansionScope, ListExpansionState};
 
 /// 一行的亚字符格位置，千分之一行。
 const ROW_SCALE: i64 = 1000;
@@ -70,17 +68,15 @@ pub(crate) fn begin_list(
     }
 }
 
-/// 完成列表渲染后缓存筛选帧，或把刚画好的完整列表合成为展开帧。
+/// 将刚画好的完整列表与准备阶段保留的旧端合成为展开帧。
 ///
 /// 调用者负责只在稳定布局中接入；body 允许有边框和无边框的表格复用同一合成。
 pub(crate) fn finish_list(
     buf: &mut Buffer,
-    expansion: &mut ListExpansionState,
+    expansion: &ListExpansionState,
     theme: &Theme,
     surface: ListSurface,
     visible: Range<usize>,
-    identities: impl Iterator<Item = ListRowIdentity>,
-    filtering: bool,
 ) {
     let ListSurface {
         scope,
@@ -88,24 +84,10 @@ pub(crate) fn finish_list(
         body,
         backdrop,
     } = surface;
-    if filtering {
-        expansion.filtered_frame = Some(FilteredListFrame {
-            scope,
-            body,
-            buffer: copy_panel(buf, area),
-            rows: identities.collect(),
-        });
-        return;
-    }
-    expansion.filtered_frame = None;
     let Some(active) = &expansion.active else {
         return;
     };
-    if active.before.scope != scope
-        || active.before.buffer.area != area
-        || active.before.body != body
-    {
-        expansion.invalidate();
+    if active.before.scope != scope || active.before.area != area || active.before.body != body {
         return;
     }
     if let Some(backdrop) = backdrop {
@@ -214,6 +196,8 @@ fn compose(
     theme: &Theme,
 ) {
     let area = backdrop.area;
+    let mut old = backdrop.clone();
+    active.before.content.paint(&mut old);
     let current = copy_panel(buf, area);
     let body = active.before.body;
     let progress = active.progress.eased_in_out();
@@ -266,11 +250,7 @@ fn compose(
                 continue;
             }
             if let Some(target) = buf.cell_mut((x, y)) {
-                let (cell, weight) = row_cell(
-                    active.before.buffer.cell((x, y)),
-                    current.cell((x, y)),
-                    progress,
-                );
+                let (cell, weight) = row_cell(old.cell((x, y)), current.cell((x, y)), progress);
                 if let Some(cell) = cell {
                     paint_cell(target, &cell, weight, theme, /*images*/ true);
                 }
@@ -284,15 +264,7 @@ fn compose(
                     *target = background.clone();
                 }
                 if let Some(paint) = slot {
-                    paint_row_cell(
-                        target,
-                        (x, body.y),
-                        *paint,
-                        active,
-                        &current,
-                        progress,
-                        theme,
-                    );
+                    paint_row_cell(target, (x, body.y), *paint, &old, &current, progress, theme);
                 }
             }
         }
@@ -306,15 +278,7 @@ fn compose(
                 if let Some(background) = backdrop.cell((x, y)) {
                     *target = background.clone();
                 }
-                paint_row_cell(
-                    target,
-                    (x, body.y),
-                    *paint,
-                    active,
-                    &current,
-                    progress,
-                    theme,
-                );
+                paint_row_cell(target, (x, body.y), *paint, &old, &current, progress, theme);
             }
         }
     }
@@ -325,15 +289,13 @@ fn paint_row_cell(
     target: &mut Cell,
     origin: (u16, u16),
     paint: RowPaint,
-    active: &ListExpansion,
+    old: &Buffer,
     current: &Buffer,
     progress: u16,
     theme: &Theme,
 ) {
     let (x, y) = origin;
-    let old = paint
-        .old_row
-        .and_then(|row| active.before.buffer.cell((x, y + row)));
+    let old = paint.old_row.and_then(|row| old.cell((x, y + row)));
     let new = paint.new_row.and_then(|row| current.cell((x, y + row)));
     let (cell, content_weight) = row_cell(old, new, progress);
     if paint.selected {

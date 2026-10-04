@@ -7,33 +7,27 @@ use ratatui::layout::Rect;
 
 use crate::components::layout::shared::list_expansion::{self, ListSurface};
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, ListExpansionScope, ListRowIdentity, View};
+use crate::runtime::state::{AppState, ListExpansionScope, View};
 
 /// 在列表盖住氛围背景前准备展开画面。
 pub(super) fn begin_list(buf: &Buffer, area: Rect, state: &AppState, view: View) -> ListSurface {
-    let body = Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(2),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(3),
-    );
+    let body = body(area);
     list_expansion::begin_list(
         buf,
         area,
         body,
-        &state.browse.list_expansion.borrow(),
+        &state.browse.list_expansion,
         ListExpansionScope::Browse(view),
     )
 }
 
-/// 保留已画出的搜索结果，清除后在原有位置逐行展开。
+/// 用已准备的搜索结果，在清除后按原有位置逐行展开。
 pub(super) fn finish_list(
     buf: &mut Buffer,
     state: &AppState,
     theme: &Theme,
     surface: ListSurface,
     visible: Range<usize>,
-    identities: impl Iterator<Item = ListRowIdentity>,
 ) {
     if surface.scope != ListExpansionScope::Browse(state.browse.view.current())
         || !state.browse.fullscreen.at_min()
@@ -42,13 +36,16 @@ pub(super) fn finish_list(
     {
         return;
     }
-    list_expansion::finish_list(
-        buf,
-        &mut state.browse.list_expansion.borrow_mut(),
-        theme,
-        surface,
-        visible,
-        identities,
-        !state.browse.active_search().query().is_empty(),
+    list_expansion::finish_list(buf, &state.browse.list_expansion, theme, surface, visible);
+}
+
+/// 数据行区域，准备与绘制共用。
+pub(super) fn body(area: Rect) -> Rect {
+    let body = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(2),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(3),
     );
+    body
 }

@@ -1,24 +1,18 @@
-//! 可滚动列表的完整 UI-local 态:光标(选中行)+ 视口滚动(nvim 手感 + 缓动平移)+ minimap 动画。
+//! 列表自己的光标、视口和 minimap 动画状态。
 //!
-//! 把 [`ListCursor`] 与 [`ListScroll`] 收成一个部件,杜绝「有光标无滚动」——任何列表面持一个
-//! `ScrollList` 即同时拿到选中与滚动,渲染统一经 [`Self::offset`] 出 offset 再喂
-//! `TableState::offset`(渲染层 helper 见 components),不会再出现某处用裸 `TableState`
-//! (offset 复位 0)让 ratatui 每帧重求最小可见滚动、把选中行钉死视口底边。
-//!
-//! items 不在此持有(队列 / 歌单 / 搜索结果是后端或派生态,住在别处),故移动 / 钳制 / 渲染
-//! 都按列表长度 `len` 与视口 `viewport` 参数化。光标移动([`Self::move_by`])走按键路径
-//! (`&mut`)、视口推进([`Self::offset`] 的 `Advancing`)走渲染路径(`&`,内部 `RefCell`,
-//! 每帧恰一次)——二者分处不同帧路径。
+//! 输入入口移动光标；[`ScrollList::prepare`] 根据布局调整目标，并按显式时钟推进动画。
+//! 绘制通过 [`ScrollList::offset`] 和 [`ScrollList::position`] 只读采样。
+//! 列表数据归调用方持有，本组件只需要列表长度与视口尺寸。
 
 use crate::runtime::action::SelectionMove;
 use crate::runtime::scroll::cursor::ListCursor;
 use crate::runtime::scroll::position::{ListPosition, MagnetProgress};
 use crate::runtime::scroll::viewport::ListScroll;
 
-/// 渲染时视口的推进语义(喂给 [`ScrollList::offset`])。
+/// 准备阶段的视口更新策略。
 #[derive(Clone, Copy)]
 pub(crate) enum ScrollMotion {
-    /// 稳态实拍:推进缓动动画一拍,按光标重算滚动目标(渲染端每帧恰调一次)。
+    /// 稳定布局：按光标重算滚动目标；是否推进一拍由准备入口的 `advance` 决定。
     Advancing {
         /// 光标与视口上下边缘的最小行距(配置 `behavior.scrolloff`)。
         scrolloff: usize,
@@ -43,7 +37,7 @@ pub(crate) struct ScrollList {
     /// 全列表位置标记的缓动；与视口分开推进，视口未滚动时仍能跟随光标。
     position: ListPosition,
 
-    /// 光标吸进在播标记后的颜色过渡；与位置同在渲染路径推进，视口无关。
+    /// 光标吸进在播标记后的颜色过渡；在准备阶段推进，视口无关。
     magnet: MagnetProgress,
 }
 
@@ -70,18 +64,18 @@ impl ScrollList {
         self.cursor.sel()
     }
 
-    /// 仅设光标下标(视口不动,留给下一帧渲染按 scrolloff 缓动跟随)。
+    /// 仅设光标下标(视口不动,留给下一次准备按 scrolloff 缓动跟随)。
     pub(crate) fn set_sel(&mut self, sel: usize) {
         self.cursor.set(sel);
     }
 
-    /// 按一次移动指令移动光标,钳在 `[0, len-1]`(视口由渲染端跟随)。
+    /// 按一次移动指令移动光标,钳在 `[0, len-1]`(视口由准备入口跟随)。
     pub(crate) fn move_by(&mut self, mv: SelectionMove, len: usize) {
         self.cursor.move_by(mv, len);
     }
 
     /// `<C-d>` 族:视口目标与光标同移 `delta` 行(vim 语义,保持光标屏上相对位置)。
-    /// 下界钳 0、上界由渲染端钳;光标按 `len` 钳首末。
+    /// 下界钳 0、上界由准备入口钳;光标按 `len` 钳首末。
     ///
     /// # Params:
     ///   - `delta`: 行数增量(向下为正)
@@ -104,11 +98,11 @@ impl ScrollList {
     }
 
     /// 光标落 `sel`、视口瞬时落位使该行距视口顶约 `anchor` 行(无缓动)。
-    /// 视图重置 / 进列表 / 搜索复位等「不该有滚动感」的场合用;越界修正由渲染端首帧瞬时落。
+    /// 视图重置 / 进列表 / 搜索复位等「不该有滚动感」的场合用;越界修正由准备入口首帧瞬时落。
     ///
     /// # Params:
     ///   - `sel`: 目标光标行
-    ///   - `anchor`: 该行距视口顶的目标行距(`0` = 落顶,渲染端再按 scrolloff 钳)
+    ///   - `anchor`: 该行距视口顶的目标行距(`0` = 落顶,准备入口再按 scrolloff 钳)
     pub(crate) fn place(&mut self, sel: usize, anchor: usize) {
         self.cursor.set(sel);
         self.scroll.snap_to(sel.saturating_sub(anchor));
@@ -116,17 +110,38 @@ impl ScrollList {
         self.magnet.reset();
     }
 
+    /// 用稳定布局协调视口与位置动画；输入或 resize 可调目标，但不额外推进一拍。
+    pub(crate) fn prepare(
+        &mut self,
+        len: usize,
+        viewport: usize,
+        motion: ScrollMotion,
+        cursor_ticks: u16,
+        advance: bool,
+    ) {
+        if let ScrollMotion::Advancing {
+            scrolloff,
+            glide_ticks,
+        } = motion
+        {
+            self.scroll
+                .prepare_offset(self.sel(), len, viewport, scrolloff, glide_ticks, advance);
+            self.position
+                .advance(self.sel(), len, cursor_ticks, advance);
+        }
+    }
+
+    /// 准备阶段根据 minimap 的实际几何调整吸附动画。
+    pub(crate) fn prepare_magnet(&mut self, absorbed: bool, ticks: u16, advance: bool) {
+        self.magnet.advance(absorbed, ticks, advance);
+    }
+
     /// 返回全列表位置标记的本帧坐标；空列表为 None，满值见 `position::POSITION_SCALE`。
     ///
     /// # Params:
     ///   - `len`: 当前显示列表长度。
-    ///   - `motion`: 稳态绘制推进一拍，离屏合成只读采样，不影响视口。
-    ///   - `ticks`: 当前配置折算的光标移动拍数。
-    pub(crate) fn position(&self, len: usize, motion: ScrollMotion, ticks: u16) -> Option<u32> {
-        match motion {
-            ScrollMotion::Advancing { .. } => self.position.advance(self.sel(), len, ticks),
-            ScrollMotion::Frozen => self.position.frozen(self.sel(), len),
-        }
+    pub(crate) fn position(&self, len: usize) -> Option<u32> {
+        self.position.frozen(self.sel(), len)
     }
 
     /// 光标吸进在播标记后的颜色过渡进度（[`MagnetProgress`]）。
@@ -144,21 +159,11 @@ impl ScrollList {
     /// # Params:
     ///   - `len`: 列表总行数
     ///   - `viewport`: 视口行数
-    ///   - `motion`: 推进(稳态实拍)/ 冻结(瞬态几何)
     ///
     /// # Return:
     ///   本帧视口首行(恒在 `[0, len-viewport]`)。
-    pub(crate) fn offset(&self, len: usize, viewport: usize, motion: ScrollMotion) -> usize {
-        match motion {
-            ScrollMotion::Advancing {
-                scrolloff,
-                glide_ticks,
-            } => {
-                self.scroll
-                    .render_offset(self.cursor.sel(), len, viewport, scrolloff, glide_ticks)
-            }
-            ScrollMotion::Frozen => self.scroll.frozen_offset(len, viewport),
-        }
+    pub(crate) fn offset(&self, len: usize, viewport: usize) -> usize {
+        self.scroll.frozen_offset(len, viewport)
     }
 }
 
@@ -179,7 +184,8 @@ mod tests {
         // 多帧缓动收敛。
         let mut off = 0;
         for _ in 0..8 {
-            off = list.offset(/*len*/ 30, /*viewport*/ 10, adv);
+            list.prepare(30, 10, adv, 4, true);
+            off = list.offset(/*len*/ 30, /*viewport*/ 10);
         }
         // sel=25 在视口内,且下方仍留 ≥ scrolloff 行(25 - off <= viewport-1-so)。
         assert!(off <= 25 && 25 < off + 10, "选中行可见: off={off}");
@@ -195,7 +201,7 @@ mod tests {
         let mut list = ScrollList::new();
         list.place(/*sel*/ 20, /*anchor*/ 3);
         // Frozen 读当前位置:snap 到 sel-anchor=17,钳进边界。
-        let off = list.offset(/*len*/ 30, /*viewport*/ 10, ScrollMotion::Frozen);
+        let off = list.offset(/*len*/ 30, /*viewport*/ 10);
         assert_eq!(off, 17, "place 后视口瞬时落在 sel-anchor");
         assert_eq!(list.sel(), 20, "光标落 sel");
     }
@@ -205,7 +211,7 @@ mod tests {
     fn at_positions_on_construct() {
         let list = ScrollList::at(15);
         assert_eq!(list.sel(), 15);
-        let off = list.offset(30, 10, ScrollMotion::Frozen);
+        let off = list.offset(30, 10);
         assert_eq!(off, 15, "视口瞬时落在 sel(anchor=0)");
     }
 }

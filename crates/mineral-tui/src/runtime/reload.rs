@@ -301,52 +301,48 @@ mod tests {
             glide_ticks: app.state.list_glide_ticks(),
         };
         let ticks = app.state.minimap_cursor_ticks();
-        app.state.browse.nav.track.position(101, motion, ticks);
-        app.state.browse.nav.track.set_sel(100);
-        for _ in 0..3 {
-            app.state.browse.nav.track.position(101, motion, ticks);
-        }
-        let before = app
-            .state
+        app.state
             .browse
             .nav
             .track
-            .position(101, ScrollMotion::Frozen, ticks);
-        assert!(before.is_some_and(|value| value > 0 && value < POSITION_SCALE));
-        let reference = app.state.browse.nav.track.clone();
-        app.apply_pushed_config(pushed_tree(serde_json::json!({
-            "tui": { "animation": { "minimap_cursor_ms": 1600 } }
-        }))?);
-        let slow_ticks = app.state.minimap_cursor_ticks();
-        assert_eq!(
+            .prepare(101, 10, motion, ticks, true);
+        app.state.browse.nav.track.set_sel(100);
+        for _ in 0..3 {
             app.state
                 .browse
                 .nav
                 .track
-                .position(101, ScrollMotion::Frozen, slow_ticks),
-            before
-        );
-        let slow = app.state.browse.nav.track.position(101, motion, slow_ticks);
-        let fast = reference.position(101, motion, ticks);
+                .prepare(101, 10, motion, ticks, true);
+        }
+        let before = app.state.browse.nav.track.position(101);
+        assert!(before.is_some_and(|value| value > 0 && value < POSITION_SCALE));
+        let mut reference = app.state.browse.nav.track.clone();
+        app.apply_pushed_config(pushed_tree(serde_json::json!({
+            "tui": { "animation": { "minimap_cursor_ms": 1600 } }
+        }))?);
+        let slow_ticks = app.state.minimap_cursor_ticks();
+        assert_eq!(app.state.browse.nav.track.position(101), before);
+        app.state
+            .browse
+            .nav
+            .track
+            .prepare(101, 10, motion, slow_ticks, true);
+        reference.prepare(101, 10, motion, ticks, true);
+        let slow = app.state.browse.nav.track.position(101);
+        let fast = reference.position(101);
         assert!(slow.zip(before).is_some_and(|(now, old)| now > old));
         assert!(slow.zip(fast).is_some_and(|(slow, fast)| slow < fast));
         app.apply_pushed_config(pushed_tree(serde_json::json!({
             "tui": { "animation": { "minimap_cursor_ms": 0 } }
         }))?);
+        assert_eq!(app.state.browse.nav.track.position(101), slow);
+        app.state
+            .browse
+            .nav
+            .track
+            .prepare(101, 10, motion, app.state.minimap_cursor_ticks(), true);
         assert_eq!(
-            app.state
-                .browse
-                .nav
-                .track
-                .position(101, ScrollMotion::Frozen, 1),
-            slow
-        );
-        assert_eq!(
-            app.state
-                .browse
-                .nav
-                .track
-                .position(101, motion, app.state.minimap_cursor_ticks()),
+            app.state.browse.nav.track.position(101),
             Some(POSITION_SCALE)
         );
         Ok(())
@@ -531,20 +527,19 @@ mod tests {
             .cache
             .insert_test(&url, Arc::clone(&source));
         let area = Rect::new(0, 0, 20, 10);
-        let render = |images: &ImageEngine| {
-            images.render(
+        let render = |images: &mut ImageEngine| {
+            images.prepare_and_render(
                 ImageContent::Display { url: Some(&url) },
                 area,
                 &mut Buffer::empty(area),
                 ImageRenderPhase::Stable,
             );
         };
-        render(&app.state.images);
+        render(&mut app.state.images);
         let crop_key = app
             .state
             .images
             .encode_pending
-            .borrow()
             .iter()
             .next()
             .cloned()
@@ -553,23 +548,19 @@ mod tests {
         app.state
             .images
             .insert_test_terminal_image(&url, (area.width, area.height));
-        app.state
-            .images
-            .encode_pending
-            .borrow_mut()
-            .remove(&crop_key);
+        app.state.images.encode_pending.remove(&crop_key);
         let initial_preview_key = app.state.images.preview_key(&url, area);
 
         for (value, expected) in [
             ("stretch", CoverCellFit::Stretch),
             ("contain", CoverCellFit::Contain),
         ] {
-            let previous = app.state.images.encode_pending.borrow().clone();
+            let previous = app.state.images.encode_pending.clone();
             app.apply_pushed_config(pushed_tree(serde_json::json!({
                 "tui": { "cover": { "cell_fit": value } }
             }))?);
-            render(&app.state.images);
-            let pending = app.state.images.encode_pending.borrow();
+            render(&mut app.state.images);
+            let pending = &app.state.images.encode_pending;
             let added = pending.difference(&previous).collect::<Vec<_>>();
             assert_eq!(added.len(), 1);
             assert!(added.iter().all(|key| key.cell_fit() == expected));
@@ -586,12 +577,12 @@ mod tests {
                     .is_some_and(|image| Arc::ptr_eq(image, &source))
             );
         }
-        let pending = app.state.images.encode_pending.borrow().clone();
+        let pending = app.state.images.encode_pending.clone();
         app.apply_pushed_config(pushed_tree(serde_json::json!({
             "tui": { "cover": { "cell_fit": "crop" } }
         }))?);
-        render(&app.state.images);
-        assert_eq!(*app.state.images.encode_pending.borrow(), pending);
+        render(&mut app.state.images);
+        assert_eq!(app.state.images.encode_pending, pending);
         assert_eq!(
             app.state.images.preview_key(&url, area),
             initial_preview_key
@@ -607,6 +598,7 @@ mod tests {
 
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         // 默认 loop:溢出 + 推进足量后相位应非零(默认 pause 100ms/16ms ≈ 7 拍)。
+        app.state.marquees.prepare(Slot::Transport, "a", 40, 10);
         for _ in 0..200 {
             app.state.marquees.tick();
         }
@@ -621,7 +613,7 @@ mod tests {
                 /*gap_w*/ 2,
             )
             .offset;
-        // 建档在首查,再推进一轮令相位走起来。
+        // 再推进一轮，避免循环恰好回到零偏移。
         for _ in 0..200 {
             app.state.marquees.tick();
         }
@@ -641,6 +633,7 @@ mod tests {
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "tui": { "animation": { "marquee": { "mode": "off" } } } }),
         )?);
+        app.state.marquees.prepare(Slot::Transport, "a", 40, 10);
         for _ in 0..200 {
             app.state.marquees.tick();
         }

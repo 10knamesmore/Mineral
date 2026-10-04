@@ -10,7 +10,6 @@ use mineral_model::{Album, AlbumId, Artist, ArtistId, SearchKind, SourceKind};
 use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
 
 use crate::App;
-use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{ArtistSection, DetailFrame, EntityRef};
 
 /// 已进入艺人 Albums 区的应用，后端探针保留实际任务提交次数。
@@ -196,7 +195,7 @@ fn artist_and_uploader_pages_append_and_remain_navigable() -> color_eyre::Result
             test.press(KeyCode::Char(key));
         }
         assert_eq!(test.requested_pages()?, vec![Page::default(), second]);
-        let before_offset = test.frame()?.list().offset(30, 6, ScrollMotion::Frozen);
+        let before_offset = test.frame()?.list().offset(30, 6);
         test.receive(Page::default(), limit, false);
         test.receive(Page::new(2 * limit, limit), limit, false);
         test.receive(Page::new(limit, limit + 1), limit, false);
@@ -205,15 +204,9 @@ fn artist_and_uploader_pages_append_and_remain_navigable() -> color_eyre::Result
         test.receive(second, limit, false);
         test.assert_album_ids(0..2 * limit)?;
         assert_eq!(test.frame()?.list().sel(), 29);
-        assert_eq!(
-            test.frame()?.list().offset(60, 6, ScrollMotion::Frozen),
-            before_offset
-        );
+        assert_eq!(test.frame()?.list().offset(60, 6), before_offset);
         test.receive(Page::default(), limit, true);
-        assert_eq!(
-            test.frame()?.list().offset(60, 6, ScrollMotion::Frozen),
-            before_offset
-        );
+        assert_eq!(test.frame()?.list().offset(60, 6), before_offset);
         for _ in 0..5 {
             test.press(KeyCode::Char('j'));
         }

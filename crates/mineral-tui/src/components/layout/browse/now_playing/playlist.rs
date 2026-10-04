@@ -44,14 +44,6 @@ pub fn draw(
             frame.buffer_mut(),
             state.image_render_phase(),
         );
-        // 暖入口曲封面:drill 进本歌单默认落到第 0 首,其封面在 Library 视图才首次显示。
-        // 悬停期按封面区尺寸提前准备终端图片，使 drill 瞬间直接命中。图尚未解码时
-        // prepare 无操作，fetch 侧负责先拉进缓存。
-        if let Some(first) = state.library.tracks.get(&p.data.id).and_then(|t| t.first())
-            && let Some(url) = first.data.song.cover_url.as_ref()
-        {
-            state.images.prepare(url, cover_area);
-        }
     }
 
     let total_ms = state.total_duration_ms_of(&p.data.id);
@@ -112,13 +104,11 @@ mod tests {
     use std::sync::Arc;
 
     use mineral_model::{MediaUrl, PlaylistId, SourceKind};
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
 
     use crate::test_support::{app_with_playlists_probed, entry_views, song};
 
-    /// Playlists 视图悬停选中歌单、入口曲图片已解码时，渲染右栏应按封面区尺寸提前准备
+    /// Playlists 视图悬停选中歌单、入口曲图片已解码时，准备右栏应按封面区尺寸提前编码
     /// 该曲的终端图片，使 drill 进 tracks 后能直接命中。
     #[test]
     fn playlist_detail_prewarms_entry_track_cover() -> color_eyre::Result<()> {
@@ -140,27 +130,15 @@ mod tests {
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
         app.state.images.cache.insert_test(&url, Arc::new(img));
 
-        let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
         assert!(
-            app.state.images.encode_pending.borrow().is_empty(),
-            "前置:尚未渲染,encode_pending 为空"
+            app.state.images.encode_pending.is_empty(),
+            "前置:尚未准备,encode_pending 为空"
         );
-        let p = app
-            .state
-            .selected_playlist()
-            .ok_or_else(|| color_eyre::eyre::eyre!("应有选中歌单"))?;
-        terminal.draw(|frame| {
-            super::draw(
-                frame,
-                Rect::new(0, 0, 40, 20),
-                p,
-                &app.state,
-                &app.theme,
-                /*cover_in_flight*/ false,
-            );
-        })?;
+        app.state.images.begin_preparation();
+        super::super::prepare(Rect::new(0, 0, 40, 20), &mut app.state, false);
+        app.state.images.finish_preparation();
 
-        let pending = app.state.images.encode_pending.borrow();
+        let pending = app.state.images.encode_pending;
         assert!(
             pending.iter().any(|key| key.matches_url(&url)),
             "入口曲封面应被按封面区尺寸提前编码(encode_pending 应含其 URL)"

@@ -38,6 +38,13 @@ fn border_style(focused: bool, theme: &Theme) -> Style {
 ///
 /// # Params:
 ///   - `rs`: channel 搜索子域(读当前 source / 会话 query / kind / 段焦点)
+/// 画结果列:bordered `results` 外框 + 结果行(当前光标行高亮)。
+///
+/// 光标行高亮分两档:焦点在结果列时 accent 亮高亮;否则(在 prompt / detail)走暗调高亮,
+/// 仍标出"回得去"的光标位置而不抢视觉。
+///
+/// # Params:
+///   - `state`: 已准备的 channel 搜索显示状态
 ///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`,改由浮动环表达高亮)
 pub fn draw_prompt(
     frame: &mut Frame<'_>,
@@ -271,13 +278,51 @@ pub(crate) fn draw_prompt_dropdown(
     );
 }
 
-/// 画结果列:bordered `results` 外框 + 结果行(当前光标行高亮)。
-///
-/// 光标行高亮分两档:焦点在结果列时 accent 亮高亮;否则(在 prompt / detail)走暗调高亮,
-/// 仍标出"回得去"的光标位置而不抢视觉。
-///
-/// # Params:
-///   - `state`: 应用态(读 channel 搜索子域 + scrolloff / 缓动拍数 / morph 进度)
+/// 搜索结果列表在布局确定后更新滚动和选中标题相位。
+pub(crate) fn prepare_results(area: Rect, state: &mut AppState, advance: bool) {
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    let motion = if state.channel_search.active.at_max() {
+        ScrollMotion::Advancing {
+            scrolloff: state.scrolloff(),
+            glide_ticks: state.list_glide_ticks(),
+        }
+    } else {
+        ScrollMotion::Frozen
+    };
+    let ticks = state.minimap_cursor_ticks();
+    let Some(results) = state.channel_search.active_results_mut() else {
+        return;
+    };
+    let total = results.len();
+    let viewport = usize::from(inner.height.saturating_sub(1));
+    results
+        .list_mut()
+        .prepare(total, viewport, motion, ticks, advance);
+    if let SearchPayload::Songs(songs) = &results.results {
+        let offset = results.list().offset(total, viewport);
+        let selected = results.sel();
+        if (offset..offset.saturating_add(viewport).min(total)).contains(&selected)
+            && let Some(song) = songs.get(selected)
+        {
+            let columns = resolve_column_widths(
+                inner.width,
+                &[
+                    Constraint::Fill(3),
+                    Constraint::Fill(2),
+                    Constraint::Length(5),
+                ],
+                2,
+            );
+            crate::components::layout::shared::marquee::prepare_song(
+                &mut state.marquees,
+                Slot::SearchResults,
+                song,
+                columns.first().copied().unwrap_or(0),
+            );
+        }
+    }
+}
+
 ///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`)
 pub fn draw_results(
     frame: &mut Frame<'_>,
@@ -350,14 +395,6 @@ pub fn draw_results(
     // 视口行数 = 内区高 - 表头(边框归 block);offset 跨帧持久 + 缓动平移。
     // 退场 morph 中面板是收缩瞬态(只读展示,不得用瞬态 viewport 改写滚动目标),仅稳态(at_max)推进。
     let viewport = usize::from(inner.height.saturating_sub(1));
-    let motion = if rs.active.at_max() {
-        ScrollMotion::Advancing {
-            scrolloff: state.scrolloff(),
-            glide_ticks: state.list_glide_ticks(),
-        }
-    } else {
-        ScrollMotion::Frozen
-    };
     render_scroll_table(
         frame.buffer_mut(),
         inner,
@@ -365,7 +402,6 @@ pub fn draw_results(
         kr.list(),
         kr.len(),
         viewport,
-        motion,
     );
 }
 

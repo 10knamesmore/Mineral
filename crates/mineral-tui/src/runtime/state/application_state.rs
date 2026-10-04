@@ -15,9 +15,7 @@ use crate::render::anim::{Toggle, ticks16_from_ms};
 use crate::runtime::marquee::Marquees;
 use crate::runtime::playback::Playback;
 
-use super::{
-    BrowsePage, ImageEngine, LibraryData, OverlayReveal, PlayerMirror, SearchPage, search_whitelist,
-};
+use super::{BrowsePage, ImageEngine, LibraryData, PlayerMirror, SearchPage, search_whitelist};
 
 /// 应用顶层状态。
 pub struct AppState {
@@ -76,20 +74,14 @@ pub struct AppState {
     /// (lyrics 行距、layout 阈值、prefetch 半径、animation 时长等)。
     pub cfg: Arc<mineral_config::Config>,
 
-    /// 上一帧的主帧面积(渲染端每帧回写,`Cell` 因渲染只持 `&AppState`)。
-    /// 按键路径据此重算布局求锚点(如弹菜单贴选中行);首帧前为零矩形,
-    /// 消费方需容忍空值(placement 的 clamp 兜底)。
-    pub frame_area: std::cell::Cell<Rect>,
+    /// 最近一次准备的主帧面积；输入路径据此计算弹出菜单锚点。
+    pub frame_area: Rect,
 
-    /// 本帧的本地钟点(主循环每 tick 写 `Local::now()`;测试注入固定值)。
-    /// 队列剩余时长的「预计播完钟点」据此算——渲染只持 `&AppState`,故走 `Cell`,
-    /// 也让依赖 wall-clock 的快照可固定时间不飘。
-    pub now: std::cell::Cell<chrono::DateTime<chrono::Local>>,
+    /// 主循环采样的本地钟点，供预计播完时间等显示使用。
+    pub now: chrono::DateTime<chrono::Local>,
 
-    /// 正在渲染的这一层浮层的入场进度,以及压在它上面那层的进度(千分比,渲染端每帧
-    /// 回写,`Cell` 因渲染只持 `&AppState`)。高亮交接据此插值:被压住的一层随上层
-    /// 入场把选中高亮淡出,上层则同步淡入,两处共用一个进度故不会错拍。
-    pub overlay_reveal: std::cell::Cell<OverlayReveal>,
+    /// 本次准备采样的单调时钟；绘制不查询系统时间。
+    pub(crate) frame_now: std::time::Instant,
 
     /// 各源能力声明镜像(启动时从 server 拉一次)。UI 据此决定渲染哪些入口
     /// (搜索类型 / 歌单写操作键 / 网页链接复制项);缺项 = 该源未注册,入口不画。
@@ -145,9 +137,9 @@ impl AppState {
                 tick_ms,
             ),
             cfg,
-            frame_area: std::cell::Cell::new(Rect::default()),
-            now: std::cell::Cell::new(chrono::Local::now()),
-            overlay_reveal: std::cell::Cell::new(OverlayReveal::default()),
+            frame_area: Rect::default(),
+            now: chrono::Local::now(),
+            frame_now: std::time::Instant::now(),
             caps: FxHashMap::default(),
         }
     }
@@ -170,7 +162,7 @@ impl AppState {
     /// 氛围背景滞后跟随、搜索布局、marquee 相位、失焦渐变、歌词滚动。
     pub fn tick_frame(&mut self) {
         self.browse.view.tick();
-        self.browse.list_expansion.get_mut().tick();
+        self.browse.list_expansion.tick();
         self.browse.fullscreen.tick();
         self.browse.lyric_view.extra_press.tick();
         self.browse.tick_ambient_reveal();

@@ -22,7 +22,7 @@ pub(super) fn clamp_cells(cells: (u16, u16)) -> (u16, u16) {
 /// 逐格写入图片占位字符并保留背景；控制指令由调用方在出帧前发送。
 ///
 /// 每格都有独立行列坐标，留白背景的 diff 不会重发图片，也不会被整行 skip 吞掉。
-pub(super) fn render_inline(area: Rect, buffer: &mut Buffer, image_id: u32) -> u32 {
+pub(crate) fn render_inline(area: Rect, buffer: &mut Buffer, image_id: u32) -> u32 {
     let [high, red, green, blue] = image_id.to_be_bytes();
     let (width, height) = clamp_cells((area.width, area.height));
     let placement = placement_id(width, height);
@@ -53,7 +53,7 @@ pub(super) fn render_inline(area: Rect, buffer: &mut Buffer, image_id: u32) -> u
 }
 
 /// 把不超过 297 的 cell 宽高编码成非零 18-bit placement id。
-fn placement_id(width: u16, height: u16) -> u32 {
+pub(super) fn placement_id(width: u16, height: u16) -> u32 {
     (u32::from(width) << 9) | u32::from(height)
 }
 

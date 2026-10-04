@@ -254,21 +254,16 @@ mod tests {
 
         use mineral_model::MediaUrl;
 
-        use crate::image::{ImageEngine, ImageRenderPhase};
+        use crate::image::ImageEngine;
 
         let theme = crate::test_support::default_theme()?;
-        let images = ImageEngine::disabled_kitty(Arc::new(mineral_config::Config::defaults()?));
+        let mut images = ImageEngine::disabled_kitty(Arc::new(mineral_config::Config::defaults()?));
         let url = MediaUrl::remote("https://example.com/morph-cover.png")?;
         images.insert_test_thumbnail(&url)?;
         let area = Rect::new(0, 0, 4, 1);
         let mut source = Buffer::empty(area);
         source.set_string(2, 0, "AB", Style::new().fg(theme.text));
-        images.render_thumbnail(
-            Some(&url),
-            Rect::new(0, 0, 2, 1),
-            &mut source,
-            ImageRenderPhase::Offscreen,
-        );
+        images.render_thumbnail(Some(&url), Rect::new(0, 0, 2, 1), &mut source);
         let mut destination = Buffer::empty(Rect::new(0, 0, 12, 4));
         super::paint_window(
             &mut destination,

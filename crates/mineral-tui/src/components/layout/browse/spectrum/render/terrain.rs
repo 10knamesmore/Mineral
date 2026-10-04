@@ -29,7 +29,6 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     }
     let cols = usize::from(area.width);
     let rows = usize::from(area.height);
-    state.target_bars.set(cols.max(1));
     let point_w = cols * 2;
     let point_h = rows * 4;
     let layers = (*state.cfg().terrain().layers()).max(1);

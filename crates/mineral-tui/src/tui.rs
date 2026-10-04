@@ -114,6 +114,12 @@ impl Tui {
         self.launch_cursor
     }
 
+    /// 同步终端尺寸，供独立于绘制的布局准备使用。
+    pub(crate) fn area(&mut self) -> io::Result<ratatui::layout::Rect> {
+        self.terminal.autoresize()?;
+        Ok(self.terminal.get_frame().area())
+    }
+
     /// 渲染一帧；回调可在 cell 输出前发送图片指令，失败则终止本帧。
     pub fn draw<F>(&mut self, f: F) -> io::Result<()>
     where

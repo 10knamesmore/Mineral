@@ -29,3 +29,5 @@ pub(crate) use graphics::GraphicsProtocol;
 pub use hub::CoverTransition;
 pub use hub::ImageEngine;
 pub(crate) use render::{BlendStyle, ImageContent, ImageRenderPhase};
+
+pub(crate) use thumbnail::InlineImage;

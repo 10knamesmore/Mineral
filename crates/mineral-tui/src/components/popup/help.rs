@@ -4,8 +4,6 @@
 //! 「label 左对齐 · 点线牵引 · chip 键帽收右缘」;列数由内容最小宽自适应,
 //! 放不下时整张表随滚动键上下平移(右缘滚动条指示)。
 
-use std::cell::Cell;
-
 use crossterm::event::KeyEvent;
 use mineral_config::keys::KeyChord;
 use ratatui::buffer::Buffer;
@@ -47,10 +45,10 @@ pub(crate) struct HelpOverlay {
     close_hint: Option<String>,
 
     /// 视口首行(整张表统一平移;不溢出时恒 0)。
-    scroll: Cell<usize>,
+    scroll: usize,
 
     /// 滚动上界 = 表高 − 视口高(渲染端按实际布局回填;`Last` / clamp 用)。
-    max_scroll: Cell<usize>,
+    max_scroll: usize,
 }
 
 impl HelpOverlay {
@@ -63,64 +61,23 @@ impl HelpOverlay {
         Self {
             entries,
             close_hint,
-            scroll: Cell::new(0),
-            max_scroll: Cell::new(0),
+            scroll: 0,
+            max_scroll: 0,
         }
     }
 
     /// 视口平移 `delta` 行,钳在 `[0, max_scroll]`(上界来自最近一帧渲染)。
-    fn scroll_by(&self, delta: i64) {
-        let cur = i64::try_from(self.scroll.get()).unwrap_or(i64::MAX);
-        let max = self.max_scroll.get();
+    fn scroll_by(&mut self, delta: i64) {
+        let cur = i64::try_from(self.scroll).unwrap_or(i64::MAX);
+        let max = self.max_scroll;
         let next = usize::try_from(cur.saturating_add(delta).max(0)).unwrap_or(0);
-        self.scroll.set(next.min(max));
+        self.scroll = next.min(max);
     }
 }
 
-impl Overlay for HelpOverlay {
-    fn chrome(&self) -> Chrome {
-        Chrome {
-            pct_w: 80,
-            pct_h: 80,
-            min_w: 40,
-            min_h: 12,
-            max_w: 130,
-            // 默认目录 3 列约 15 行、含脚本组也在 18 内;再高只剩空白。
-            max_h: 20,
-            animated: true,
-            dock: false,
-            anchor: None,
-            align: None,
-        }
-    }
-
-    fn block(&self, _ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
-        let border_color = if focused {
-            theme.accent
-        } else {
-            theme.surface1
-        };
-        let block = base_block(theme)
-            .border_style(Style::new().fg(border_color))
-            .title(Line::from(" Key Cheatsheet ").style(Style::new().fg(theme.subtext)));
-        match &self.close_hint {
-            Some(hint) => block.title_bottom(
-                Line::from(format!(" {hint} close "))
-                    .right_aligned()
-                    .style(Style::new().fg(theme.overlay)),
-            ),
-            None => block,
-        }
-    }
-
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
-        // 左缘留 1 格边距;右缘固定留 1 格滚动条道(不溢出时是空白边距,
-        // 避免溢出瞬间列宽跳变)。
-        let content_w = usize::from(inner.width.saturating_sub(2));
-        let viewport = usize::from(inner.height);
-        if content_w < 8 || viewport == 0 || self.entries.is_empty() {
-            return;
-        }
+impl HelpOverlay {
+    /// 文字测量和分列的共享结果，不依赖绘制目标。
+    fn columns(&self, content_w: usize, theme: &Theme) -> (usize, Vec<Vec<Line<'static>>>) {
         let rows = self
             .entries
             .iter()
@@ -168,12 +125,81 @@ impl Overlay for HelpOverlay {
                 lines
             })
             .collect::<Vec<Vec<Line<'static>>>>();
+        (col_w, columns)
+    }
+}
+
+impl Overlay for HelpOverlay {
+    fn chrome(&self) -> Chrome {
+        Chrome {
+            pct_w: 80,
+            pct_h: 80,
+            min_w: 40,
+            min_h: 12,
+            max_w: 130,
+            // 默认目录 3 列约 15 行、含脚本组也在 18 内;再高只剩空白。
+            max_h: 20,
+            animated: true,
+            dock: false,
+            anchor: None,
+            align: None,
+        }
+    }
+
+    fn block(&self, _ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+        let border_color = if focused {
+            theme.accent
+        } else {
+            theme.surface1
+        };
+        let block = base_block(theme)
+            .border_style(Style::new().fg(border_color))
+            .title(Line::from(" Key Cheatsheet ").style(Style::new().fg(theme.subtext)));
+        match &self.close_hint {
+            Some(hint) => block.title_bottom(
+                Line::from(format!(" {hint} close "))
+                    .right_aligned()
+                    .style(Style::new().fg(theme.overlay)),
+            ),
+            None => block,
+        }
+    }
+
+    fn prepare(
+        &mut self,
+        inner: Rect,
+        _ctx: &mut AppState,
+        theme: &Theme,
+        _advance: bool,
+        _reveal: crate::runtime::state::OverlayReveal,
+    ) {
+        let width = usize::from(inner.width.saturating_sub(2));
+        if width < 8 || inner.height == 0 || self.entries.is_empty() {
+            return;
+        }
+        let (_, columns) = self.columns(width, theme);
+        self.max_scroll = columns
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(usize::from(inner.height));
+        self.scroll = self.scroll.min(self.max_scroll);
+    }
+
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+        // 左缘留 1 格边距;右缘固定留 1 格滚动条道(不溢出时是空白边距,
+        // 避免溢出瞬间列宽跳变)。
+        let content_w = usize::from(inner.width.saturating_sub(2));
+        let viewport = usize::from(inner.height);
+        if content_w < 8 || viewport == 0 || self.entries.is_empty() {
+            return;
+        }
+        let (col_w, columns) = self.columns(content_w, theme);
         // 溢出滚动:整张表统一平移,上界回填给动作端。
         let sheet_h = columns.iter().map(Vec::len).max().unwrap_or(0);
         let max_scroll = sheet_h.saturating_sub(viewport);
-        self.max_scroll.set(max_scroll);
-        let offset = self.scroll.get().min(max_scroll);
-        self.scroll.set(offset);
+        let offset = self.scroll.min(max_scroll);
 
         for (ci, column) in columns.iter().enumerate() {
             let x_off = ci
@@ -221,8 +247,8 @@ impl Overlay for HelpOverlay {
                     SelectionMove::Up(n) => {
                         self.scroll_by(i64::try_from(n).unwrap_or(i64::MAX).saturating_neg());
                     }
-                    SelectionMove::First => self.scroll.set(0),
-                    SelectionMove::Last => self.scroll.set(self.max_scroll.get()),
+                    SelectionMove::First => self.scroll = 0,
+                    SelectionMove::Last => self.scroll = self.max_scroll,
                 }
                 Some(OverlayResponse::Consumed)
             }

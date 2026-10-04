@@ -1,23 +1,22 @@
 //! 字词分别渐入提亮的强调色、退为已唱色；暂停与 seek 不会截断颜色交接。
 
-use std::cell::{RefCell, RefMut};
 use std::time::Instant;
 
 use mineral_config::LyricsConfig;
 use mineral_model::{SongId, Word};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::panel::LyricMode;
 use crate::render::color::lerp_color;
 use crate::render::theme::{Theme, permille_of};
 
-/// 当前歌曲两个歌词面板的颜色动画；渲染时更新目标，重复绘制不推进额外帧。
+/// 当前歌曲两个歌词面板的颜色动画；准备阶段更新目标，绘制只读采样。
 #[derive(Default)]
 pub(crate) struct LyricColors {
-    /// 与 marquee 相同，允许只持 `&AppState` 的绘制路径维护显示状态。
-    state: RefCell<ColorState>,
+    /// 由歌词组件准备入口独占更新。
+    state: ColorState,
 }
 
 /// 普通与全屏面板各自的歌词颜色过渡。
@@ -34,7 +33,7 @@ struct ColorState {
 }
 
 /// 字词在原文时间轴中的位置，不随居中、滚动与面板尺寸变化。
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct WordKey {
     /// 原文行索引。
     line: usize,
@@ -46,7 +45,7 @@ struct WordKey {
 /// 一次面板绘制使用的配置与时钟快照，不保存配置副本到运行时状态。
 pub(super) struct LyricPaint<'a> {
     /// 该面板可见字词的动画。
-    colors: RefMut<'a, FxHashMap<WordKey, ColorFade>>,
+    colors: &'a FxHashMap<WordKey, ColorFade>,
 
     /// 本帧的歌词明暗层级与过渡时长。
     cfg: &'a LyricsConfig,
@@ -55,53 +54,128 @@ pub(super) struct LyricPaint<'a> {
     now: Instant,
 }
 
+/// 一个可见字词在本次准备中的目标色。
+pub(super) struct WordTarget {
+    /// 词在时间轴中的身份。
+    key: WordKey,
+
+    /// 由当前主题和背景确定的目标色。
+    color: Color,
+
+    /// 本次交接采用的时长档。
+    transition: ColorTransition,
+}
+
 impl LyricColors {
-    /// 保留可见行的动画；首次出现的单元直接显示其初始颜色，之后的目标变化才渐变。
-    pub(super) fn begin<'a>(
-        &'a self,
+    /// 在布局确定后协调可见词的目标，首次出现直接落位。
+    pub(super) fn prepare(
+        &mut self,
         song: Option<&SongId>,
-        cfg: &'a LyricsConfig,
+        cfg: &LyricsConfig,
         motion: LyricMode,
-        visible_lines: impl Iterator<Item = usize>,
-    ) -> LyricPaint<'a> {
-        let mut state = self.state.borrow_mut();
-        if state.song.as_ref() != song {
-            *state = ColorState {
+        targets: Vec<WordTarget>,
+        now: Instant,
+    ) {
+        if self.state.song.as_ref() != song {
+            self.state = ColorState {
                 song: song.cloned(),
                 ..ColorState::default()
             };
         }
-        let mut colors = RefMut::map(state, |state| match motion {
-            LyricMode::Compact => &mut state.compact,
-            LyricMode::Immersive => &mut state.immersive,
-        });
-        let visible_lines = visible_lines.collect::<Vec<_>>();
-        colors.retain(|key, _| visible_lines.contains(&key.line));
-        LyricPaint {
-            colors,
-            cfg,
-            now: Instant::now(),
+        let colors = match motion {
+            LyricMode::Compact => &mut self.state.compact,
+            LyricMode::Immersive => &mut self.state.immersive,
+        };
+        let visible = targets
+            .iter()
+            .map(|target| target.key)
+            .collect::<FxHashSet<_>>();
+        colors.retain(|key, _| visible.contains(key));
+        for target in targets {
+            let fade = colors
+                .entry(target.key)
+                .or_insert_with(|| ColorFade::new(target.color, now, target.transition));
+            fade.animate_to(target.color, target.transition, now, cfg);
         }
+    }
+
+    /// 借用已准备的字词动画和本次时钟，绘制不创建或推进动画。
+    pub(super) fn begin<'a>(
+        &'a self,
+        cfg: &'a LyricsConfig,
+        motion: LyricMode,
+        now: Instant,
+    ) -> LyricPaint<'a> {
+        LyricPaint {
+            colors: match motion {
+                LyricMode::Compact => &self.state.compact,
+                LyricMode::Immersive => &self.state.immersive,
+            },
+            cfg,
+            now,
+        }
+    }
+}
+
+/// 按行的时间轴和背景确定可见词目标；不读取或修改动画状态。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn word_targets<'a>(
+    line: usize,
+    words: &'a [Word],
+    position_ms: Option<u64>,
+    inactive: Color,
+    theme: &Theme,
+    row_bg: Color,
+    cfg: &LyricsConfig,
+) -> impl Iterator<Item = WordTarget> + 'a {
+    let unlit = theme
+        .text_over(row_bg, permille_of(*cfg.text_alpha().unsung()))
+        .unwrap_or(theme.overlay);
+    let sung = theme
+        .text_over(row_bg, permille_of(*cfg.text_alpha().sung()))
+        .unwrap_or(theme.text);
+    let highlight = highlight(theme, cfg);
+    words.iter().enumerate().map(move |(word_index, word)| {
+        let end_ms = word.start_ms.saturating_add(word.dur_ms);
+        let (color, transition) = match position_ms {
+            None => (inactive, ColorTransition::LineChange),
+            Some(position) if position >= end_ms => (sung, ColorTransition::Release),
+            Some(position) if position >= word.start_ms => (highlight, ColorTransition::Attack),
+            Some(_) => (unlit, ColorTransition::LineChange),
+        };
+        WordTarget {
+            key: WordKey {
+                line,
+                word: word_index,
+            },
+            color,
+            transition,
+        }
+    })
+}
+
+/// 浅强调色在准备与绘制中共用同一公式。
+fn highlight(theme: &Theme, cfg: &LyricsConfig) -> Color {
+    match theme.accent {
+        Color::Rgb(..) => lerp_color(
+            theme.accent,
+            Color::Rgb(255, 255, 255),
+            u64::from(permille_of(*cfg.highlight_white_mix())),
+            1000,
+        ),
+        color => color,
     }
 }
 
 impl LyricPaint<'_> {
     /// 整行和逐字跟唱共用浅强调色；非 RGB 主题保留原强调色。
     pub(super) fn highlight(&self, theme: &Theme) -> Color {
-        match theme.accent {
-            Color::Rgb(..) => lerp_color(
-                theme.accent,
-                Color::Rgb(255, 255, 255),
-                u64::from(permille_of(*self.cfg.highlight_white_mix())),
-                1000,
-            ),
-            color => color,
-        }
+        highlight(theme, self.cfg)
     }
 
     /// 当前行按未唱、正在唱、已唱选择目标色；非当前行退到邻行色，仍保留逐单元动画。
     pub(super) fn line<'a>(
-        &mut self,
+        &self,
         line_index: usize,
         words: &'a [Word],
         position_ms: Option<u64>,
@@ -109,34 +183,26 @@ impl LyricPaint<'_> {
         theme: &Theme,
         row_bg: Color,
     ) -> Line<'a> {
-        // 未唱部分应与已唱部分保持明显区分。
-        let unlit = theme
-            .text_over(row_bg, permille_of(*self.cfg.text_alpha().unsung()))
-            .unwrap_or(theme.overlay);
-        let sung = theme
-            .text_over(row_bg, permille_of(*self.cfg.text_alpha().sung()))
-            .unwrap_or(theme.text);
-        let highlight = self.highlight(theme);
-        let mut spans = Vec::<Span<'a>>::with_capacity(words.len());
-        for (word_index, word) in words.iter().enumerate() {
-            let end_ms = word.start_ms.saturating_add(word.dur_ms);
-            let (target, transition) = match position_ms {
-                None => (inactive, ColorTransition::LineChange),
-                Some(position) if position >= end_ms => (sung, ColorTransition::Release),
-                Some(position) if position >= word.start_ms => (highlight, ColorTransition::Attack),
-                Some(_) => (unlit, ColorTransition::LineChange),
-            };
-            let key = WordKey {
-                line: line_index,
-                word: word_index,
-            };
-            let fade = self
-                .colors
-                .entry(key)
-                .or_insert_with(|| ColorFade::new(target, self.now, transition));
-            let color = fade.animate_to(target, transition, self.now, self.cfg);
-            spans.push(Span::styled(word.text.as_str(), Style::new().fg(color)));
-        }
+        let targets = word_targets(
+            line_index,
+            words,
+            position_ms,
+            inactive,
+            theme,
+            row_bg,
+            self.cfg,
+        );
+        let spans = words
+            .iter()
+            .zip(targets)
+            .map(|(word, target)| {
+                let color = self
+                    .colors
+                    .get(&target.key)
+                    .map_or(target.color, |fade| fade.current(self.now, self.cfg));
+                Span::styled(word.text.as_str(), Style::new().fg(color))
+            })
+            .collect::<Vec<_>>();
         Line::from(spans)
     }
 }

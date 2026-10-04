@@ -1,10 +1,8 @@
 //! detail 头部的简介（album / artist / playlist）多行渲染与滚动视口。
 //!
 //! 数据层简介按 `\n` 保留原始换行与空行（作者有意的段落间隔）；这里把它拆成逻辑行、再按
-//! 显示宽度词感知折行成可视行，给一个 `Cell` 维护的滚动 offset 开窗口。拉丁词整体不拆，
+//! 显示宽度词感知折行成可视行，按准备阶段确定的滚动 offset 开窗口。拉丁词整体不拆，
 //! 无空格的长 CJK 串按列逐字符断。
-
-use std::cell::Cell;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -137,7 +135,7 @@ pub(crate) fn draw_description(
     buf: &mut Buffer,
     area: Rect,
     text: &str,
-    scroll: &Cell<u16>,
+    scroll: u16,
     theme: &Theme,
 ) {
     if area.height == 0 || area.width == 0 || text.is_empty() {
@@ -148,8 +146,7 @@ pub(crate) fn draw_description(
     let rows = wrap_description(text, text_w);
     let total = u16::try_from(rows.len()).unwrap_or(u16::MAX);
     let viewport = area.height;
-    let off = clamp_scroll(scroll.get(), total, viewport);
-    scroll.set(off);
+    let off = clamp_scroll(scroll, total, viewport);
     let dim = Style::new().fg(theme.overlay);
     let visible = rows
         .iter()
@@ -244,4 +241,17 @@ mod tests {
         assert_eq!(clamp_scroll(100, 30, 10), 20, "上界 total-viewport");
         assert_eq!(clamp_scroll(7, 30, 10), 7, "界内不动");
     }
+}
+
+/// 测量简介行数后限制滚动位置，供准备入口写回。
+pub(super) fn prepare_scroll(text: &str, area: Rect, scroll: u16) -> u16 {
+    if area.is_empty() || text.is_empty() {
+        return scroll;
+    }
+    let rows = wrap_description(text, area.width.saturating_sub(1).max(1));
+    clamp_scroll(
+        scroll,
+        u16::try_from(rows.len()).unwrap_or(u16::MAX),
+        area.height,
+    )
 }

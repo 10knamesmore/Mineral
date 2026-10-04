@@ -60,12 +60,12 @@ pub(super) struct RowDecor<'m> {
 ///
 /// # Return:
 ///   组装好的表格行。
-pub(super) fn build_row<'a>(
-    song: &'a Song,
+pub(super) fn build_row(
+    song: &Song,
     theme: &Theme,
     cols: QueueColumns,
     decor: RowDecor<'_>,
-) -> Row<'a> {
+) -> Row<'static> {
     let (title_fg, sub_fg) = if decor.is_current {
         (theme.accent, theme.accent)
     } else {

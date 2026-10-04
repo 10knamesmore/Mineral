@@ -110,9 +110,236 @@ impl TrackLayout {
     }
 }
 
+/// 用本次视口协调列表状态，并声明可见行的图片需求。
+pub(super) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: bool) {
+    let total = state.filtered_tracks().len();
+    let motion = super::preparation::motion(state);
+    let ticks = state.minimap_cursor_ticks();
+    let viewport = usize::from(area.height.saturating_sub(3));
+    state
+        .browse
+        .nav
+        .track
+        .prepare(total, viewport, motion, ticks, advance);
+    let aggregate = state
+        .opened_playlist()
+        .is_some_and(|p| p.data.source() == SourceKind::MINERAL);
+    let layout = TrackLayout::new(area.width, aggregate, state.images.supports_thumbnails());
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    let columns = resolve_column_rects(inner, &layout.widths(), display_width(HIGHLIGHT_SYMBOL));
+    let title_w = columns.get(layout.title_index()).map_or(0, |r| r.width);
+    let selected = state.browse.nav.track.sel();
+    let offset = state.browse.nav.track.offset(total, viewport);
+    let visible = offset..offset.saturating_add(viewport).min(total);
+    let (title, covers, playing) = {
+        let tracks = state.filtered_tracks();
+        let title = visible
+            .contains(&selected)
+            .then(|| tracks.get(selected))
+            .flatten()
+            .map(|entry| {
+                (
+                    &entry.data.song.id,
+                    crate::components::layout::shared::marquee::song_title_width(&entry.data.song),
+                )
+            })
+            .map(|(id, width)| (id.qualified(), width));
+        let covers = visible
+            .clone()
+            .map(|index| {
+                tracks
+                    .get(index)
+                    .and_then(|entry| entry.data.song.cover_url.clone())
+            })
+            .collect::<Vec<_>>();
+        let playing = tracks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                state
+                    .playback
+                    .track
+                    .as_ref()
+                    .filter(|song| song.id == entry.data.song.id)
+                    .map(|_| index)
+            })
+            .collect::<Vec<_>>();
+        (title, covers, playing)
+    };
+    if let Some((identity, width)) = title {
+        state
+            .marquees
+            .prepare(Slot::BrowseSelected, &identity, width, title_w);
+    }
+    if layout.thumbnails
+        && let Some(column) = columns.get(1)
+    {
+        let phase = thumbnail_phase(state, motion, state.browse.nav.last_sel_change);
+        crate::components::layout::shared::thumbnails::prepare_table_thumbnails(
+            &mut state.images,
+            *column,
+            covers.iter().map(Option::as_ref),
+            phase,
+        );
+    }
+    crate::components::layout::shared::list_minimap::prepare_minimap(
+        &mut state.browse.nav.track,
+        total,
+        super::preparation::minimap_track(area),
+        playing.into_iter(),
+        motion,
+        ticks,
+        state.cfg.tui().minimap(),
+        advance,
+    );
+    if matches!(motion, ScrollMotion::Advancing { .. }) {
+        let filtered = (!state.browse.search.tracks.query().is_empty()).then(|| {
+            use crate::components::layout::shared::scroll_table::{PreparedMinimap, PreparedTable};
+            let tracks = state.filtered_tracks();
+            let rows = visible
+                .clone()
+                .filter_map(|index| tracks.get(index))
+                .map(|entry| ListRowIdentity::Track(entry.data.index))
+                .collect();
+            let (table, columns, layout) = table(area, state, theme, visible.clone());
+            let images =
+                columns
+                    .get(1)
+                    .filter(|_| layout.thumbnails)
+                    .map_or_else(Vec::new, |column| {
+                        crate::components::layout::shared::thumbnails::snapshot_thumbnails(
+                            &state.images,
+                            *column,
+                            covers.iter().map(Option::as_ref),
+                        )
+                    });
+            let entries = tracks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| {
+                    let playing = state
+                        .playback
+                        .track
+                        .as_ref()
+                        .is_some_and(|song| song.id == entry.data.song.id);
+                    (entry.loved || playing).then_some(MinimapEntry {
+                        index,
+                        loved: entry.loved,
+                        playing,
+                    })
+                })
+                .collect();
+            let content = PreparedTable {
+                table,
+                area,
+                border: None,
+                images,
+                selected: (total > 0).then(|| {
+                    crate::runtime::scroll::viewport::pin_cursor(selected, offset, viewport)
+                        .saturating_sub(offset)
+                }),
+                minimap: Some(PreparedMinimap {
+                    area: super::preparation::minimap_track(area),
+                    total,
+                    cursor: MinimapCursor::new(
+                        &state.browse.nav.track,
+                        total,
+                        state.cfg.tui().minimap(),
+                    ),
+                    entries,
+                    theme: *theme,
+                }),
+            };
+            crate::runtime::state::FilteredListFrame {
+                scope: crate::runtime::state::ListExpansionScope::Browse(View::Library),
+                area,
+                body: super::expansion::body(area),
+                content,
+                rows,
+            }
+        });
+        state
+            .browse
+            .list_expansion
+            .prepare(area, super::expansion::body(area), filtered);
+        state.browse.list_expansion.retain_images(&mut state.images);
+    }
+}
+
 /// 渲染 Library 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let surface = super::expansion::begin_list(buf, area, state, View::Library);
+    let tracks = state.filtered_tracks();
+    // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
+    // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，不用临时高度改写滚动目标。
+    let viewport = usize::from(area.height.saturating_sub(3));
+    let offset = state.browse.nav.track.offset(tracks.len(), viewport);
+    let window = offset..offset.saturating_add(viewport).min(tracks.len());
+    let (table, columns, layout) = table(area, state, theme, window);
+    let visible = render_scroll_table(
+        buf,
+        area,
+        |_| table,
+        &state.browse.nav.track,
+        tracks.len(),
+        viewport,
+    );
+    if layout.thumbnails
+        && let Some(column) = columns.get(1)
+    {
+        render_table_thumbnails(
+            buf,
+            &state.images,
+            *column,
+            visible.clone().map(|index| {
+                tracks
+                    .get(index)
+                    .and_then(|entry| entry.data.song.cover_url.as_ref())
+            }),
+        );
+    }
+    let cursor = MinimapCursor::new(
+        &state.browse.nav.track,
+        tracks.len(),
+        state.cfg.tui().minimap(),
+    );
+    let entries = tracks
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| MinimapEntry {
+            index,
+            loved: entry.loved,
+            // 播放态只有歌曲身份；歌单中同曲的各个位置都标出，不借用队列下标冒充歌单位置。
+            playing: state
+                .playback
+                .track
+                .as_ref()
+                .is_some_and(|song| song.id == entry.data.song.id),
+        });
+    // 右边框从表头行一直到底部计数行，覆盖整份列表。
+    render_minimap(
+        buf,
+        Rect::new(
+            area.right().saturating_sub(1),
+            area.y.saturating_add(1),
+            area.width.min(1),
+            area.height.saturating_sub(2),
+        ),
+        tracks.len(),
+        cursor,
+        entries,
+        theme,
+    );
+    super::expansion::finish_list(buf, state, theme, surface, visible.clone());
+}
+
+/// 构造一个可见窗口的表格输入，供本次绘制与搜索展开旧端共用。
+fn table(
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    visible: std::ops::Range<usize>,
+) -> (Table<'static>, Vec<Rect>, TrackLayout) {
     let title = state.opened_playlist().map_or_else(
         || "tracks".to_owned(),
         |p| format!("tracks / {}", p.data.name),
@@ -209,99 +436,18 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
             .highlight_symbol(HIGHLIGHT_SYMBOL)
     };
 
-    // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
-    // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，不用临时高度改写滚动目标。
-    let viewport = usize::from(area.height.saturating_sub(3));
-    let motion = if state.browse.fullscreen.at_min()
-        && state.channel_search.active.at_min()
-        && (state.browse.view.at_min() || state.browse.view.at_max())
-    {
-        ScrollMotion::Advancing {
-            scrolloff: state.scrolloff(),
-            glide_ticks: state.list_glide_ticks(),
-        }
-    } else {
-        ScrollMotion::Frozen
-    };
-    let visible = render_scroll_table(
-        buf,
-        area,
-        build_table,
-        &state.browse.nav.track,
-        tracks.len(),
-        viewport,
-        motion,
-    );
-    if layout.thumbnails
-        && let Some(column) = columns.get(1)
-    {
-        render_table_thumbnails(
-            buf,
-            &state.images,
-            *column,
-            visible.clone().map(|index| {
-                tracks
-                    .get(index)
-                    .and_then(|entry| entry.data.song.cover_url.as_ref())
-            }),
-            thumbnail_phase(state, motion, state.browse.nav.last_sel_change),
-        );
-    }
-    let cursor = MinimapCursor::new(
-        &state.browse.nav.track,
-        tracks.len(),
-        motion,
-        state.minimap_cursor_ticks(),
-        state.cfg.tui().minimap(),
-    );
-    let entries = tracks
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| MinimapEntry {
-            index,
-            loved: entry.loved,
-            // 播放态只有歌曲身份；歌单中同曲的各个位置都标出，不借用队列下标冒充歌单位置。
-            playing: state
-                .playback
-                .track
-                .as_ref()
-                .is_some_and(|song| song.id == entry.data.song.id),
-        });
-    // 右边框从表头行一直到底部计数行，覆盖整份列表。
-    render_minimap(
-        buf,
-        Rect::new(
-            area.right().saturating_sub(1),
-            area.y.saturating_add(1),
-            area.width.min(1),
-            area.height.saturating_sub(2),
-        ),
-        tracks.len(),
-        cursor,
-        entries,
-        theme,
-    );
-    super::expansion::finish_list(
-        buf,
-        state,
-        theme,
-        surface,
-        visible.clone(),
-        visible
-            .filter_map(|index| tracks.get(index))
-            .map(|track| ListRowIdentity::Track(track.data.index)),
-    );
+    (build_table(visible), columns, layout)
 }
 
 /// 把一首歌组装成 library 表格的一行(loved 标记 / 在播行装饰 / 高亮搜索词)。
 /// `layout` 决定列集:窄档省去 artist/album。
-fn build_row<'a>(
-    entry: &'a PlaylistEntryView,
+fn build_row(
+    entry: &PlaylistEntryView,
     state: &AppState,
     theme: &Theme,
     layout: TrackLayout,
     marquee: Option<RowMarquee<'_>>,
-) -> Row<'a> {
+) -> Row<'static> {
     let song = &entry.data.song;
     let is_current = state
         .playback
@@ -452,10 +598,11 @@ mod tests {
     use crate::runtime::state::AppState;
 
     /// 用本视图渲染入口画一帧(`60×12` ⇒ body 视口 = 12 - 边框 2 - 表头 1 = 9 行)。
-    fn draw_lib(t: &mut Terminal<TestBackend>, state: &AppState) -> color_eyre::Result<()> {
+    fn draw_lib(t: &mut Terminal<TestBackend>, state: &mut AppState) -> color_eyre::Result<()> {
         let theme = crate::test_support::default_theme()?;
         t.draw(|f| {
             let area = f.area();
+            super::prepare(area, state, &theme, true);
             super::render_to(f.buffer_mut(), area, state, &theme);
         })?;
         Ok(())
@@ -471,7 +618,7 @@ mod tests {
         let mut app = crate::test_support::app_with_long_library(60, /*sel_track*/ 40)?;
         let mut t = Terminal::new(TestBackend::new(60, 24))?;
         for _ in 0..40 {
-            draw_lib(&mut t, &app.state)?;
+            draw_lib(&mut t, &mut app.state)?;
         }
         let before = app.state.browse.nav.track.scroll_target();
         assert!(before > 0, "前置:视口已滚到深处");
@@ -483,7 +630,7 @@ mod tests {
         app.state.browse.fullscreen = fs;
         for h in (2..20_u16).rev() {
             let mut small = Terminal::new(TestBackend::new(60, h))?;
-            draw_lib(&mut small, &app.state)?;
+            draw_lib(&mut small, &mut app.state)?;
         }
         assert_eq!(
             app.state.browse.nav.track.scroll_target(),
@@ -494,7 +641,7 @@ mod tests {
         // 回浏览态:渲染收敛后仍在原 offset(无重定目标 = 无平移)。
         app.state.browse.fullscreen = Toggle::new(8);
         for _ in 0..10 {
-            draw_lib(&mut t, &app.state)?;
+            draw_lib(&mut t, &mut app.state)?;
         }
         assert_eq!(
             app.state.browse.nav.track.scroll_target(),

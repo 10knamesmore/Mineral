@@ -62,7 +62,7 @@ pub(crate) struct Chrome {
 
 /// 停靠浮层(抽屉式)避开封面的那一侧。
 #[derive(Clone, Copy)]
-enum Dock {
+pub(super) enum Dock {
     /// 贴左(old layout:封面在右栏)。
     Left,
 
@@ -173,6 +173,17 @@ pub(crate) trait Overlay {
     ///   - `focused`: 是否持有键盘焦点(栈顶且未在退场),影响边框色
     fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static>;
 
+    /// 在完整布局确定后更新显示状态和资源需求，动画裁剪不改变此区域。
+    fn prepare(
+        &mut self,
+        _inner: Rect,
+        _ctx: &mut AppState,
+        _theme: &Theme,
+        _advance: bool,
+        _reveal: crate::runtime::state::OverlayReveal,
+    ) {
+    }
+
     /// 把内容画进 `buf` 的外框内部 `inner`。`inner` 恒为**完全展开**尺寸 —— 动画途中
     /// 内容先按满尺寸渲染到离屏缓冲再按进度搬运可见窗口(不随动画逐帧 reflow),
     /// 实现方不必关心进度。面向 [`Buffer`] 而非 `Frame`,离屏与上屏共用一个入口。
@@ -261,25 +272,7 @@ pub(crate) fn render_overlay<O: Overlay>(
     theme: &Theme,
 ) {
     let c = overlay.chrome();
-    // anchor 模式(PopMenu)优先:不停靠、不居中,贴锚点放置。
-    // 停靠浮层:按当前布局选侧(全屏贴右 / 否则贴左),避开封面;否则居中。
-    let dock = (c.anchor.is_none() && c.dock).then_some(if ctx.browse.fullscreen.on() {
-        Dock::Right
-    } else {
-        Dock::Left
-    });
-    let base = match (c.anchor, dock) {
-        (Some((anchor, placement)), _) => place(
-            anchor,
-            placement,
-            c.align.unwrap_or(*ctx.cfg.tui().layout().menu_align()),
-            c.max_w,
-            c.max_h,
-            area,
-        ),
-        (None, Some(d)) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
-        (None, None) => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
-    };
+    let (base, dock) = full_rect(&c, area, ctx);
     if base.width < 4 || base.height < 3 {
         return;
     }
@@ -312,6 +305,30 @@ pub(crate) fn render_overlay<O: Overlay>(
             (None, None) => draw_center_reveal(frame, base, scale, &off, theme),
         }
     }
+}
+
+/// 准备和绘制共用完整浮层几何，不受当前揭开进度影响。
+pub(super) fn full_rect(c: &Chrome, area: Rect, ctx: &AppState) -> (Rect, Option<Dock>) {
+    // anchor 模式(PopMenu)优先:不停靠、不居中,贴锚点放置。
+    // 停靠浮层:按当前布局选侧(全屏贴右 / 否则贴左),避开封面;否则居中。
+    let dock = (c.anchor.is_none() && c.dock).then_some(if ctx.browse.fullscreen.on() {
+        Dock::Right
+    } else {
+        Dock::Left
+    });
+    let base = match (c.anchor, dock) {
+        (Some((anchor, placement)), _) => place(
+            anchor,
+            placement,
+            c.align.unwrap_or(*ctx.cfg.tui().layout().menu_align()),
+            c.max_w,
+            c.max_h,
+            area,
+        ),
+        (None, Some(d)) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
+        (None, None) => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
+    };
+    (base, dock)
 }
 
 /// 把浮层按完全展开尺寸渲染到与 `full` 等大的离屏缓冲(坐标系与屏幕一致)。

@@ -1,11 +1,7 @@
-//! 溢出标题滚动(marquee)的相位状态:槽 → (显示身份, 起始拍) 的 reconciliation。
+//! 溢出标题的显示身份与滚动起点。
 //!
-//! 渲染端每帧对自己的槽声明「现在显示的是谁」([`Marquees::phase`]),身份变化
-//! (选中移动 / 切歌 / 列表内容变化)即重置相位——三种触发统一为一个机制,零事件通知。
-//! 帧计数走按键外的 tick 路径(`&mut`),相位查询走渲染路径(`&self` + 内部
-//! `RefCell`),与 `ScrollList` 的两路分工同款。切片本身在渲染层纯函数(marquee_line)。
-
-use std::cell::RefCell;
+//! [`Marquees::prepare`] 根据当前内容和布局绑定身份，变化时重置起点；
+//! [`Marquees::tick`] 推进时钟，绘制仅经 [`Marquees::phase`] 读取相位。
 
 use rustc_hash::FxHashMap;
 
@@ -112,8 +108,8 @@ pub(crate) struct Marquees {
     /// 滚动节奏(方式 + 各拍数)。
     tempo: Tempo,
 
-    /// 槽表(渲染路径 `&self` 更新,内部可变)。
-    slots: RefCell<FxHashMap<Slot, SlotPhase>>,
+    /// 准备阶段更新的显示身份与起始拍。
+    slots: FxHashMap<Slot, SlotPhase>,
 }
 
 impl Marquees {
@@ -125,7 +121,7 @@ impl Marquees {
                 step_ticks: tempo.step_ticks.max(1),
                 ..tempo
             },
-            slots: RefCell::new(FxHashMap::default()),
+            slots: FxHashMap::default(),
         }
     }
 
@@ -155,10 +151,24 @@ impl Marquees {
         self.now = self.now.wrapping_add(1);
     }
 
+    /// 准备阶段绑定显示身份和宽度；绘制查询不重置槽位起点。
+    pub(crate) fn prepare(&mut self, slot: Slot, identity: &str, content_w: u16, window_w: u16) {
+        let phase = self.slots.entry(slot).or_insert_with(|| SlotPhase {
+            identity: identity.to_owned(),
+            start: self.now,
+        });
+        if phase.identity != identity {
+            phase.identity = identity.to_owned();
+            phase.start = self.now;
+        }
+        if content_w <= window_w {
+            phase.start = self.now;
+        }
+    }
+
     /// 渲染路径:查询 `slot` 当前的滚动相位与边缘 fade 强度。
     ///
-    /// 身份与槽存的不同即重置相位;不溢出(`content_w ≤ window_w`)恒返零相位并重置——
-    /// 这样 resize 变窄再度溢出时从头带停顿起步,而不是落在滚动中段。
+    /// 未准备、身份不符或标题不溢出时返回静止相位；不会改变起点。
     ///
     /// # Params:
     ///   - `slot`: 渲染位
@@ -184,17 +194,10 @@ impl Marquees {
         if matches!(self.tempo.mode, Mode::Off) {
             return STILL;
         }
-        let mut slots = self.slots.borrow_mut();
-        let phase = slots.entry(slot).or_insert_with(|| SlotPhase {
-            identity: identity.to_owned(),
-            start: self.now,
-        });
-        if phase.identity != identity {
-            phase.identity = identity.to_owned();
-            phase.start = self.now;
-        }
-        if content_w <= window_w {
-            phase.start = self.now;
+        let Some(phase) = self.slots.get(&slot) else {
+            return STILL;
+        };
+        if phase.identity != identity || content_w <= window_w {
             return STILL;
         }
         let elapsed = self.now.wrapping_sub(phase.start);

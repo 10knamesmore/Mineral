@@ -10,7 +10,6 @@
 //! 2. **Baseline**:任何状态下条高都不低于配置的 `baseline_min`,面板永远不死寂。
 //!    pause 时条衰减到 baseline 停住,FFT 还没出第一窗时也是 baseline。
 
-use std::cell::Cell;
 use std::collections::VecDeque;
 
 use mineral_config::SpectrumStyle;
@@ -295,9 +294,8 @@ pub struct SpectrumState {
     /// 配色状态机。默认 `Hue`(漂移),封面取色就绪后由 app 层命令切到过渡 / 静止。
     color: SpectrumColor,
 
-    /// 渲染层根据 area.width 算出的目标条数,FFT compute 下一帧用它。
-    /// `Cell` 是因为渲染层只拿 `&SpectrumState`,这是「render → tick」反向通道。
-    pub target_bars: Cell<usize>,
+    /// 布局准备给出的目标条数，下次 FFT 更新使用；绘制只读取。
+    pub target_bars: usize,
 
     /// waterfall 历史环(头部最新)。行 = 推行那刻的 FFT 真值条(已乘音量,
     /// 不过 ADSR——瀑布要锐利的瞬时值,余韵是历史本身)。仅 `style = waterfall`
@@ -344,7 +342,7 @@ impl SpectrumState {
             peak_vel: vec![0.0; DEFAULT_BAR_COUNT],
             hue_phase: 0,
             color: SpectrumColor::Hue,
-            target_bars: Cell::new(DEFAULT_BAR_COUNT),
+            target_bars: DEFAULT_BAR_COUNT,
             water_hist: VecDeque::new(),
             water_countdown: 0,
             terrain: TerrainHistory::default(),
@@ -466,7 +464,7 @@ impl SpectrumState {
             Some(targets) => self.resize_state(targets.len()),
             // idle / 起播间隙没有 FFT 真值,仍把条数同步到渲染层反馈的面板宽度,
             // 否则 baseline 只铺满初始 `DEFAULT_BAR_COUNT` 列、宽面板右侧空白。
-            None => self.resize_state(self.target_bars.get().max(1)),
+            None => self.resize_state(self.target_bars.max(1)),
         }
         match (bars, playing) {
             (Some(targets), _) => {
@@ -573,7 +571,7 @@ impl SpectrumState {
             return;
         }
         self.water_countdown = self.timing.water_push_ticks.saturating_sub(1);
-        let cols = self.target_bars.get().max(1);
+        let cols = self.target_bars.max(1);
         let mut row = vec![0_u16; cols].into_boxed_slice();
         if let Some(targets) = bars {
             let vol = u32::from(volume_pct.min(100));
@@ -826,7 +824,7 @@ mod tests {
     #[test]
     fn bars_style_keeps_histories_empty() -> color_eyre::Result<()> {
         let mut s = spectrum_state()?;
-        let n = s.target_bars.get();
+        let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..32 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -850,7 +848,7 @@ mod tests {
             "style": "waterfall",
             "waterfall": { "push_ms": 64 },
         } } }))?;
-        let n = s.target_bars.get();
+        let n = s.target_bars;
         let bars = vec![40_u16; n];
         assert!(s.water_hist.is_empty(), "初始无历史");
         for _ in 0..16 {
@@ -870,7 +868,7 @@ mod tests {
     #[test]
     fn waterfall_pause_freezes_history() -> color_eyre::Result<()> {
         let mut s = waterfall_state()?;
-        let n = s.target_bars.get();
+        let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -892,7 +890,7 @@ mod tests {
         let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
             "style": "terrain",
         } } }))?;
-        let n = s.target_bars.get();
+        let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..32 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -911,14 +909,14 @@ mod tests {
     #[test]
     fn waterfall_resize_keeps_history() -> color_eyre::Result<()> {
         let mut s = waterfall_state()?;
-        let n = s.target_bars.get();
+        let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
         let rows_before = s.water_hist.len();
         assert!(rows_before > 0, "前置:已有历史");
-        s.target_bars.set(n + 7);
+        s.target_bars = n + 7;
         let wider = vec![40_u16; n + 7];
         for _ in 0..4 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&wider));
@@ -940,7 +938,7 @@ mod tests {
         let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
             "style": "terrain",
         } } }))?;
-        let n = s.target_bars.get();
+        let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..200 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -1054,7 +1052,7 @@ mod tests {
     #[test]
     fn reconfigure_style_switches_tick_behavior() -> color_eyre::Result<()> {
         let mut s = spectrum_state()?;
-        let n = s.target_bars.get();
+        let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));

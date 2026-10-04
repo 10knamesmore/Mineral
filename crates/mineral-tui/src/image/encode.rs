@@ -248,7 +248,7 @@ mod tests {
         use crate::image::graphics::TerminalRelay;
         use crate::image::kitty::KittyImage;
 
-        let cache = TerminalImageCache::new(/*budget*/ 128 * 1024 * 1024);
+        let mut cache = TerminalImageCache::new(/*budget*/ 128 * 1024 * 1024);
         let graphics = TerminalGraphics::fixed((8, 16));
         let source = image::DynamicImage::ImageRgb8(image::RgbImage::new(3000, 3000));
         let mut keys = Vec::new();

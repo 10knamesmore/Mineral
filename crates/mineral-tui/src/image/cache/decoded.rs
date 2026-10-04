@@ -1,11 +1,8 @@
 //! 封面像素的字节预算 LRU 缓存。
 //!
-//! 渲染路径只有 `&AppState`,故 `get` 用 `&self` + 内部 `Cell` 记 LRU 顺序
-//! (`Cell::set` 对 `Copy` 类型无运行时借用检查,无 panic 面);逐出只发生在
-//! `&mut self` 的 `insert`。按字节而非条数封顶:封面尺寸不一,唯有字节预算能把
-//! 非可见工作集限制在预算内；实际显示的大图可以超额留驻，离屏后正常回收。
+//! 准备阶段显式登记可见工作集与使用顺序；只读查询不保活。
+//! 可见工作集可以超出预算，离屏后重新参与回收。
 
-use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use image::DynamicImage;
@@ -25,13 +22,13 @@ struct Entry {
     /// 该图像素字节数,记账用,免逐出时重算。
     bytes: u64,
 
-    /// 上次被 `get` 命中的单调序号;最小者最久未用,优先逐出。
-    last_used: Cell<u64>,
+    /// 上次被准备入口登记的单调序号;最小者最久未用,优先逐出。
+    last_used: u64,
 }
 
 /// 封面像素缓存:字节预算 LRU。
 ///
-/// `get` 更新 LRU，渲染另行登记可见工作集。回填超预算时只逐出未显示的图片，
+/// `observe_visible` 更新 LRU 并登记可见工作集。回填超预算时只逐出未显示的图片，
 /// 返回其 URL 供调用方清理派生的协议和色板；大图不会因后台预热而反复重解码。
 pub(crate) struct CoverCache {
     /// URL → 缓存项。
@@ -40,17 +37,17 @@ pub(crate) struct CoverCache {
     /// 当前占用字节合计(所有 `Entry::bytes` 之和)。
     total_bytes: u64,
 
-    /// 单调访问计数器,每次 `get` / `insert` 取一个新值赋给 `last_used`。
-    tick: Cell<u64>,
+    /// 单调访问计数器,每次 `observe_visible` / `insert` 取一个新值赋给 `last_used`。
+    tick: u64,
 
     /// 字节预算上限(来自配置 `tui.cover.cache.image`)。
     budget: u64,
 
-    /// 上一帧实际显示的图片，后台解码回填不能逐出它们。
+    /// 最近准备的显示需求包含的图片，后台解码回填不能逐出它们。
     visible: FxHashSet<MediaUrl>,
 
-    /// 本帧渲染所需的图片，包含尚未解码的 URL。
-    observed: RefCell<FxHashSet<MediaUrl>>,
+    /// 本次准备所需的图片，包含尚未解码的 URL。
+    observed: FxHashSet<MediaUrl>,
 }
 
 impl CoverCache {
@@ -62,17 +59,16 @@ impl CoverCache {
         Self {
             entries: FxHashMap::default(),
             total_bytes: 0,
-            tick: Cell::new(0),
+            tick: 0,
             budget,
             visible: FxHashSet::default(),
-            observed: RefCell::new(FxHashSet::default()),
+            observed: FxHashSet::default(),
         }
     }
 
-    /// 取图并标为最近使用(保护其不被后续 `insert` 逐出)。未命中返回 `None`。
+    /// 只读取已解码像素；使用记录由准备阶段更新。
     pub(crate) fn get(&self, url: &MediaUrl) -> Option<&Arc<DynamicImage>> {
         let entry = self.entries.get(url)?;
-        entry.last_used.set(self.next_tick());
         Some(&entry.image)
     }
 
@@ -104,13 +100,17 @@ impl CoverCache {
     }
 
     /// 登记当前帧实际显示的图片；预取和预编码不调用此入口。
-    pub(crate) fn observe_visible(&self, url: &MediaUrl) {
-        self.observed.borrow_mut().insert(url.clone());
+    pub(crate) fn observe_visible(&mut self, url: &MediaUrl) {
+        self.observed.insert(url.clone());
+        let tick = self.next_tick();
+        if let Some(entry) = self.entries.get_mut(url) {
+            entry.last_used = tick;
+        }
     }
 
     /// 在解码回填前更新可见工作集；离屏图片重新受预算约束。
     pub(crate) fn advance_frame(&mut self) -> Vec<MediaUrl> {
-        let observed = std::mem::take(self.observed.get_mut());
+        let observed = std::mem::take(&mut self.observed);
         let released = self.visible.iter().any(|url| !observed.contains(url));
         self.visible = observed;
         if released {
@@ -141,7 +141,7 @@ impl CoverCache {
         fingerprint: CoverFingerprint,
     ) -> Vec<MediaUrl> {
         let bytes = image_bytes(&image);
-        let last_used = Cell::new(self.next_tick());
+        let last_used = self.next_tick();
         if let Some(old) = self.entries.insert(
             url.clone(),
             Entry {
@@ -170,9 +170,9 @@ impl CoverCache {
     }
 
     /// 取下一个访问序号(单调递增,`wrapping` 免溢出 panic —— u64 实际到不了上限)。
-    fn next_tick(&self) -> u64 {
-        let next = self.tick.get().wrapping_add(1);
-        self.tick.set(next);
+    fn next_tick(&mut self) -> u64 {
+        let next = self.tick.wrapping_add(1);
+        self.tick = next;
         next
     }
 
@@ -185,7 +185,7 @@ impl CoverCache {
                 .entries
                 .iter()
                 .filter(|(url, _)| Some(*url) != keep && !self.visible.contains(*url))
-                .min_by_key(|(_, entry)| entry.last_used.get())
+                .min_by_key(|(_, entry)| entry.last_used)
                 .map(|(url, _)| url.clone());
             let Some(victim) = victim else {
                 break;
@@ -249,7 +249,8 @@ mod tests {
         cache.insert_test(&u1, img(100));
         cache.insert_test(&u2, img(100));
 
-        // touch u0 → 变最近;此刻最久未用是 u1。
+        // 准备 u0 → 变最近;此刻最久未用是 u1。
+        cache.observe_visible(&u0);
         assert!(cache.get(&u0).is_some());
 
         let evicted = cache.insert_test(&u3, img(100));

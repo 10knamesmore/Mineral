@@ -11,6 +11,7 @@ mod geometry;
 mod meta;
 mod panel;
 mod placeholder;
+mod preparation;
 mod sweep;
 mod title;
 mod track_table;
@@ -19,3 +20,5 @@ mod transition;
 pub(crate) use geometry::{detail_list_area, header_cover_area};
 pub use panel::draw;
 pub(super) use track_table::highlight_style;
+
+pub(crate) use preparation::prepare;

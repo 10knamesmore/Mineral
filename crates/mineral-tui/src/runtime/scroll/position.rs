@@ -1,7 +1,5 @@
 //! 列表光标在全列表中的相对位置与缓动，以及吸住后的颜色过渡；都不依赖当前视口或面板高度。
 
-use std::cell::RefCell;
-
 use crate::render::anim::Transition;
 
 /// 全列表位置的归一化满值；保留长列表中不足一个终端格的移动精度。
@@ -60,8 +58,8 @@ fn scaled_position(numerator: u128, denominator: u128) -> Option<u32> {
 /// 跟随列表光标的显示位置；首帧与列表长度变化直接定位，导航时从眼前位置缓动。
 #[derive(Clone, Default)]
 pub(crate) struct ListPosition {
-    /// 尚未显示或列表已重置时为空；绘制路径通过共享引用推进。
-    active: RefCell<Option<PositionTransition>>,
+    /// 尚未显示或列表已重置时为空；准备入口独占更新。
+    active: Option<PositionTransition>,
 }
 
 /// 同一长度的列表内，一次从显示位置到逻辑光标的移动。
@@ -89,19 +87,25 @@ impl PositionTransition {
 }
 
 impl ListPosition {
-    /// 丢弃旧显示位置；下一次绘制直接落在新列表的光标处。
+    /// 丢弃旧显示位置；下一次准备直接落在新列表的光标处。
     pub(crate) fn reset(&mut self) {
-        *self.active.get_mut() = None;
+        self.active = None;
     }
 
-    /// 在稳态绘制中推进一拍；每个列表每帧调用一次。
+    /// 在准备阶段调整目标，并按时钟更新推进；每个列表每帧调用一次。
     ///
     /// # Params:
     ///   - `selected`: 当前显示顺序中的光标下标。
     ///   - `total`: 当前显示列表长度。
     ///   - `ticks`: 从当前配置折算的移动拍数，热更时保留相位并立即改变后续速度。
-    pub(crate) fn advance(&self, selected: usize, total: usize, ticks: u16) -> Option<u32> {
-        let mut active = self.active.borrow_mut();
+    pub(crate) fn advance(
+        &mut self,
+        selected: usize,
+        total: usize,
+        ticks: u16,
+        advance: bool,
+    ) -> Option<u32> {
+        let active = &mut self.active;
         let Some(target) = relative_position(selected, total) else {
             *active = None;
             return None;
@@ -121,17 +125,19 @@ impl ListPosition {
             state.transition = Transition::expanding(ticks);
         }
         state.transition.retempo(ticks);
-        state.transition.tick();
+        if advance {
+            state.transition.tick();
+        }
         Some(state.position())
     }
 
     /// 只读显示当前位置；离屏合成与尺寸形变不推进或重定动画。
     ///
     /// # Params:
-    ///   - `selected`: 首次绘制或列表长度变化时用于直接定位的光标。
+    ///   - `selected`: 尚未准备或列表长度变化时用于直接定位的光标。
     ///   - `total`: 当前显示列表长度。
     pub(crate) fn frozen(&self, selected: usize, total: usize) -> Option<u32> {
-        let active = self.active.borrow();
+        let active = &self.active;
         match active.as_ref() {
             Some(state) if state.total == total => Some(state.position()),
             _ => relative_position(selected, total),
@@ -143,7 +149,7 @@ impl ListPosition {
 #[derive(Clone, Default)]
 pub(crate) struct MagnetProgress {
     /// 尚未吸过或列表已重置时为空，下一帧直接从目标值开始；否则保存当前段的相位。
-    active: RefCell<Option<MagnetTransition>>,
+    active: Option<MagnetTransition>,
 }
 
 /// 一次进 / 出吸附区的颜色过渡。
@@ -170,12 +176,12 @@ impl MagnetTransition {
 }
 
 impl MagnetProgress {
-    /// 丢弃进度；下一次绘制直接落在目标值，不补一段过渡。
+    /// 丢弃进度；下一次准备直接落在目标值，不补一段过渡。
     pub(crate) fn reset(&mut self) {
-        *self.active.get_mut() = None;
+        self.active = None;
     }
 
-    /// 在稳态绘制中推进一拍并读取进度。
+    /// 在准备阶段调整目标，并按时钟更新推进并读取进度。
     ///
     /// # Params:
     ///   - `absorbed`: 本帧光标是否落在在播标记的吸附区里。
@@ -183,9 +189,9 @@ impl MagnetProgress {
     ///
     /// # Return:
     ///   `0..=1000` 的千分比，[`MAGNET_FULL`] 表示完全吸住。
-    pub(crate) fn advance(&self, absorbed: bool, ticks: u16) -> u16 {
+    pub(crate) fn advance(&mut self, absorbed: bool, ticks: u16, advance: bool) -> u16 {
         let target = if absorbed { MAGNET_FULL } else { 0 };
-        let mut active = self.active.borrow_mut();
+        let active = &mut self.active;
         let state = active.get_or_insert_with(|| MagnetTransition {
             from: target,
             target,
@@ -197,15 +203,14 @@ impl MagnetProgress {
             state.transition = Transition::expanding(ticks);
         }
         state.transition.retempo(ticks);
-        state.transition.tick();
+        if advance {
+            state.transition.tick();
+        }
         state.progress()
     }
 
     /// 只读当前进度；离屏合成与尺寸形变不推进动画。
     pub(crate) fn frozen(&self) -> u16 {
-        self.active
-            .borrow()
-            .as_ref()
-            .map_or(0, MagnetTransition::progress)
+        self.active.as_ref().map_or(0, MagnetTransition::progress)
     }
 }

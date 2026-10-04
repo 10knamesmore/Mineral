@@ -30,7 +30,7 @@ impl App {
                 }
             }
             Event::Resize(..) => {
-                self.state.browse.list_expansion.get_mut().invalidate();
+                self.state.browse.list_expansion.invalidate();
                 self.state.images.refresh_cell_pixels();
                 self.report_terminal_state();
             }
@@ -48,7 +48,7 @@ impl App {
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
     fn handle_key(&mut self, key: &KeyEvent) {
-        self.state.browse.list_expansion.get_mut().interrupt();
+        self.state.browse.list_expansion.interrupt();
         // Ctrl-C 强制退出(skip 一切)。
         if matches!(
             (key.modifiers, key.code),
@@ -1834,7 +1834,7 @@ mod tests {
                     .active_results()
                     .ok_or_else(|| eyre!("缺少结果"))?;
                 let frame = results.detail.current().ok_or_else(|| eyre!("缺少详情"))?;
-                assert_eq!(frame.description_scroll().get(), offset, "Ctrl-{key}");
+                assert_eq!(frame.description_scroll(), offset, "Ctrl-{key}");
                 assert_eq!(frame.list().sel(), 0);
                 assert_eq!(results.sel(), 0);
                 assert_browse_unchanged(&app);

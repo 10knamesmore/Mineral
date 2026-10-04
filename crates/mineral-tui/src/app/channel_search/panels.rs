@@ -165,7 +165,10 @@ impl SearchPage {
                 self.move_search_result_sel(movement, *behavior.search_prefetch_rows())
             }
             SearchFocus::Detail => {
-                if let Some(frame) = self.active_results().and_then(|kr| kr.detail.current()) {
+                if let Some(frame) = self
+                    .active_results_mut()
+                    .and_then(|kr| kr.detail.current_mut())
+                {
                     frame.nudge_description(delta);
                 }
                 SearchEffect::None
@@ -830,7 +833,7 @@ mod tests {
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
-                .map(|f| f.description_scroll().get()),
+                .map(|f| f.description_scroll()),
             Some(page),
             "C-f 平移简介 offset = page_scroll_rows"
         );
@@ -841,7 +844,7 @@ mod tests {
                 .channel_search
                 .active_results()
                 .and_then(|kr| kr.detail.current())
-                .map(|f| f.description_scroll().get()),
+                .map(|f| f.description_scroll()),
             Some(0),
             "C-b 回滚到顶(下界钳 0)"
         );
@@ -954,16 +957,16 @@ mod tests {
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
         // 窗内(选中刚变):不投编码。
         app.state.channel_search.last_sel_change = Instant::now();
-        t.draw(|f| crate::view::draw(f, &app))?;
+        t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         assert!(
-            app.state.images.encode_pending.borrow().is_empty(),
+            app.state.images.encode_pending.is_empty(),
             "滚动窗内不应派发封面编码"
         );
         // 停稳(窗外):恰好派发一次。
         app.state.channel_search.last_sel_change = rewound();
-        t.draw(|f| crate::view::draw(f, &app))?;
+        t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         assert_eq!(
-            app.state.images.encode_pending.borrow().len(),
+            app.state.images.encode_pending.len(),
             1,
             "停稳后应恰好派发一次封面编码"
         );

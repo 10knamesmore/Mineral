@@ -221,6 +221,40 @@ impl Overlay for DownloadOverlay {
         }
     }
 
+    fn prepare(
+        &mut self,
+        inner: Rect,
+        ctx: &mut AppState,
+        _theme: &Theme,
+        advance: bool,
+        _reveal: crate::runtime::state::OverlayReveal,
+    ) {
+        let motion = ScrollMotion::Advancing {
+            scrolloff: ctx.scrolloff(),
+            glide_ticks: ctx.list_glide_ticks(),
+        };
+        self.list.prepare(
+            ctx.downloads.len(),
+            usize::from(inner.height),
+            motion,
+            ctx.minimap_cursor_ticks(),
+            advance,
+        );
+        let widths = Self::column_constraints(ctx);
+        let title_width = resolve_column_widths(inner.width, &widths, 2)
+            .get(TITLE_COL)
+            .copied()
+            .unwrap_or(0);
+        if let Some(download) = ctx.downloads.get(self.list.sel()) {
+            ctx.marquees.prepare(
+                Slot::DownloadSelected,
+                download.id.as_str(),
+                display_width(&download.song.name),
+                title_width,
+            );
+        }
+    }
+
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         if inner.height == 0 {
             return;
@@ -260,10 +294,6 @@ impl Overlay for DownloadOverlay {
             &self.list,
             ctx.downloads.len(),
             usize::from(inner.height),
-            ScrollMotion::Advancing {
-                scrolloff: ctx.scrolloff(),
-                glide_ticks: ctx.list_glide_ticks(),
-            },
         );
     }
 

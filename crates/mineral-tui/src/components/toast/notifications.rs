@@ -356,6 +356,7 @@ impl Notifications {
         theme: &Theme,
         immersive: u16,
         close_hint: &str,
+        now: Instant,
     ) {
         if bar.width == 0 {
             return;
@@ -400,7 +401,6 @@ impl Notifications {
         } else {
             CardMotion::SlideInRight
         };
-        let now = Instant::now();
         for card in &self.cards {
             let h = card.height();
             let y = lerp_u16(y_n, y_i, p);

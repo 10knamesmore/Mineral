@@ -150,23 +150,37 @@ impl TerminalImage {
         }
     }
 
-    /// 写入一个纯 Unicode Kitty 占位 cell，返回须在 cell 输出前发送的图片指令。
-    pub(crate) fn render_inline(&mut self, area: Rect, buffer: &mut Buffer) -> Option<String> {
+    /// Kitty 行内成品的只读身份，其他协议不支持行内缩略图。
+    pub(crate) fn inline_id(&self) -> Option<u32> {
         match self {
-            Self::Kitty(image) => image.render_inline(area, buffer),
+            Self::Kitty(image) => Some(image.id()),
             _ => None,
         }
     }
 
-    /// 把成品写入 buffer；返回须在 cell 出帧前发送的 Kitty 指令。
-    pub(crate) fn render(&mut self, area: Rect, buffer: &mut Buffer) -> Option<String> {
+    /// 写入纯 Unicode Kitty 占位字符，不修改终端协议状态。
+    pub(crate) fn render_inline(&self, area: Rect, buffer: &mut Buffer) {
+        if let Self::Kitty(image) = self {
+            image.render_inline(area, buffer);
+        }
+    }
+
+    /// 把已编码成品写入目标 buffer。
+    pub(crate) fn render(&self, area: Rect, buffer: &mut Buffer) {
         match self {
-            Self::Kitty(image) => return image.render_inline(area, buffer),
+            Self::Kitty(image) => image.render_inline(area, buffer),
             Self::Sixel(image) => image.render(area, buffer),
             Self::Iterm2(image) => image.render(area, buffer),
             Self::Halfblocks(image) => image.render(area, buffer),
         }
-        None
+    }
+
+    /// 只在输出提交阶段消费 Kitty 上传和 placement 状态。
+    pub(crate) fn placement_command(&mut self, area: Rect) -> Option<String> {
+        match self {
+            Self::Kitty(image) => image.placement_command(area),
+            _ => None,
+        }
     }
 
     /// 返回该成品持有的像素或协议 payload 字节数；解码原图由独立缓存记账。
@@ -238,11 +252,14 @@ mod tests {
                 &graphics,
             )?;
             let mut buffer = Buffer::empty(area);
+            image.render(area, &mut buffer);
+            image.render(area, &mut buffer);
             let command = image
-                .render(area, &mut buffer)
+                .placement_command(area)
                 .ok_or_else(|| color_eyre::eyre::eyre!("missing Kitty transmission"))?;
             assert!(command.contains(&format!(",s={},v={};", expected.0, expected.1)));
-            assert!(image.render(area, &mut buffer).is_none());
+            image.render(area, &mut buffer);
+            assert!(image.placement_command(area).is_none());
         }
         Ok(())
     }

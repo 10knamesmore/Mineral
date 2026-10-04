@@ -1,9 +1,8 @@
 //! 图片管线的 client 端状态：解码图与色板缓存、在飞集合、终端图片成品。
 //!
 //! preview、按需 decode 与 encode worker 的结果都在这里落地。预取生成低清真实封面；稳定
-//! 渲染 miss 登记完整 decode demand，由主循环统一调度。
+//! 布局准备登记完整 decode demand，由主循环统一调度。
 
-use std::cell::RefCell;
 use std::sync::Arc;
 
 use image::DynamicImage;
@@ -124,23 +123,23 @@ pub struct ImageEngine {
     /// 正在执行的 preview 或 decode URL；只表达真实 in-flight。
     pending: FxHashSet<MediaUrl>,
 
-    /// 已知图片 URL 对应的来源；render miss 据此选择磁盘缓存子目录。
+    /// 已知图片 URL 对应的来源；准备入口据此选择磁盘缓存子目录。
     source_by_url: FxHashMap<MediaUrl, SourceKind>,
 
     /// 本进程 preview 失败的 URL；与完整 decode 失败分离，稳定显示仍可按需尝试。
     preview_failures: FxHashSet<MediaUrl>,
 
-    /// 上一帧稳定布局观察到的 preview 尺寸；渲染持共享引用，故内部可变。
-    observed_preview_targets: RefCell<FxHashSet<PreviewTarget>>,
+    /// 本次稳定布局声明的 preview 尺寸。
+    observed_preview_targets: FxHashSet<PreviewTarget>,
 
-    /// 当前预取拍使用的 preview 尺寸，由 [`Self::tick`] 从上一帧观察值刷新。
+    /// 当前预取拍使用的 preview 尺寸，在准备结束时从本次布局需求刷新。
     preview_targets: Vec<PreviewTarget>,
 
-    /// 实际显示或显式 prepare 提出的 decode demand；渲染只持共享引用，故内部可变。
-    decode_demand: RefCell<FxHashSet<MediaUrl>>,
+    /// 布局准备或显式预热提出的完整解码需求。
+    decode_demand: FxHashSet<MediaUrl>,
 
     /// 本进程按需 decode 失败的 URL；失败后继续显示 preview，preview 也没有才为空白。
-    decode_failures: RefCell<FxHashSet<MediaUrl>>,
+    decode_failures: FxHashSet<MediaUrl>,
 
     /// 协议无关的真实封面低清 preview 缓存；协议切换和完整 decoded LRU 逐出都不清理。
     pub preview_images: TerminalImageCache,
@@ -150,14 +149,14 @@ pub struct ImageEngine {
     /// 后台重编，其间使用 halfblock。
     pub terminal_images: TerminalImageCache,
 
-    /// 本帧行内图片的传输与 placement 指令；在 ratatui 输出 cell 之前统一发送。
-    pub(super) graphics_commands: RefCell<String>,
+    /// 本次准备要求的行内图片 placement；输出提交时生成协议指令。
+    pub(super) graphics_placements: Vec<(TerminalImageKey, ratatui::layout::Rect)>,
 
     /// 由图片引擎独占的下载与终端成品编码 worker。
     workers: ImageWorkers,
 
-    /// 在飞终端图片键集合，渲染处据此去重。用 `RefCell` 因渲染拿 `&AppState`。
-    pub encode_pending: RefCell<FxHashSet<TerminalImageKey>>,
+    /// 在飞终端图片键集合，准备阶段据此合并编码需求。
+    pub encode_pending: FxHashSet<TerminalImageKey>,
 
     /// 进行中的全屏切歌封面转场；`None` 表示稳态。
     /// 触发、推进与收尾都由 [`Self::tick`] 统一处理，渲染处只读。
@@ -220,7 +219,7 @@ impl ImageEngine {
 
     /// 插入一张真实 Kitty 缩略图，供列表布局与终端输出测试使用。
     #[cfg(test)]
-    pub(crate) fn insert_test_thumbnail(&self, url: &MediaUrl) -> color_eyre::Result<()> {
+    pub(crate) fn insert_test_thumbnail(&mut self, url: &MediaUrl) -> color_eyre::Result<()> {
         let pixels = PreviewTarget::thumbnail().pixels;
         let key = self.thumbnail_preview_key(url);
         let source = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
@@ -264,15 +263,15 @@ impl ImageEngine {
             pending: FxHashSet::default(),
             source_by_url: FxHashMap::default(),
             preview_failures: FxHashSet::default(),
-            observed_preview_targets: RefCell::new(FxHashSet::default()),
+            observed_preview_targets: FxHashSet::default(),
             preview_targets: Vec::new(),
-            decode_demand: RefCell::new(FxHashSet::default()),
-            decode_failures: RefCell::new(FxHashSet::default()),
+            decode_demand: FxHashSet::default(),
+            decode_failures: FxHashSet::default(),
             preview_images: TerminalImageCache::new(preview_budget),
             terminal_images: TerminalImageCache::new(protocol_budget),
-            graphics_commands: RefCell::new(String::new()),
+            graphics_placements: Vec::new(),
             workers: ImageWorkers { fetcher, encoder },
-            encode_pending: RefCell::new(FxHashSet::default()),
+            encode_pending: FxHashSet::default(),
             transition: None,
             displayed_cover: None,
             collage_ready: FxHashMap::default(),
@@ -283,7 +282,7 @@ impl ImageEngine {
     ///
     /// # Params:
     ///   - `request`: 已解码图片、终端成品键与 backend generation
-    pub(crate) fn request_encode(&self, request: EncodeRequest) {
+    pub(crate) fn request_encode(&mut self, request: EncodeRequest) {
         self.workers.encoder.request(request);
     }
 
@@ -337,7 +336,7 @@ impl ImageEngine {
 
     /// 插入一条测试用终端图片成品。
     #[cfg(test)]
-    pub(crate) fn insert_test_terminal_image(&self, url: &MediaUrl, cells: (u16, u16)) {
+    pub(crate) fn insert_test_terminal_image(&mut self, url: &MediaUrl, cells: (u16, u16)) {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             crate::image::key::PixelSize::from_cells(cells, self.cell_pixels()),
@@ -358,8 +357,8 @@ impl ImageEngine {
     /// 清空 terminal backend 的全部协议相关状态。
     fn clear_terminal_state(&mut self) {
         self.terminal_images.clear();
-        self.encode_pending.borrow_mut().clear();
-        self.graphics_commands.borrow_mut().clear();
+        self.encode_pending.clear();
+        self.graphics_placements.clear();
     }
 
     /// 现调三层 RAM 缓存预算(配置热更):缩小立即逐出直到回落、**不清缓存**;
@@ -425,8 +424,8 @@ impl ImageEngine {
                             url = %url,
                             "封面解码失败:该 URL 不再重试"
                         );
-                        self.decode_demand.borrow_mut().remove(&url);
-                        self.decode_failures.borrow_mut().insert(url);
+                        self.decode_demand.remove(&url);
+                        self.decode_failures.insert(url);
                     }
                 }
             }
@@ -456,8 +455,8 @@ impl ImageEngine {
     ///   - `ready`: 解码图与色板
     fn install_decoded_cover(&mut self, ready: crate::image::fetch::CoverReady) {
         self.pending.remove(&ready.url);
-        self.decode_demand.borrow_mut().remove(&ready.url);
-        self.decode_failures.borrow_mut().remove(&ready.url);
+        self.decode_demand.remove(&ready.url);
+        self.decode_failures.remove(&ready.url);
         if let Some(palette) = ready.palette {
             self.palettes.insert(ready.url.clone(), palette);
         }
@@ -502,16 +501,26 @@ impl ImageEngine {
         advance: Option<AdvanceKind>,
         fullscreen_stable: bool,
     ) {
+        self.drain_cover_completions();
+        self.schedule_decode_demand();
+        self.drain_ready_terminal_images();
+        self.sync_transition(current_cover, advance, fullscreen_stable);
+    }
+
+    /// 开始收集本次显示所需的协议 placement，尚不向终端发送。
+    pub(crate) fn begin_preparation(&mut self) {
+        self.graphics_placements.clear();
+    }
+
+    /// 发布本次显示的资源集合；即使不绘制也完成保活和需求调度。
+    pub(crate) fn finish_preparation(&mut self) {
         for url in self.cache.advance_frame() {
             self.discard_derived(&url);
         }
         self.preview_images.advance_frame();
         self.terminal_images.advance_frame();
         self.refresh_preview_targets();
-        self.drain_cover_completions();
         self.schedule_decode_demand();
-        self.drain_ready_terminal_images();
-        self.sync_transition(current_cover, advance, fullscreen_stable);
     }
 
     /// 返回正在执行的图片 preview 与 decode 总数。
@@ -523,7 +532,6 @@ impl ImageEngine {
     fn refresh_preview_targets(&mut self) {
         self.preview_targets = self
             .observed_preview_targets
-            .get_mut()
             .drain()
             .collect::<Vec<PreviewTarget>>();
         self.preview_targets.sort_by_key(|target| {
@@ -541,19 +549,17 @@ impl ImageEngine {
     ///
     /// # Params:
     ///   - `area`: 已按终端几何收成正方形的图片区域
-    pub(crate) fn observe_preview_target(&self, area: Rect) {
+    pub(crate) fn observe_preview_target(&mut self, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
         }
         self.observed_preview_targets
-            .borrow_mut()
             .insert(PreviewTarget::from_area(area, self.cell_pixels()));
     }
 
     /// 记录行内封面的低清采样上限；实际 URL 仍由配置半径内的 prefetch 候选决定。
-    pub(super) fn observe_thumbnail_target(&self) {
+    pub(super) fn observe_thumbnail_target(&mut self) {
         self.observed_preview_targets
-            .borrow_mut()
             .insert(PreviewTarget::thumbnail());
     }
 
@@ -578,18 +584,18 @@ impl ImageEngine {
             && !self.preview_images.contains(key)
             && !self.preview_failures.contains(url)
             && !self.pending.contains(url)
-            && !self.decode_demand.borrow().contains(url)
+            && !self.decode_demand.contains(url)
     }
 
     /// 登记一张实际显示或显式 prepare 所需的图片；下次 tick 按需解码。
     ///
     /// # Params:
     ///   - `url`: 需要解码像素的图片 URL
-    pub(crate) fn demand_decode(&self, url: &MediaUrl) {
-        if self.cache.contains_key(url) || self.decode_failures.borrow().contains(url) {
+    pub(crate) fn demand_decode(&mut self, url: &MediaUrl) {
+        if self.cache.contains_key(url) || self.decode_failures.contains(url) {
             return;
         }
-        self.decode_demand.borrow_mut().insert(url.clone());
+        self.decode_demand.insert(url.clone());
     }
 
     /// 为非渲染消费者登记来源并立即请求解码图。
@@ -599,7 +605,7 @@ impl ImageEngine {
     pub(crate) fn load(&mut self, candidates: impl IntoIterator<Item = (SourceKind, MediaUrl)>) {
         for (source, url) in candidates {
             self.source_by_url.insert(url.clone(), source);
-            self.decode_demand.borrow_mut().insert(url.clone());
+            self.decode_demand.insert(url.clone());
             self.request_decode(&url);
         }
     }
@@ -652,7 +658,6 @@ impl ImageEngine {
     fn schedule_decode_demand(&mut self) {
         let demanded = self
             .decode_demand
-            .borrow()
             .iter()
             .cloned()
             .collect::<Vec<MediaUrl>>();
@@ -666,8 +671,8 @@ impl ImageEngine {
     /// # Params:
     ///   - `url`: 需要解码像素的图片 URL
     fn request_decode(&mut self, url: &MediaUrl) {
-        if self.cache.contains_key(url) || self.decode_failures.borrow().contains(url) {
-            self.decode_demand.borrow_mut().remove(url);
+        if self.cache.contains_key(url) || self.decode_failures.contains(url) {
+            self.decode_demand.remove(url);
             return;
         }
         if self.pending.contains(url) {
@@ -684,8 +689,8 @@ impl ImageEngine {
             self.cfg.tui().cover().decode_pixels().clone(),
         ) {
             self.pending.remove(url);
-            self.decode_demand.borrow_mut().remove(url);
-            self.decode_failures.borrow_mut().insert(url.clone());
+            self.decode_demand.remove(url);
+            self.decode_failures.insert(url.clone());
         }
     }
 
@@ -744,7 +749,7 @@ impl ImageEngine {
         if result.generation != self.graphics_generation() {
             return;
         }
-        self.encode_pending.borrow_mut().remove(&result.key);
+        self.encode_pending.remove(&result.key);
         mineral_log::debug!(target: "cover_cache", key = ?result.key, bytes = result.bytes,
             "terminal image ready");
         self.terminal_images
@@ -792,7 +797,7 @@ mod tests {
         let mut engine = engine()?;
         let url = MediaUrl::remote("https://example.com/c.png")?;
         let image = Arc::new(DynamicImage::ImageRgb8(RgbImage::new(16, 16)));
-        engine.decode_demand.borrow_mut().insert(url.clone());
+        engine.decode_demand.insert(url.clone());
         engine.pending.insert(url.clone());
 
         engine.apply_completion(CoverCompletion::PreviewAndDecoded {
@@ -808,7 +813,7 @@ mod tests {
         assert!(engine.cache.contains_key(&url), "显示图应进 RAM LRU");
         assert!(!engine.pending.contains(&url), "in-flight 应结束");
         assert!(
-            !engine.decode_demand.borrow().contains(&url),
+            !engine.decode_demand.contains(&url),
             "decode demand 应被显示图满足"
         );
         Ok(())
@@ -848,7 +853,7 @@ mod tests {
             );
             let area = Rect::new(0, 0, 1, 1);
             let mut buffer = Buffer::empty(area);
-            engine.render_thumbnail(
+            engine.prepare_and_render_thumbnail(
                 Some(&outside_radius),
                 area,
                 &mut buffer,
@@ -860,7 +865,7 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     engine.tick(None, /*advance*/ None, false);
-                    engine.render_thumbnail(
+                    engine.prepare_and_render_thumbnail(
                         Some(&url),
                         area,
                         &mut buffer,
@@ -877,16 +882,14 @@ mod tests {
             })
             .await?;
 
-            assert!(
-                engine.decode_demand.borrow().is_empty(),
-                "行缩略图不能触发完整解码"
-            );
+            assert!(engine.decode_demand.is_empty(), "行缩略图不能触发完整解码");
             assert!(engine.pending.is_empty(), "只有显式预取的封面应完成请求");
             assert!(!engine.source_by_url.contains_key(&outside_radius));
             assert!(
                 !engine.cache.contains_key(&url),
                 "JPEG 缩略图不能占用完整图缓存"
             );
+            let commands = engine.take_graphics_commands();
             let key = engine.thumbnail_preview_key(&url);
             assert!(engine.terminal_images.render_if_ready(&key, |image| {
                 assert!(
@@ -895,7 +898,6 @@ mod tests {
                     "行内 shared memory 不超过低清像素的 RGBA 预算"
                 );
             }));
-            let commands = std::mem::take(&mut *engine.graphics_commands.borrow_mut());
             assert!(commands.contains("a=t,"), "图片传输须在 cell 外排队");
             assert!(commands.contains("a=p,U=1,c=1,r=1"));
             assert!(
@@ -906,19 +908,24 @@ mod tests {
                 )),
                 "传输应保留无补边的小图比例,显示尺寸交给 Kitty: {commands:?}"
             );
-            engine.render_thumbnail(Some(&url), area, &mut buffer, ImageRenderPhase::Stable);
+            engine.prepare_and_render_thumbnail(
+                Some(&url),
+                area,
+                &mut buffer,
+                ImageRenderPhase::Stable,
+            );
             assert!(
-                engine.graphics_commands.borrow().is_empty(),
+                engine.take_graphics_commands().is_empty(),
                 "重画不重复传输或建立 placement"
             );
             let mut expanded = Buffer::empty(Rect::new(0, 0, 2, 1));
-            engine.render_thumbnail(
+            engine.prepare_and_render_thumbnail(
                 Some(&url),
                 expanded.area,
                 &mut expanded,
                 ImageRenderPhase::Stable,
             );
-            let resized = std::mem::take(&mut *engine.graphics_commands.borrow_mut());
+            let resized = engine.take_graphics_commands();
             assert!(resized.contains("a=p,U=1,c=2,r=1"));
             assert!(
                 !resized.contains("a=t,"),
@@ -967,15 +974,20 @@ mod tests {
             ImageRenderPhase::Resizing,
             ImageRenderPhase::Scrolling,
         ] {
-            kitty.render_thumbnail(Some(&url), area, &mut Buffer::empty(area), phase);
-            assert!(kitty.encode_pending.borrow().is_empty());
-            assert!(kitty.decode_demand.borrow().is_empty());
-            assert!(kitty.graphics_commands.borrow().is_empty());
+            kitty.prepare_and_render_thumbnail(Some(&url), area, &mut Buffer::empty(area), phase);
+            assert!(kitty.encode_pending.is_empty());
+            assert!(kitty.decode_demand.is_empty());
+            assert!(kitty.take_graphics_commands().is_empty());
         }
         kitty.insert_test_thumbnail(&url)?;
         let mut first = Buffer::empty(area);
-        kitty.render_thumbnail(Some(&url), area, &mut first, ImageRenderPhase::Offscreen);
-        let commands = std::mem::take(&mut *kitty.graphics_commands.borrow_mut());
+        kitty.prepare_and_render_thumbnail(
+            Some(&url),
+            area,
+            &mut first,
+            ImageRenderPhase::Offscreen,
+        );
+        let commands = kitty.take_graphics_commands();
         assert!(commands.contains("a=t,"), "首次离屏绘制也须排入图片传输");
         assert!(commands.contains("a=p,U=1,c=1,r=1"));
         for phase in [
@@ -986,23 +998,23 @@ mod tests {
         ] {
             let moved_area = Rect::new(3, 2, area.width, area.height);
             let mut moved = Buffer::empty(moved_area);
-            kitty.render_thumbnail(Some(&url), moved_area, &mut moved, phase);
+            kitty.prepare_and_render_thumbnail(Some(&url), moved_area, &mut moved, phase);
             assert_eq!(moved.cell((3, 2)), first.cell((0, 0)), "移动只改变屏幕位置");
             assert!(
-                kitty.graphics_commands.borrow().is_empty(),
+                kitty.take_graphics_commands().is_empty(),
                 "移动不得重复传输图片或重建 placement"
             );
-            assert!(kitty.encode_pending.borrow().is_empty());
-            assert!(kitty.decode_demand.borrow().is_empty());
+            assert!(kitty.encode_pending.is_empty());
+            assert!(kitty.decode_demand.is_empty());
         }
-        let other = engine()?;
-        other.render_thumbnail(
+        let mut other = engine()?;
+        other.prepare_and_render_thumbnail(
             Some(&url),
             area,
             &mut Buffer::empty(area),
             ImageRenderPhase::Stable,
         );
-        assert!(other.observed_preview_targets.borrow().is_empty());
+        assert!(other.observed_preview_targets.is_empty());
         Ok(())
     }
 

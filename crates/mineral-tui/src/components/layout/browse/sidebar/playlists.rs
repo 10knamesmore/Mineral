@@ -24,11 +24,198 @@ use crate::runtime::view_model::PlaylistView;
 /// Table 选中符；列矩形求解使用同一显示宽度。
 const HIGHLIGHT_SYMBOL: &str = "▌ ";
 
+/// 先更新列表视口，再收集同一可见窗口的缩略图需求。
+pub(super) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: bool) {
+    let total = state.filtered_playlists().len();
+    let motion = super::preparation::motion(state);
+    let ticks = state.minimap_cursor_ticks();
+    let viewport = usize::from(area.height.saturating_sub(3));
+    state
+        .browse
+        .nav
+        .playlist
+        .prepare(total, viewport, motion, ticks, advance);
+    let show_cover = state.images.supports_thumbnails();
+    let widths = column_constraints(show_cover, state.has_deep_hits());
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    let columns = resolve_column_rects(inner, &widths, display_width(HIGHLIGHT_SYMBOL));
+    let offset = state.browse.nav.playlist.offset(total, viewport);
+    if show_cover && let Some(column) = columns.first() {
+        let rows = state.filtered_playlists();
+        let covers = (offset..offset.saturating_add(viewport).min(total))
+            .map(|index| {
+                rows.get(index)
+                    .and_then(|p| crate::image::collage::effective_cover_url(state, &p.data))
+            })
+            .collect::<Vec<_>>();
+        let phase = thumbnail_phase(state, motion, state.browse.nav.last_sel_change);
+        crate::components::layout::shared::thumbnails::prepare_table_thumbnails(
+            &mut state.images,
+            *column,
+            covers.iter().map(Option::as_ref),
+            phase,
+        );
+    }
+    crate::components::layout::shared::list_minimap::prepare_minimap(
+        &mut state.browse.nav.playlist,
+        total,
+        super::preparation::minimap_track(area),
+        std::iter::empty(),
+        motion,
+        ticks,
+        state.cfg.tui().minimap(),
+        advance,
+    );
+    if matches!(motion, ScrollMotion::Advancing { .. }) {
+        let filtered = (!state.browse.search.playlists.query().is_empty()).then(|| {
+            use crate::components::layout::shared::scroll_table::{PreparedMinimap, PreparedTable};
+            let visible = offset..offset.saturating_add(viewport).min(total);
+            let rows_data = state.filtered_playlists();
+            let rows = visible
+                .clone()
+                .filter_map(|index| rows_data.get(index))
+                .map(|p| ListRowIdentity::Playlist(p.data.id.clone()))
+                .collect();
+            let covers = visible
+                .clone()
+                .map(|index| {
+                    rows_data
+                        .get(index)
+                        .and_then(|p| crate::image::collage::effective_cover_url(state, &p.data))
+                })
+                .collect::<Vec<_>>();
+            let (table, columns, show_cover) = table(area, state, theme, visible);
+            let images = columns
+                .first()
+                .filter(|_| show_cover)
+                .map_or_else(Vec::new, |column| {
+                    crate::components::layout::shared::thumbnails::snapshot_thumbnails(
+                        &state.images,
+                        *column,
+                        covers.iter().map(Option::as_ref),
+                    )
+                });
+            let content = PreparedTable {
+                table,
+                area,
+                border: None,
+                images,
+                selected: (total > 0).then(|| {
+                    crate::runtime::scroll::viewport::pin_cursor(
+                        state.browse.nav.playlist.sel(),
+                        offset,
+                        viewport,
+                    )
+                    .saturating_sub(offset)
+                }),
+                minimap: Some(PreparedMinimap {
+                    area: super::preparation::minimap_track(area),
+                    total,
+                    cursor: MinimapCursor::new(
+                        &state.browse.nav.playlist,
+                        total,
+                        state.cfg.tui().minimap(),
+                    ),
+                    entries: Vec::new(),
+                    theme: *theme,
+                }),
+            };
+            crate::runtime::state::FilteredListFrame {
+                scope: crate::runtime::state::ListExpansionScope::Browse(View::Playlists),
+                area,
+                body: super::expansion::body(area),
+                content,
+                rows,
+            }
+        });
+        state
+            .browse
+            .list_expansion
+            .prepare(area, super::expansion::body(area), filtered);
+        state.browse.list_expansion.retain_images(&mut state.images);
+    }
+}
+
+/// 表格和资源准备共用的列约束。
+fn column_constraints(show_cover: bool, show_match: bool) -> Vec<Constraint> {
+    let mut widths = Vec::<Constraint>::new();
+    if show_cover {
+        widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
+    }
+    widths.push(Constraint::Fill(1));
+    if show_match {
+        widths.push(Constraint::Fill(1));
+    }
+    widths.extend([
+        Constraint::Length(11),
+        Constraint::Length(8),
+        Constraint::Length(5),
+    ]);
+    widths
+}
+
 /// 渲染 Playlists 视图到给定 [`Buffer`](正常渲染与离屏过渡合成共用此入口)。
 pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) {
     let surface = super::expansion::begin_list(buf, area, state, View::Playlists);
     let rows_data = state.filtered_playlists();
     let total = rows_data.len();
+    let block = frame_block(state, theme, total);
+
+    // 页面形变与 view sweep 冻结视口和 minimap 光标，避免离屏绘制推进导航状态。
+
+    // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
+    // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
+    // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
+    if state.library.playlists.is_empty() && state.browse.search.playlists.query().is_empty() {
+        paint_empty_state(buf, area, state, theme, block);
+        paint_minimap(buf, area, state, theme, total);
+        return;
+    }
+
+    // 有词但零命中:给居中提示而非纯空白。深度索引还在飞时说「索引中」——
+    // 此刻搜不到 ≠ 真没有,数据到齐后结果可能变。
+    if total == 0 && !state.browse.search.playlists.query().is_empty() {
+        paint_no_match(buf, area, state, theme, block);
+        paint_minimap(buf, area, state, theme, total);
+        return;
+    }
+
+    // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
+    // 全屏 morph 瞬态布局冻结视口，并保留空封面列。
+    let viewport = usize::from(area.height.saturating_sub(3));
+    let offset = state.browse.nav.playlist.offset(total, viewport);
+    let window = offset..offset.saturating_add(viewport).min(total);
+    let (table, columns, show_cover) = table(area, state, theme, window);
+    let visible = render_scroll_table(
+        buf,
+        area,
+        |_| table,
+        &state.browse.nav.playlist,
+        total,
+        viewport,
+    );
+    if show_cover && let Some(column) = columns.first() {
+        let covers = visible
+            .clone()
+            .map(|index| {
+                rows_data.get(index).and_then(|playlist| {
+                    crate::image::collage::effective_cover_url(state, &playlist.data)
+                })
+            })
+            .collect::<Vec<_>>();
+        render_table_thumbnails(
+            buf,
+            &state.images,
+            *column,
+            covers.iter().map(Option::as_ref),
+        );
+    }
+    paint_minimap(buf, area, state, theme, total);
+    super::expansion::finish_list(buf, state, theme, surface, visible.clone());
+}
+
+/// 搜索展开与当前表格共用外框元数据。
+fn frame_block(state: &AppState, theme: &Theme, total: usize) -> Block<'static> {
     let pos = position_label(state.browse.nav.playlist.sel(), total);
 
     let mut title_spans = vec![Span::styled(" playlists ", Style::new().fg(theme.subtext))];
@@ -45,36 +232,18 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
         .title(Line::from(title_spans))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)));
 
-    // 页面形变与 view sweep 冻结视口和 minimap 光标，避免离屏绘制推进导航状态。
-    let motion = if state.browse.fullscreen.at_min()
-        && state.channel_search.active.at_min()
-        && (state.browse.view.at_min() || state.browse.view.at_max())
-    {
-        ScrollMotion::Advancing {
-            scrolloff: state.scrolloff(),
-            glide_ticks: state.list_glide_ticks(),
-        }
-    } else {
-        ScrollMotion::Frozen
-    };
+    block
+}
 
-    // 全空 + 无搜索词:走 empty-state 提示分支(loading / 未登录二选一)。
-    // 区分依据是 tasks_running:有任务在跑就是 loading,没任务就大概率是
-    // 没登录任何源 / 各源都无歌单 —— 给出登录引导。
-    if state.library.playlists.is_empty() && state.browse.search.playlists.query().is_empty() {
-        paint_empty_state(buf, area, state, theme, block);
-        paint_minimap(buf, area, state, theme, total, motion);
-        return;
-    }
-
-    // 有词但零命中:给居中提示而非纯空白。深度索引还在飞时说「索引中」——
-    // 此刻搜不到 ≠ 真没有,数据到齐后结果可能变。
-    if total == 0 && !state.browse.search.playlists.query().is_empty() {
-        paint_no_match(buf, area, state, theme, block);
-        paint_minimap(buf, area, state, theme, total, motion);
-        return;
-    }
-
+/// 构造可见歌单的表格内容，不修改列表生命周期。
+fn table(
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    visible: std::ops::Range<usize>,
+) -> (Table<'static>, Vec<Rect>, bool) {
+    let rows_data = state.filtered_playlists();
+    let block = frame_block(state, theme, rows_data.len());
     // 确有深度命中时多一列「match」展示歌单内命中歌曲;纯歌单名命中 / 空 query
     // 不占位,不挤压 name 列宽。
     let show_match = state.has_deep_hits();
@@ -98,19 +267,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
     // name 列用 Fill 取「剩余空间」而非 Min:Min 在有 slack 时会给 ratatui 列宽求解器
     // 留多解(name>=12 + 总宽等式欠定),解不唯一 → 列宽随机差 1、帧间闪烁;Fill(1)
     // 是 name = 总宽 - 其余定宽列,唯一解,确定性。
-    let mut widths = Vec::<Constraint>::new();
-    if show_cover {
-        widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
-    }
-    widths.push(Constraint::Fill(1));
-    if show_match {
-        widths.push(Constraint::Fill(1));
-    }
-    widths.extend([
-        Constraint::Length(11),
-        Constraint::Length(8),
-        Constraint::Length(5),
-    ]);
+    let widths = column_constraints(show_cover, show_match);
 
     let columns = resolve_column_rects(block.inner(area), &widths, display_width(HIGHLIGHT_SYMBOL));
     let build_table = |visible: std::ops::Range<usize>| {
@@ -129,46 +286,7 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
             .highlight_symbol(HIGHLIGHT_SYMBOL)
     };
 
-    // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
-    // 全屏 morph 瞬态布局冻结视口，并保留空封面列。
-    let viewport = usize::from(area.height.saturating_sub(3));
-    let visible = render_scroll_table(
-        buf,
-        area,
-        build_table,
-        &state.browse.nav.playlist,
-        total,
-        viewport,
-        motion,
-    );
-    if show_cover && let Some(column) = columns.first() {
-        let covers = visible
-            .clone()
-            .map(|index| {
-                rows_data.get(index).and_then(|playlist| {
-                    crate::image::collage::effective_cover_url(state, &playlist.data)
-                })
-            })
-            .collect::<Vec<_>>();
-        render_table_thumbnails(
-            buf,
-            &state.images,
-            *column,
-            covers.iter().map(Option::as_ref),
-            thumbnail_phase(state, motion, state.browse.nav.last_sel_change),
-        );
-    }
-    paint_minimap(buf, area, state, theme, total, motion);
-    super::expansion::finish_list(
-        buf,
-        state,
-        theme,
-        surface,
-        visible.clone(),
-        visible
-            .filter_map(|index| rows_data.get(index))
-            .map(|playlist| ListRowIdentity::Playlist(playlist.data.id.clone())),
-    );
+    (build_table(visible), columns, show_cover)
 }
 
 /// 在面板右边框画全列表位置：歌单只有光标，没有喜欢 / 在播标记。
@@ -176,21 +294,8 @@ pub fn render_to(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme) 
 /// # Params:
 ///   - `total`: 当前过滤视图的歌单总数；为零时只留轨道（空态 / 零命中同样有轨道）。
 ///   - `motion`: 视口滚动态，与列表导航共用，决定光标位置是否缓动。
-fn paint_minimap(
-    buf: &mut Buffer,
-    area: Rect,
-    state: &AppState,
-    theme: &Theme,
-    total: usize,
-    motion: ScrollMotion,
-) {
-    let cursor = MinimapCursor::new(
-        &state.browse.nav.playlist,
-        total,
-        motion,
-        state.minimap_cursor_ticks(),
-        state.cfg.tui().minimap(),
-    );
+fn paint_minimap(buf: &mut Buffer, area: Rect, state: &AppState, theme: &Theme, total: usize) {
+    let cursor = MinimapCursor::new(&state.browse.nav.playlist, total, state.cfg.tui().minimap());
     render_minimap(
         buf,
         Rect::new(
@@ -207,13 +312,13 @@ fn paint_minimap(
 }
 
 /// 把一个歌单组装成 sidebar 表格行(名字 [/ 深度命中] / 来源 / 总时长 / 曲目数)。
-fn build_row<'a>(
-    p: &'a PlaylistView,
+fn build_row(
+    p: &PlaylistView,
     state: &AppState,
     theme: &Theme,
     show_match: bool,
     show_cover: bool,
-) -> Row<'a> {
+) -> Row<'static> {
     let total_ms = state.total_duration_ms_of(&p.data.id);
     let len_label = if total_ms == 0 {
         String::from("—")

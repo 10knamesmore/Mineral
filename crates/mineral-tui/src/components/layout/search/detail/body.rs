@@ -13,12 +13,10 @@ use mineral_model::{Album, AlbumTrack, PlaylistEntry, Song};
 use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_rects, row_marquee};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::text::display_width;
-use crate::components::layout::shared::thumbnails::{
-    THUMBNAIL_COLUMNS, render_table_thumbnails, thumbnail_phase,
-};
+use crate::components::layout::shared::thumbnails::{THUMBNAIL_COLUMNS, render_table_thumbnails};
 use crate::render::theme::Theme;
 use crate::runtime::marquee::Slot;
-use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::state::{
     AppState, ArtistSection, DetailData, DetailFrame, EntityRef, SearchFocus,
 };
@@ -29,33 +27,29 @@ use super::placeholder::{draw_empty, draw_loading, loading_glyph};
 use super::sweep::{FULL, SweepLayer, copy_col, sweep_column};
 use super::track_table::{self, TrackColumns, highlight_style};
 
-/// 列表区渲染上下文:光标 + 视口态 + 本帧推进语义 + 面板焦点。穿过 body 渲染链时合并一束传,
+/// 列表区渲染上下文:光标 + 视口态 + 面板焦点。穿过 body 渲染链时合并一束传,
 /// 压参数个数。
 #[derive(Clone, Copy)]
 struct ListPaint<'a> {
     /// 该列表的光标 + 视口滚动态(取自栈顶帧)。
     list: &'a ScrollList,
 
-    /// 本帧推进语义(稳态 Advancing / 离屏 Frozen)。
-    motion: ScrollMotion,
-
     /// 面板焦点度(千分比):选中行高亮 subtext→accent 的插值参数,随焦点环滑动渐变,
     /// 与 results 列对称。
     focus_permille: u16,
 }
 
-/// 主体：artist 帧画双区，其余画曲目列表。`motion` 透传给底层列表(稳态推进 / 离屏冻结)。
+/// 主体：artist 帧画双区，其余画曲目列表。
 pub(super) fn draw_body(
     buf: &mut Buffer,
     body: Rect,
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
-    motion: ScrollMotion,
 ) {
     match &dframe.entity {
-        EntityRef::Artist(_) => draw_artist_body(buf, body, dframe, state, theme, motion),
-        _ => draw_track_body(buf, body, dframe, state, theme, motion),
+        EntityRef::Artist(_) => draw_artist_body(buf, body, dframe, state, theme),
+        _ => draw_track_body(buf, body, dframe, state, theme),
     }
 }
 
@@ -67,11 +61,9 @@ fn draw_track_body(
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
-    motion: ScrollMotion,
 ) {
     let paint = ListPaint {
         list: dframe.list(),
-        motion,
         focus_permille: state.channel_search.focus_permille(
             *state.cfg.tui().animation().search_focus_transition(),
             SearchFocus::Detail,
@@ -109,7 +101,6 @@ fn draw_artist_body(
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
-    motion: ScrollMotion,
 ) {
     if body.height < 2 {
         return;
@@ -119,7 +110,7 @@ fn draw_artist_body(
         .artist_sections()
         .is_some_and(|sections| sections.kinds().len() < 2);
     if single_section {
-        draw_artist_section(buf, body, dframe.section, dframe, state, theme, motion);
+        draw_artist_section(buf, body, dframe.section, dframe, state, theme);
         return;
     }
     let (tabs, list) = split_artist_body(body);
@@ -132,15 +123,7 @@ fn draw_artist_body(
         Some(eased) => {
             let mut hot_buf = Buffer::empty(list);
             let mut alb_buf = Buffer::empty(list);
-            draw_artist_section(
-                &mut hot_buf,
-                list,
-                ArtistSection::Hot,
-                dframe,
-                state,
-                theme,
-                ScrollMotion::Frozen,
-            );
+            draw_artist_section(&mut hot_buf, list, ArtistSection::Hot, dframe, state, theme);
             draw_artist_section(
                 &mut alb_buf,
                 list,
@@ -148,7 +131,6 @@ fn draw_artist_body(
                 dframe,
                 state,
                 theme,
-                ScrollMotion::Frozen,
             );
             compose_sweep(
                 buf,
@@ -159,7 +141,7 @@ fn draw_artist_body(
                 *state.cfg.tui().animation().view_sweep(),
             );
         }
-        None => draw_artist_section(buf, list, dframe.section, dframe, state, theme, motion),
+        None => draw_artist_section(buf, list, dframe.section, dframe, state, theme),
     }
 }
 
@@ -172,11 +154,9 @@ fn draw_artist_section(
     dframe: &DetailFrame,
     state: &AppState,
     theme: &Theme,
-    motion: ScrollMotion,
 ) {
     let paint = ListPaint {
         list: dframe.list(),
-        motion,
         focus_permille: state.channel_search.focus_permille(
             *state.cfg.tui().animation().search_focus_transition(),
             SearchFocus::Detail,
@@ -268,7 +248,7 @@ fn draw_artist_tabs(buf: &mut Buffer, area: Rect, section: ArtistSection, theme:
 
 /// 曲目表（♥/title/[artist]/[album]/len，带表头）：对齐 browse library 表风格。
 /// `cols` 选中间列、按面板宽度降级；`list` 选中行整行高亮 + nvim 视口滚动，
-/// 已收藏显 `♥`。`motion` 定推进(稳态)/ 冻结(离屏)。
+/// 已收藏显 `♥`。
 fn draw_track_list(
     buf: &mut Buffer,
     area: Rect,
@@ -311,29 +291,20 @@ fn draw_track_list(
     };
     // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
     let viewport = usize::from(area.height.saturating_sub(1));
-    let visible = render_scroll_table(
-        buf,
-        area,
-        build_table,
-        paint.list,
-        tracks.len(),
-        viewport,
-        paint.motion,
-    );
+    let visible = render_scroll_table(buf, area, build_table, paint.list, tracks.len(), viewport);
     if show_cover && let Some(column) = columns.get(1) {
         render_table_thumbnails(
             buf,
             &state.images,
             *column,
             visible.map(|index| tracks.song(index).and_then(|song| song.cover_url.as_ref())),
-            thumbnail_phase(state, paint.motion, state.channel_search.last_sel_change),
         );
     }
 }
 
 /// 曲目表的数据源，按列表位置读取歌曲，供文本与封面共用同一视口。
 #[derive(Clone, Copy)]
-enum TrackList<'a> {
+pub(super) enum TrackList<'a> {
     /// 普通歌曲列表，如艺人热门曲目。
     Songs(&'a [Song]),
 
@@ -351,7 +322,7 @@ impl<'a> TrackList<'a> {
     }
 
     /// 数据源长度。
-    fn len(self) -> usize {
+    pub(super) fn len(self) -> usize {
         match self {
             Self::Songs(songs) => songs.len(),
             Self::Album(tracks) => tracks.len(),
@@ -360,7 +331,7 @@ impl<'a> TrackList<'a> {
     }
 
     /// 按列表位置读取歌曲，超出列表范围时返回 `None`。
-    fn song(self, view_index: usize) -> Option<&'a Song> {
+    pub(super) fn song(self, view_index: usize) -> Option<&'a Song> {
         match self {
             Self::Songs(songs) => songs.get(view_index),
             Self::Album(tracks) => tracks.get(view_index).map(|track| &track.song),
@@ -386,22 +357,15 @@ fn draw_album_list(
     let meta = Style::new().fg(theme.overlay);
     let show_cover = state.images.supports_thumbnails();
     let mut header_cells = Vec::<Cell<'_>>::new();
-    let mut widths = Vec::<Constraint>::new();
+    let widths = album_widths(show_cover);
     if show_cover {
         header_cells.push(Cell::from(""));
-        widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
     }
     header_cells.extend([
         Cell::from("name"),
         Cell::from("tracks"),
         Cell::from("year"),
         Cell::from("label"),
-    ]);
-    widths.extend([
-        Constraint::Fill(3),
-        Constraint::Length(6),
-        Constraint::Length(6),
-        Constraint::Fill(2),
     ]);
     let header =
         Row::new(header_cells).style(Style::new().fg(theme.subtext).add_modifier(Modifier::BOLD));
@@ -436,24 +400,30 @@ fn draw_album_list(
     };
     // 视口行数 = 区高 - 表头(无 block 边框,area 已是内容区)。
     let viewport = usize::from(area.height.saturating_sub(1));
-    let visible = render_scroll_table(
-        buf,
-        area,
-        build_table,
-        paint.list,
-        albums.len(),
-        viewport,
-        paint.motion,
-    );
+    let visible = render_scroll_table(buf, area, build_table, paint.list, albums.len(), viewport);
     if show_cover && let Some(column) = columns.first() {
         render_table_thumbnails(
             buf,
             &state.images,
             *column,
             visible.map(|index| albums.get(index).and_then(|album| album.cover_url.as_ref())),
-            thumbnail_phase(state, paint.motion, state.channel_search.last_sel_change),
         );
     }
+}
+
+/// 专辑表的列约束，准备和绘制共用。
+pub(super) fn album_widths(show_cover: bool) -> Vec<Constraint> {
+    let mut widths = Vec::new();
+    if show_cover {
+        widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
+    }
+    widths.extend([
+        Constraint::Fill(3),
+        Constraint::Length(6),
+        Constraint::Length(6),
+        Constraint::Fill(2),
+    ]);
+    widths
 }
 
 #[cfg(test)]
@@ -466,7 +436,7 @@ mod tests {
 
     use super::{ListPaint, TrackList, draw_album_list, draw_track_list};
     use crate::image::ImageEngine;
-    use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
+    use crate::runtime::scroll::list::ScrollList;
     use crate::runtime::state::AppState;
     use crate::test_support::{song, with_name};
 
@@ -497,10 +467,9 @@ mod tests {
         let list = ScrollList::new();
         let area = Rect::new(7, 4, 60, 5);
         for is_album in [false, true] {
-            let render = |buf: &mut Buffer, motion| {
+            let render = |buf: &mut Buffer| {
                 let paint = ListPaint {
                     list: &list,
-                    motion,
                     focus_permille: 1000,
                 };
                 if is_album {
@@ -518,13 +487,7 @@ mod tests {
                 }
             };
             let mut stable = Buffer::empty(area);
-            render(
-                &mut stable,
-                ScrollMotion::Advancing {
-                    scrolloff: 0,
-                    glide_ticks: 1,
-                },
-            );
+            render(&mut stable);
             let name_x = (area.left()..area.right())
                 .find(|&x| {
                     stable
@@ -548,7 +511,7 @@ mod tests {
                 );
             }
             let mut frozen = Buffer::empty(area);
-            render(&mut frozen, ScrollMotion::Frozen);
+            render(&mut frozen);
             assert!(
                 frozen.content.iter().all(|c| !c.symbol().contains('\x1b')),
                 "Frozen 不能输出图形控制序列"

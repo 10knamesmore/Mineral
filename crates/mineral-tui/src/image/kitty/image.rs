@@ -67,13 +67,23 @@ impl KittyImage {
         })
     }
 
-    /// 绘制逐格 Unicode 封面；首次传输图片，尺寸变化时更新 placement。
-    pub(crate) fn render_inline(&mut self, area: Rect, buffer: &mut Buffer) -> Option<String> {
+    /// 只读图片身份，用于保留转场输入中的缩略图占位。
+    pub(crate) fn id(&self) -> u32 {
+        self.image_id
+    }
+
+    /// 只生成占位字符，上传与 placement 状态由输出提交维护。
+    pub(crate) fn render_inline(&self, area: Rect, buffer: &mut Buffer) {
+        super::placement::render_inline(area, buffer, self.image_id);
+    }
+
+    /// 在实际输出前生成首次上传及尺寸变化所需的 placement 指令。
+    pub(crate) fn placement_command(&mut self, area: Rect) -> Option<String> {
         if area.is_empty() {
             return None;
         }
         let cells = super::placement::clamp_cells((area.width, area.height));
-        let placement_id = super::placement::render_inline(area, buffer, self.image_id);
+        let placement_id = super::placement::placement_id(cells.0, cells.1);
         if self.placement == Some(placement_id) {
             return None;
         }

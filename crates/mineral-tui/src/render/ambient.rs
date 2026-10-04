@@ -362,8 +362,7 @@ fn rate_f32(sample_rate: u32) -> f32 {
 ///
 /// 每 cell:各锚点按高斯权重混色(权重归一 `Σw·c / Σw`)→ 按浓度从底色向场色走
 /// → 距屏心越远越向底色收敛(暗角,保边缘区文字可读)。锚点位置 = 锚位 + 摆幅 ×
-/// 漂移时钟正弦;锚点颜色随轮转相位沿色带流动。锚点色与两轴高斯权重每帧预计算,
-/// 逐 cell 将横纵权重相乘后混色。
+/// 漂移时钟正弦;锚点颜色随轮转相位沿色带流动。锚点色一帧算一次,逐 cell 只做权重混合。
 ///
 /// # Params:
 ///   - `area`: 铺场区域(整屏;宽高任一为 0 直接返回)
@@ -390,119 +389,176 @@ pub fn render(
     if area.width == 0 || area.height == 0 {
         return;
     }
-    /// 一个已定位定色的锚点(帧内预折算,逐 cell 循环只读)。
-    struct Blob {
-        /// 本帧横坐标(锚位 + 摆幅偏移)。
-        x: f32,
-
-        /// 本帧纵坐标。
-        y: f32,
-
-        /// 红分量(0..=255 浮点)。
-        r: f32,
-
-        /// 绿分量。
-        g: f32,
-
-        /// 蓝分量。
-        b: f32,
-    }
-    let anchors = cfg.anchors();
-    let pulse_cfg = cfg.pulse();
-    let pulse = if *pulse_cfg.enabled() {
-        f32::from(pulse_permille.min(1000)) / 1000.0
-    } else {
-        0.0
-    };
-    let depth = pulse_cfg.depth();
-    let boost = |d: f32| d.clamp(0.0, 1.0) * pulse;
-    let colors = gradient.anchor_colors(
-        base,
-        anchors,
-        /*pos_push*/ permille_of(boost(*depth.brightness()) * 1000.0),
-    );
-    let sway = *cfg.drift().sway_pct() / 100.0;
-    let t = gradient.drift_t;
-    let blobs = anchors
-        .iter()
-        .zip(colors)
-        .map(|(anchor, c)| Blob {
-            x: anchor.x() + sway * (t * anchor.speed_x() + anchor.phase_x()).sin(),
-            y: anchor.y() + sway * (t * anchor.speed_y() + anchor.phase_y()).cos(),
-            r: f32::from(c.r),
-            g: f32::from(c.g),
-            b: f32::from(c.b),
-        })
-        .collect::<Vec<Blob>>();
-    let (base_r, base_g, base_b) = (f32::from(base.r), f32::from(base.g), f32::from(base.b));
-    let (grid_w, grid_h) = (f32::from(area.width), f32::from(area.height));
-    let intensity = ((cfg.intensity() + boost(*depth.intensity()))
-        * f32::from(progress_permille.min(1000))
-        / 1000.0)
-        .clamp(0.0, 1.0);
-    let vignette = cfg.vignette();
-    let veil_strength = (vignette.strength() * (1.0 - boost(*depth.vignette()))).clamp(0.0, 1.0);
-    let veil_inner = *vignette.inner();
-    // 满强半径贴着起始半径也不除零:压出一段极窄的过渡带。
-    let veil_span = (vignette.outer() - veil_inner).max(1e-3);
-    let sigma = (cfg.sigma() * (1.0 + boost(*depth.sigma()))).max(1e-3);
-    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
-    let horizontal_weights = gaussian_axis_weights(
-        area.width,
-        blobs.iter().map(|blob| blob.x),
-        inv_two_sigma_sq,
-    );
-    let vertical_weights = gaussian_axis_weights(
-        area.height,
-        blobs.iter().map(|blob| blob.y),
-        inv_two_sigma_sq,
-    );
-    for cy in 0..area.height {
-        let ny = (f32::from(cy) + 0.5) / grid_h;
-        let row_weights = vertical_weights
-            .iter()
-            .skip(usize::from(cy))
-            .step_by(usize::from(area.height));
-        for cx in 0..area.width {
-            if skip.is_some_and(|hole| {
-                hole.contains(ratatui::layout::Position::new(area.x + cx, area.y + cy))
-            }) {
+    let field = AmbientField::new(area, gradient, base, cfg, progress_permille, pulse_permille);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if skip.is_some_and(|hole| hole.contains(ratatui::layout::Position::new(x, y))) {
                 continue;
             }
-            let nx = (f32::from(cx) + 0.5) / grid_w;
-            let (mut wsum, mut r, mut g, mut b) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
-            let column_weights = horizontal_weights
-                .iter()
-                .skip(usize::from(cx))
-                .step_by(usize::from(area.width));
-            for ((blob, horizontal), vertical) in
-                blobs.iter().zip(column_weights).zip(row_weights.clone())
-            {
-                let w = horizontal * vertical;
-                wsum += w;
-                r += blob.r * w;
-                g += blob.g * w;
-                b += blob.b * w;
-            }
-            // 空锚点表 / 权重下溢时退底色。
-            let field = if wsum > f32::MIN_POSITIVE {
-                (r / wsum, g / wsum, b / wsum)
-            } else {
-                (base_r, base_g, base_b)
-            };
-            let (dx, dy) = (nx - 0.5, ny - 0.5);
-            let dist = (dx * dx + dy * dy).sqrt();
-            let veil = ((dist - veil_inner) / veil_span).clamp(0.0, 1.0) * veil_strength;
-            let mix = intensity * (1.0 - veil);
-            let color = Color::Rgb(
-                quantize(base_r + (field.0 - base_r) * mix),
-                quantize(base_g + (field.1 - base_g) * mix),
-                quantize(base_b + (field.2 - base_b) * mix),
-            );
-            if let Some(cell) = buf.cell_mut((area.x + cx, area.y + cy)) {
-                cell.set_bg(color);
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(field.color_at(x, y));
             }
         }
+    }
+}
+
+/// 本次氛围场的只读采样输入；歌词准备与背景绘制使用同一颜色计算。
+pub(crate) struct AmbientField {
+    /// 场覆盖的终端区域。
+    area: Rect,
+
+    /// 已折算位置与颜色的锚点。
+    blobs: Vec<Blob>,
+
+    /// 底色的 RGB 分量。
+    base: (f32, f32, f32),
+
+    /// 最终浓度。
+    intensity: f32,
+
+    /// 暗角强度、起始半径和过渡跨度。
+    veil: (f32, f32, f32),
+
+    /// 每个锚点沿终端列预计算的高斯权重。
+    horizontal_weights: Vec<f32>,
+
+    /// 每个锚点沿终端行预计算的高斯权重。
+    vertical_weights: Vec<f32>,
+}
+
+/// 一个已定位和定色的氛围锚点。
+struct Blob {
+    /// 本帧横坐标(锚位 + 摆幅偏移)。
+    x: f32,
+
+    /// 本帧纵坐标。
+    y: f32,
+
+    /// 红分量(0..=255 浮点)。
+    r: f32,
+
+    /// 绿分量。
+    g: f32,
+
+    /// 蓝分量。
+    b: f32,
+}
+
+impl AmbientField {
+    /// 按已经采样的动画与响度构造背景场，不读取系统时间。
+    pub(crate) fn new(
+        area: Rect,
+        gradient: &AmbientGradient,
+        base: Rgb,
+        cfg: &AmbientConfig,
+        progress_permille: u16,
+        pulse_permille: u16,
+    ) -> Self {
+        let anchors = cfg.anchors();
+        let pulse_cfg = cfg.pulse();
+        let pulse = if *pulse_cfg.enabled() {
+            f32::from(pulse_permille.min(1000)) / 1000.0
+        } else {
+            0.0
+        };
+        let depth = pulse_cfg.depth();
+        let boost = |d: f32| d.clamp(0.0, 1.0) * pulse;
+        let colors = gradient.anchor_colors(
+            base,
+            anchors,
+            /*pos_push*/ permille_of(boost(*depth.brightness()) * 1000.0),
+        );
+        let sway = *cfg.drift().sway_pct() / 100.0;
+        let t = gradient.drift_t;
+        let blobs = anchors
+            .iter()
+            .zip(colors)
+            .map(|(anchor, c)| Blob {
+                x: anchor.x() + sway * (t * anchor.speed_x() + anchor.phase_x()).sin(),
+                y: anchor.y() + sway * (t * anchor.speed_y() + anchor.phase_y()).cos(),
+                r: f32::from(c.r),
+                g: f32::from(c.g),
+                b: f32::from(c.b),
+            })
+            .collect::<Vec<Blob>>();
+        let (base_r, base_g, base_b) = (f32::from(base.r), f32::from(base.g), f32::from(base.b));
+        let intensity = ((cfg.intensity() + boost(*depth.intensity()))
+            * f32::from(progress_permille.min(1000))
+            / 1000.0)
+            .clamp(0.0, 1.0);
+        let vignette = cfg.vignette();
+        let veil_strength =
+            (vignette.strength() * (1.0 - boost(*depth.vignette()))).clamp(0.0, 1.0);
+        let veil_inner = *vignette.inner();
+        // 满强半径贴着起始半径也不除零:压出一段极窄的过渡带。
+        let veil_span = (vignette.outer() - veil_inner).max(1e-3);
+        let sigma = (cfg.sigma() * (1.0 + boost(*depth.sigma()))).max(1e-3);
+        let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
+        let horizontal_weights = gaussian_axis_weights(
+            area.width,
+            blobs.iter().map(|blob| blob.x),
+            inv_two_sigma_sq,
+        );
+        let vertical_weights = gaussian_axis_weights(
+            area.height,
+            blobs.iter().map(|blob| blob.y),
+            inv_two_sigma_sq,
+        );
+        Self {
+            area,
+            blobs,
+            base: (base_r, base_g, base_b),
+            intensity,
+            veil: (veil_strength, veil_inner, veil_span),
+            horizontal_weights,
+            vertical_weights,
+        }
+    }
+
+    /// 取一个终端格中心的背景色，不需要先画入 buffer。
+    pub(crate) fn color_at(&self, x: u16, y: u16) -> Color {
+        let nx =
+            (f32::from(x.saturating_sub(self.area.x)) + 0.5) / f32::from(self.area.width.max(1));
+        let ny =
+            (f32::from(y.saturating_sub(self.area.y)) + 0.5) / f32::from(self.area.height.max(1));
+        let (base_r, base_g, base_b) = self.base;
+        let (veil_strength, veil_inner, veil_span) = self.veil;
+        let intensity = self.intensity;
+        let column_weights = self
+            .horizontal_weights
+            .iter()
+            .skip(usize::from(x.saturating_sub(self.area.x)))
+            .step_by(usize::from(self.area.width.max(1)));
+        let row_weights = self
+            .vertical_weights
+            .iter()
+            .skip(usize::from(y.saturating_sub(self.area.y)))
+            .step_by(usize::from(self.area.height.max(1)));
+        let (mut wsum, mut r, mut g, mut b) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+        for ((blob, horizontal), vertical) in
+            self.blobs.iter().zip(column_weights).zip(row_weights)
+        {
+            let w = horizontal * vertical;
+            wsum += w;
+            r += blob.r * w;
+            g += blob.g * w;
+            b += blob.b * w;
+        }
+        // 空锚点表 / 权重下溢时退底色。
+        let field = if wsum > f32::MIN_POSITIVE {
+            (r / wsum, g / wsum, b / wsum)
+        } else {
+            (base_r, base_g, base_b)
+        };
+        let (dx, dy) = (nx - 0.5, ny - 0.5);
+        let dist = (dx * dx + dy * dy).sqrt();
+        let veil = ((dist - veil_inner) / veil_span).clamp(0.0, 1.0) * veil_strength;
+        let mix = intensity * (1.0 - veil);
+        Color::Rgb(
+            quantize(base_r + (field.0 - base_r) * mix),
+            quantize(base_g + (field.1 - base_g) * mix),
+            quantize(base_b + (field.2 - base_b) * mix),
+        )
     }
 }
 

@@ -31,7 +31,7 @@ impl App {
                 .spectrum
                 .tick_scope(volume_pct, &samples, sample_rate);
         } else {
-            let target_bars = self.state.spectrum.target_bars.get();
+            let target_bars = self.state.spectrum.target_bars;
             let bars = self.state.fft.compute(sample_rate, target_bars);
             self.state
                 .spectrum

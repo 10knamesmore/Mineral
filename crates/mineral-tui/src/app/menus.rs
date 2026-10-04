@@ -15,7 +15,7 @@ use crate::components::layout::shared::compute::{compute, compute_search};
 use crate::components::popup::{
     ContainerRef, MenuAction, MenuItem, OverlayKind, Placement, PopMenu,
 };
-use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::scroll::viewport::pin_cursor;
 use crate::runtime::state::{EntityRef, SearchFocus, View};
 
@@ -462,7 +462,7 @@ impl App {
     ///
     /// 走结果列的 [`ScrollList`] 读取 offset 还原屏幕行，与左栏 `row_anchor` 使用同一算法。
     fn search_row_anchor(&self) -> Option<Rect> {
-        let panel = compute_search(self.state.frame_area.get(), self.state.cfg.tui().layout()).left;
+        let panel = compute_search(self.state.frame_area, self.state.cfg.tui().layout()).left;
         let kr = self.state.channel_search.active_results()?;
         Some(row_anchor(panel, kr.list(), kr.len()))
     }
@@ -475,8 +475,7 @@ impl App {
     fn search_detail_row_anchor(&self) -> Option<Rect> {
         let kr = self.state.channel_search.active_results()?;
         let dframe = kr.detail.current()?;
-        let panel =
-            compute_search(self.state.frame_area.get(), self.state.cfg.tui().layout()).right?;
+        let panel = compute_search(self.state.frame_area, self.state.cfg.tui().layout()).right?;
         let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
         let list_area = detail_list_area(panel_inner(panel), is_artist);
         Some(borderless_row_anchor(
@@ -514,7 +513,7 @@ impl App {
 
     /// 由上一帧面积重算浏览态布局,取左栏面板矩形。
     fn left_panel(&self) -> Rect {
-        compute(self.state.frame_area.get(), self.state.cfg.tui().layout()).left
+        compute(self.state.frame_area, self.state.cfg.tui().layout()).left
     }
 }
 
@@ -529,7 +528,7 @@ impl App {
 fn row_anchor(panel: Rect, list: &ScrollList, len: usize) -> Rect {
     // 与渲染端同款视口数学:高 - 上下边框 - 表头。
     let viewport = usize::from(panel.height.saturating_sub(3));
-    let offset = list.offset(len, viewport, ScrollMotion::Frozen);
+    let offset = list.offset(len, viewport);
     let pinned = pin_cursor(list.sel(), offset, viewport);
     let dy = u16::try_from(pinned.saturating_sub(offset)).unwrap_or(0);
     Rect::new(
@@ -551,7 +550,7 @@ fn row_anchor(panel: Rect, list: &ScrollList, len: usize) -> Rect {
 ///   - `len`: 当前区列表总行数
 fn borderless_row_anchor(area: Rect, list: &ScrollList, len: usize) -> Rect {
     let viewport = usize::from(area.height.saturating_sub(1));
-    let offset = list.offset(len, viewport, ScrollMotion::Frozen);
+    let offset = list.offset(len, viewport);
     let pinned = pin_cursor(list.sel(), offset, viewport);
     let dy = u16::try_from(pinned.saturating_sub(offset)).unwrap_or(0);
     Rect::new(
@@ -852,10 +851,10 @@ mod tests {
         app.handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::empty())));
     }
 
-    /// 先画一帧把 `frame_area` 回写(锚点计算依赖),再返回终端供后续快照。
-    fn draw_once(app: &App) -> color_eyre::Result<Terminal<TestBackend>> {
+    /// 先准备一帧确定 `frame_area`(锚点计算依赖),再返回终端供后续快照。
+    fn draw_once(app: &mut App) -> color_eyre::Result<Terminal<TestBackend>> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|f| crate::view::draw(f, app))?;
+        terminal.draw(|f| crate::test_support::prepare_and_draw(f, app))?;
         Ok(terminal)
     }
 
@@ -891,7 +890,7 @@ mod tests {
             .get(1)
             .map(|entry| entry.data.song.id.qualified())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 2 首"))?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 1, "o 应弹出操作菜单");
         press(&mut app, KeyCode::Char('n'));
@@ -934,7 +933,7 @@ mod tests {
             .get(1)
             .map(|entry| entry.data.song.id.qualified())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应有第 2 首"))?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('p'));
         let ops = queue_ops
@@ -959,7 +958,7 @@ mod tests {
             .first()
             .map(|entry| entry.data.song.id.qualified())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应过滤到 Gjs"))?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
 
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('p'));
@@ -987,7 +986,7 @@ mod tests {
             .first()
             .map(|entry| entry.data.song.id.qualified())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 应过滤到 Gjs"))?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
 
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('p'));
@@ -1012,7 +1011,7 @@ mod tests {
             queue_contexts: std::sync::Arc::clone(&contexts),
             ..crate::test_support::TestClient::default()
         });
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('p'));
         let got = contexts
@@ -1036,7 +1035,7 @@ mod tests {
     #[test]
     fn o_on_playlists_opens_container_menu_fullscreen_silent() -> color_eyre::Result<()> {
         let (mut app, _ops) = app_with_playlists_probed()?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 1, "Playlists 歌单 o 弹容器操作菜单");
 
@@ -1086,7 +1085,7 @@ mod tests {
     #[test]
     fn o_menu_play_next_on_playlists_registers_intent() -> color_eyre::Result<()> {
         let (mut app, _submitted) = app_with_playlists_probed()?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('n'));
         let key =
@@ -1103,12 +1102,12 @@ mod tests {
     #[test]
     fn y_opens_copy_menu_in_both_views() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(app.overlays.len(), 1, "Library 歌曲上 y 应弹复制菜单");
 
         let (mut app, _ops) = app_with_playlists_probed()?;
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(app.overlays.len(), 1, "Playlists 歌单上 y 也应弹复制菜单");
         Ok(())
@@ -1410,13 +1409,13 @@ mod tests {
             }
         }
         app.state.channel_search.set_focus(SearchFocus::Results);
-        // 画一帧回写 frame_area(锚点计算依赖)。
-        draw_once(&app)?;
+        // 准备一帧确定 frame_area(锚点计算依赖)。
+        draw_once(&mut app)?;
 
         let anchor = app
             .search_row_anchor()
             .ok_or_else(|| color_eyre::eyre::eyre!("有结果时应能算出锚点"))?;
-        let results = compute_search(app.state.frame_area.get(), app.state.cfg.tui().layout()).left;
+        let results = compute_search(app.state.frame_area, app.state.cfg.tui().layout()).left;
         assert_eq!(anchor.x, results.x + 1, "锚点在 results 面板内(去左边框)");
         assert_eq!(
             anchor.y,
@@ -1444,7 +1443,7 @@ mod tests {
             );
         }
         app.state.channel_search.set_focus(SearchFocus::Results);
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 1, "结果列 Song 的 o 应弹操作菜单");
 
@@ -1465,7 +1464,7 @@ mod tests {
             );
         }
         app.state.channel_search.set_focus(SearchFocus::Results);
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.overlays.len(), 1, "Album 容器 o 应弹容器操作菜单");
         Ok(())
@@ -1480,7 +1479,7 @@ mod tests {
             .build()
     }
 
-    /// 构造：album 结果 + 专辑详情（3 曲）到货 + detail 焦点，并画一帧回写 `frame_area`。
+    /// 构造：album 结果 + 专辑详情（3 曲）到货 + detail 焦点，并准备一帧确定 `frame_area`。
     /// detail 列表此时是专辑曲目，光标在首行。
     fn app_in_album_detail() -> color_eyre::Result<App> {
         let (mut app, _submitted) = app_with_channel_search_probed(vec![SearchKind::Album])?;
@@ -1503,7 +1502,7 @@ mod tests {
             }
         }
         app.state.channel_search.set_focus(SearchFocus::Detail);
-        draw_once(&app)?;
+        draw_once(&mut app)?;
         Ok(app)
     }
 
@@ -1523,7 +1522,7 @@ mod tests {
         let anchor = app
             .search_detail_row_anchor()
             .ok_or_else(|| color_eyre::eyre::eyre!("有详情应能算出锚点"))?;
-        let right = compute_search(app.state.frame_area.get(), app.state.cfg.tui().layout())
+        let right = compute_search(app.state.frame_area, app.state.cfg.tui().layout())
             .right
             .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail 面板"))?;
         assert!(

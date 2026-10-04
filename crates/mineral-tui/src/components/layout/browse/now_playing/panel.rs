@@ -12,6 +12,77 @@ use crate::runtime::state::{AppState, View};
 
 use super::{cover_transition, playlist, track};
 
+/// 准备主封面、进入曲目的预热以及标题相位；页面飞行层接管主图时只准备文字。
+pub(crate) fn prepare(area: Rect, state: &mut AppState, cover_in_flight: bool) {
+    use crate::image::{ImageContent, ImageRenderPhase};
+    let Some([cover_area, kv, _]) = super::main_cover::sections(area) else {
+        return;
+    };
+    if !state.browse.view.at_min() {
+        let title = state
+            .filtered_tracks()
+            .get(state.browse.nav.track.sel())
+            .map(|entry| {
+                (
+                    entry.data.song.id.qualified(),
+                    crate::components::layout::shared::marquee::song_title_width(&entry.data.song),
+                )
+            });
+        if let Some((id, width)) = title {
+            state.marquees.prepare(
+                crate::runtime::marquee::Slot::NowPlaying,
+                &id,
+                width,
+                kv.width,
+            );
+        }
+    }
+    if cover_in_flight {
+        return;
+    }
+    let from = super::main_cover::url_for_view(state, View::Playlists);
+    let to = super::main_cover::url_for_view(state, View::Library);
+    let phase = state.image_render_phase();
+    if state.browse.view.at_min() || state.browse.view.at_max() {
+        let url = if state.browse.view.at_min() {
+            from.as_ref()
+        } else {
+            to.as_ref()
+        };
+        state
+            .images
+            .prepare_display(ImageContent::Display { url }, cover_area, phase);
+        if state.browse.view.at_min() {
+            let upcoming = state
+                .selected_playlist_in_list()
+                .and_then(|p| state.library.tracks.get(&p.data.id))
+                .and_then(|tracks| tracks.first())
+                .and_then(|entry| entry.data.song.cover_url.clone());
+            if let Some(url) = upcoming {
+                state.images.prepare(&url, cover_area);
+            }
+        }
+    } else if cover_transition::same_picture(state, from.as_ref(), to.as_ref()) {
+        for url in [from.as_ref(), to.as_ref()].into_iter().flatten() {
+            state.images.observe_visible(url);
+        }
+        state.images.prepare_display(
+            ImageContent::Display { url: from.as_ref() },
+            cover_area,
+            ImageRenderPhase::Stable,
+        );
+    } else {
+        for url in [from.as_ref(), to.as_ref()].into_iter().flatten() {
+            state.images.prepare_display(
+                ImageContent::Display { url: Some(url) },
+                cover_area,
+                ImageRenderPhase::Resizing,
+            );
+            state.images.prepare(url, cover_area);
+        }
+    }
+}
+
 /// 渲染右栏，端点直接画单态，途中按同一视图进度合成详情与封面。
 ///
 /// # Params:

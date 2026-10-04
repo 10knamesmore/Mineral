@@ -4,4 +4,4 @@ mod feedback;
 mod paint;
 
 pub(crate) use feedback::TransportFeedback;
-pub(crate) use paint::{draw, split_buffered_track};
+pub(crate) use paint::{draw, prepare, split_buffered_track};

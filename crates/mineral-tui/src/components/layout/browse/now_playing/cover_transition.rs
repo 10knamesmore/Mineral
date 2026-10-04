@@ -34,11 +34,6 @@ pub(super) fn draw(
     // 两端本来就是同一张封面(URL 相同,或 Netease 那种同图多 URL 的内容指纹相同)时没有
     // 可看的交叉渐变:按稳态贴成品图,免得中途把已经清晰的图退回 halfblock 再闪回来。
     if same_picture(state, from.as_ref(), to.as_ref()) {
-        if let (Some(from), Some(to)) = (&from, &to) {
-            // 两端都留在本帧可见工作集里:判据要在整段切换里稳定,不被后台逐出翻掉。
-            state.images.observe_visible(from);
-            state.images.observe_visible(to);
-        }
         state.images.render(
             ImageContent::Display { url: from.as_ref() },
             cover_area,
@@ -73,14 +68,14 @@ pub(super) fn draw(
         let to = cover_cells(state, cover_area, to.as_ref());
         fade_available_cells(frame.buffer_mut(), square, &from, &to, progress, theme);
     }
-
-    for url in [from.as_ref(), to.as_ref()].into_iter().flatten() {
-        state.images.prepare(url, cover_area);
-    }
 }
 
 /// 两端是不是同一张封面:都没有、URL 相同,或已解码像素判为同一张图。
-fn same_picture(state: &AppState, from: Option<&MediaUrl>, to: Option<&MediaUrl>) -> bool {
+pub(super) fn same_picture(
+    state: &AppState,
+    from: Option<&MediaUrl>,
+    to: Option<&MediaUrl>,
+) -> bool {
     match (from, to) {
         (None, None) => true,
         (Some(from), Some(to)) => *from == *to || state.images.same_picture(from, to),

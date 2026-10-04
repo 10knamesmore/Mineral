@@ -24,7 +24,7 @@ pub(crate) struct AudioSettingsOverlay {
     cursor: ListCursor,
 
     /// Ratatui viewport offset retained across frames.
-    viewport_offset: std::cell::Cell<usize>,
+    viewport_offset: usize,
 
     /// Prevents repeated activation while a stream switch is in progress.
     switching: bool,
@@ -39,7 +39,7 @@ impl AudioSettingsOverlay {
         Self {
             devices: None,
             cursor: ListCursor::new(0),
-            viewport_offset: std::cell::Cell::new(0),
+            viewport_offset: 0,
             switching: false,
             error: None,
         }
@@ -155,7 +155,7 @@ impl AudioSettingsOverlay {
             ]));
         }
         let mut table = TableState::default()
-            .with_offset(self.viewport_offset.get())
+            .with_offset(self.viewport_offset)
             .with_selected(Some(self.cursor.sel()));
         StatefulWidget::render(
             Table::new(rows, [Constraint::Fill(1), Constraint::Length(20)])
@@ -171,7 +171,6 @@ impl AudioSettingsOverlay {
             buf,
             &mut table,
         );
-        self.viewport_offset.set(table.offset());
     }
 }
 
@@ -206,6 +205,28 @@ impl Overlay for AudioSettingsOverlay {
                 theme.surface1
             }))
             .title(Line::from(" Audio settings ").style(Style::new().fg(theme.subtext)))
+    }
+
+    fn prepare(
+        &mut self,
+        inner: Rect,
+        _ctx: &mut AppState,
+        _theme: &Theme,
+        _advance: bool,
+        _reveal: crate::runtime::state::OverlayReveal,
+    ) {
+        if inner.height < 3 || inner.width < 2 {
+            return;
+        }
+        if let Some(devices) = &self.devices {
+            self.viewport_offset = crate::runtime::scroll::viewport::clamp_offset(
+                self.viewport_offset,
+                self.cursor.sel(),
+                devices.len() + 1,
+                usize::from(inner.height.saturating_sub(3)),
+                0,
+            );
+        }
     }
 
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {

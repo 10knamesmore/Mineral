@@ -57,6 +57,25 @@ pub(super) fn draw_meta(
     );
 }
 
+/// 在头部布局确定后更新简介滚动边界。
+pub(super) fn prepare(meta_a: Rect, frame: &mut DetailFrame, theme: &Theme, show_back: bool) {
+    let pad = Rect::new(
+        meta_a.x.saturating_add(1),
+        meta_a.y,
+        meta_a.width.saturating_sub(1),
+        meta_a.height,
+    );
+    if pad.is_empty() {
+        return;
+    }
+    let header_len = meta_lines(frame, theme).len() + usize::from(show_back);
+    let head_h = u16::try_from(header_len).unwrap_or(0).saturating_add(1);
+    let [_, desc] = Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(pad);
+    let offset =
+        description::prepare_scroll(frame_description(frame), desc, frame.description_scroll());
+    frame.set_description_scroll(offset);
+}
+
 /// 当前帧头部该展示的简介原文（歌曲取其所属专辑的、专辑/artist 取聚合 detail 的、歌单取自身的）；
 /// 拿不到为空串（不渲染）。
 fn frame_description(dframe: &DetailFrame) -> &str {

@@ -22,7 +22,6 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
         return;
     }
     let cols = usize::from(area.width);
-    state.target_bars.set(cols.max(1));
     let point_w = cols * 2;
     let point_h = usize::from(area.height) * 4;
     let center = point_h as f32 / 2.0;

@@ -4,8 +4,6 @@
 //! 进某专辑看曲目。栈帧携带已有的完整实体（头部立即可画），补充的列表/详情由对应
 //! fetch 任务回填。`frames[0]` 即 root（对应结果列选中行），其上是下钻帧。
 
-use std::cell::Cell;
-
 use mineral_channel_core::{ArtistSectionKind, ArtistSections, Page};
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind,
@@ -204,7 +202,7 @@ pub struct DetailFrame {
 
     /// 头部简介的滚动 offset（可视行）。render 端折行后把它钳进内容边界并写回（渲染走
     /// `&self`，故内部可变）；C-d/u/b/f 经 [`Self::nudge_description`] 平移。
-    desc_scroll: Cell<u16>,
+    desc_scroll: u16,
 
     /// 这一帧是否已派过 detail 拉取（防同帧重复派；新帧 / 移光标后复位为可再派）。
     requested: bool,
@@ -220,7 +218,7 @@ impl DetailFrame {
             artist_sections: None,
             section_anim: None,
             list: ScrollList::new(),
-            desc_scroll: Cell::new(0),
+            desc_scroll: 0,
             requested: false,
         }
     }
@@ -250,18 +248,20 @@ impl DetailFrame {
     }
 
     /// 头部简介滚动 offset 句柄：render 端钳进内容边界并写回。
-    pub fn description_scroll(&self) -> &Cell<u16> {
-        &self.desc_scroll
+    pub fn description_scroll(&self) -> u16 {
+        self.desc_scroll
+    }
+
+    /// 准备阶段把简介位置钳回已测量的内容范围。
+    pub(crate) fn set_description_scroll(&mut self, offset: u16) {
+        self.desc_scroll = offset;
     }
 
     /// 简介滚动平移 `delta` 行（向下为正；下界钳 0，上界由 render 端按内容高度钳）。
     /// C-d/u/b/f 在 detail 焦点经此（与列表光标 `j/k` 互不干扰）。
-    pub fn nudge_description(&self, delta: i64) {
-        let next = i64::from(self.desc_scroll.get())
-            .saturating_add(delta)
-            .max(0);
-        self.desc_scroll
-            .set(u16::try_from(next).unwrap_or(u16::MAX));
+    pub fn nudge_description(&mut self, delta: i64) {
+        let next = i64::from(self.desc_scroll).saturating_add(delta).max(0);
+        self.desc_scroll = u16::try_from(next).unwrap_or(u16::MAX);
     }
 
     /// 沿本源可用分区列表前进一格并 arm 横向过渡（复用 browse view-sweep 同款 [`Toggle`]）。
@@ -737,6 +737,17 @@ impl DetailStack {
         }
     }
 
+    /// 对当前参与显示的帧执行准备；第二参数表示该帧是否处于稳定布局。
+    pub(crate) fn prepare_visible(&mut self, mut prepare: impl FnMut(&mut DetailFrame, bool)) {
+        let sweeping = !self.transition.settled() && self.sweep_from.is_some();
+        if sweeping && let Some((from, _)) = &mut self.sweep_from {
+            prepare(from, false);
+        }
+        if let Some(to) = self.frames.last_mut() {
+            prepare(to, !sweeping);
+        }
+    }
+
     /// 滑动渲染参数：`(出发帧, 目标帧, ease-in-out 进度, is_push)`；未过渡为 `None`（渲染直接
     /// 画当前帧）。进度走 ease-in-out（与 artist 双区切换 / 左栏视图切换同曲线，两端减速、打断
     /// 反向连续），不用单向 ease-out。
@@ -1055,12 +1066,12 @@ mod tests {
     /// nudge_description：向下累加、下界钳 0（上界由 render 端按内容高度钳，不在此）。
     #[test]
     fn nudge_description_clamps_lower() {
-        let frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
-        assert_eq!(frame.description_scroll().get(), 0, "新帧简介滚回顶");
+        let mut frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
+        assert_eq!(frame.description_scroll(), 0, "新帧简介滚回顶");
         frame.nudge_description(5);
-        assert_eq!(frame.description_scroll().get(), 5, "向下平移 +5");
+        assert_eq!(frame.description_scroll(), 5, "向下平移 +5");
         frame.nudge_description(-100);
-        assert_eq!(frame.description_scroll().get(), 0, "下界钳 0、不为负");
+        assert_eq!(frame.description_scroll(), 0, "下界钳 0、不为负");
     }
 
     /// 取栈顶实体名（测试 helper）。

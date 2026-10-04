@@ -18,3 +18,6 @@ mod spectrum_feed;
 mod transport_input_tests;
 
 pub use application::App;
+
+#[cfg(test)]
+mod presentation_tests;

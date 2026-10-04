@@ -17,7 +17,6 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     // 每根条恒 1 列。FFT 端按 area.width 对数等分桶映射,窗口越宽频率分辨率越细。
     let bar_step: u16 = 1;
     let bar_count = usize::from(area.width).max(1);
-    state.target_bars.set(bar_count);
     let total_w = u16::try_from(bar_count)
         .unwrap_or(0)
         .saturating_mul(bar_step);

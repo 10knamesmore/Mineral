@@ -895,3 +895,9 @@ pub(crate) fn app_with_channel_search_qprobed(
     app.state.channel_search.active = active;
     Ok((app, queue_ops))
 }
+
+/// 在测试中显式执行一次布局准备，再通过生产绘制入口出帧。
+pub(crate) fn prepare_and_draw(frame: &mut ratatui::Frame<'_>, app: &mut crate::app::App) {
+    app.prepare_view(frame.area(), std::time::Instant::now(), true);
+    crate::view::draw(frame, &app.frame_view());
+}

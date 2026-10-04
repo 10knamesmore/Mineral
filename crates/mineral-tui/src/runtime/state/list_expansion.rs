@@ -1,9 +1,8 @@
-//! 清除本地搜索时保留上一帧，并按行身份展开到完整列表。
+//! 清除本地搜索时保留上一份显示输入，并按行身份展开到完整列表。
 
 use rustc_hash::FxHashMap;
 
 use mineral_model::{CollectionIndex, PlaylistId};
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::render::anim::Transition;
@@ -33,7 +32,7 @@ pub(crate) enum ListRowIdentity {
     Queue(usize),
 }
 
-/// 最后实际画出的搜索结果，只保存一个可见窗口。
+/// 最后准备的搜索结果，只保存一个可见窗口。
 pub(crate) struct FilteredListFrame {
     /// 画面所属列表。
     pub(crate) scope: ListExpansionScope,
@@ -41,8 +40,11 @@ pub(crate) struct FilteredListFrame {
     /// 数据行范围，不含表头、边框或底栏。
     pub(crate) body: Rect,
 
-    /// 面板原始字符与样式，坐标和屏幕相同。
-    pub(crate) buffer: Buffer,
+    /// 可重新绘制的表格、图片和概览输入。
+    pub(crate) content: crate::components::layout::shared::scroll_table::PreparedTable,
+
+    /// 完整面板区域。
+    pub(crate) area: Rect,
 
     /// 从第一条可见数据行开始的身份序列。
     pub(crate) rows: Vec<ListRowIdentity>,
@@ -75,7 +77,7 @@ pub(crate) struct ListExpansion {
 /// 搜索结果的最后一帧与正在播放的展开共用生命周期。
 #[derive(Default)]
 pub(crate) struct ListExpansionState {
-    /// 搜索态渲染时更新，清除时交给动画。
+    /// 搜索态准备时更新，清除时交给动画。
     pub(crate) filtered_frame: Option<FilteredListFrame>,
 
     /// 没有展开时不持有旧画面。
@@ -83,6 +85,38 @@ pub(crate) struct ListExpansionState {
 }
 
 impl ListExpansionState {
+    /// 布局准备阶段替换筛选输入，并在几何变化时结束旧转场。
+    pub(crate) fn prepare(&mut self, area: Rect, body: Rect, filtered: Option<FilteredListFrame>) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.before.area != area || active.before.body != body)
+        {
+            self.invalidate();
+        }
+        self.filtered_frame = filtered;
+    }
+
+    /// 转场旧端的图片需求由生命周期保留，与是否执行绘制无关。
+    pub(crate) fn retain_images(&mut self, images: &mut crate::image::ImageEngine) {
+        if self.active.as_ref().is_some_and(|active| {
+            active
+                .before
+                .content
+                .images
+                .iter()
+                .any(|image| !images.inline_is_current(image))
+        }) {
+            self.invalidate();
+            return;
+        }
+        if let Some(active) = &self.active {
+            for image in &active.before.content.images {
+                images.retain_inline(image);
+            }
+        }
+    }
+
     /// 将可见行身份映射到完整列表，开始一次展开。
     pub(crate) fn start(
         &mut self,
@@ -112,7 +146,7 @@ impl ListExpansionState {
                 })
             })
             .collect::<Vec<_>>();
-        // 光标刚移动但尚未画出时没有可保持的选中行，直接显示当前逻辑位置。
+        // 光标刚移动但尚未准备时没有可保持的选中行，直接显示当前逻辑位置。
         if !rows.iter().any(|row| row.full_index == selected_index) {
             return;
         }

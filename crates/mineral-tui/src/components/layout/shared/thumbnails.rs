@@ -20,13 +20,11 @@ pub(crate) const THUMBNAIL_COLUMNS: u16 = 2;
 ///   - `images`: 图片引擎；缩略图入口只消费已有预取与解码缓存，不由可见行发起下载
 ///   - `column`: 列求解器返回的图片列矩形，含单行表头，不含 block 边框
 ///   - `covers`: 与本帧可见范围顺序一致的封面；缺图项仍须传 `None`，避免后续行错位
-///   - `phase`: 各阶段均复用 Kitty 成品，只有稳定阶段允许提交新编码
 pub(crate) fn render_table_thumbnails<'a>(
     buf: &mut Buffer,
     images: &ImageEngine,
     column: Rect,
     covers: impl IntoIterator<Item = Option<&'a MediaUrl>>,
-    phase: ImageRenderPhase,
 ) {
     if column.width != THUMBNAIL_COLUMNS {
         return;
@@ -35,8 +33,42 @@ pub(crate) fn render_table_thumbnails<'a>(
     let [_header, rows] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(column);
     for (y, cover) in (rows.top()..rows.bottom()).zip(covers) {
-        images.render_thumbnail(cover, Rect::new(rows.x, y, rows.width, 1), buf, phase);
+        images.render_thumbnail(cover, Rect::new(rows.x, y, rows.width, 1), buf);
     }
+}
+
+/// 准备与绘制使用同一封面列几何和可见行顺序。
+pub(crate) fn prepare_table_thumbnails<'a>(
+    images: &mut ImageEngine,
+    column: Rect,
+    covers: impl IntoIterator<Item = Option<&'a MediaUrl>>,
+    phase: ImageRenderPhase,
+) {
+    if column.width != THUMBNAIL_COLUMNS {
+        return;
+    }
+    let [_header, rows] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(column);
+    for (y, cover) in (rows.top()..rows.bottom()).zip(covers) {
+        images.prepare_thumbnail(cover, Rect::new(rows.x, y, rows.width, 1), phase);
+    }
+}
+
+/// 保留可见行当前已就绪的图片身份，供转场旧端重绘。
+pub(crate) fn snapshot_thumbnails<'a>(
+    images: &ImageEngine,
+    column: Rect,
+    covers: impl IntoIterator<Item = Option<&'a MediaUrl>>,
+) -> Vec<crate::image::InlineImage> {
+    if column.width != THUMBNAIL_COLUMNS {
+        return Vec::new();
+    }
+    let [_header, rows] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(column);
+    (rows.top()..rows.bottom())
+        .zip(covers)
+        .filter_map(|(y, cover)| images.inline_image(cover?, Rect::new(rows.x, y, rows.width, 1)))
+        .collect()
 }
 
 /// 选择列表封面阶段；离屏冻结优先于形变与选中变化防抖。
@@ -54,7 +86,7 @@ pub(crate) fn thumbnail_phase(
         ImageRenderPhase::Offscreen
     } else if !state.browse.fullscreen.settled() || !state.channel_search.active.settled() {
         ImageRenderPhase::Resizing
-    } else if last_sel_change.elapsed()
+    } else if state.frame_now.saturating_duration_since(last_sel_change)
         < Duration::from_millis(*state.cfg.tui().cover().debounce_ms())
     {
         ImageRenderPhase::Scrolling
@@ -75,12 +107,12 @@ mod tests {
 
     use super::{THUMBNAIL_COLUMNS, render_table_thumbnails};
     use crate::components::layout::shared::marquee::resolve_column_rects;
-    use crate::image::{ImageEngine, ImageRenderPhase};
+    use crate::image::ImageEngine;
 
     /// 与真实 Table 对照所有窄宽度:列宽不足时留空,够宽时只覆盖图片列的数据格。
     #[test]
     fn squeezed_thumbnail_columns_do_not_overwrite_neighbors() -> color_eyre::Result<()> {
-        let images = ImageEngine::disabled_kitty(Arc::new(Config::defaults()?));
+        let mut images = ImageEngine::disabled_kitty(Arc::new(Config::defaults()?));
         let url = MediaUrl::remote("https://example.com/narrow-cover.png")?;
         images.insert_test_thumbnail(&url)?;
         let widths = [
@@ -106,13 +138,7 @@ mod tests {
                 .copied()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少图片列"))?;
             let before = buf.clone();
-            render_table_thumbnails(
-                &mut buf,
-                &images,
-                column,
-                [Some(&url)],
-                ImageRenderPhase::Stable,
-            );
+            render_table_thumbnails(&mut buf, &images, column, [Some(&url)]);
             for y in area.top()..area.bottom() {
                 for x in area.left()..area.right() {
                     if column.width == THUMBNAIL_COLUMNS

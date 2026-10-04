@@ -8,3 +8,4 @@ mod terrain;
 mod waterfall;
 
 pub use panel::draw;
+pub(crate) use panel::prepare;

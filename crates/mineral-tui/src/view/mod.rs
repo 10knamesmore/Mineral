@@ -2,8 +2,9 @@
 
 mod frame;
 mod page_morph;
+mod preparation;
 
-pub use frame::draw;
+pub(crate) use frame::draw;
 
 #[cfg(test)]
 mod page_morph_tests;

@@ -122,8 +122,7 @@ fn resolve_end(area: Rect, url: MediaUrl, state: &AppState) -> Option<FlightEnd>
     })
 }
 
-/// 画一帧飞行层(叠在面板之上):双端 fade 合成、单端独图收放,halfblock 直出;
-/// 并按两端稳态尺寸预热编码(按 `(url, dims)` 去重,无逐帧 churn)。
+/// 画一帧飞行层(叠在面板之上):双端 fade 合成、单端独图收放，读取准备阶段保留的图片。
 ///
 /// # Params:
 ///   - `plan`: [`plan`] 产出的飞行计划
@@ -184,10 +183,17 @@ pub(crate) fn render(
         }
         (None, None) => {}
     }
-    // 两端稳态协议都预热:落定(任一方向)kitty 直接 place 零闪。`(url, dims)` 去重,
-    // 每帧调用无 churn。
+}
+
+/// 飞行两端的图片在准备阶段保活，并按各自稳定尺寸预编码。
+pub(crate) fn prepare(plan: &FlightPlan, state: &mut AppState) {
     for end in [plan.from.as_ref(), plan.to.as_ref()].into_iter().flatten() {
         if let FlightContent::Cover(url) = &end.content {
+            state.images.prepare_display(
+                ImageContent::Display { url: Some(url) },
+                end.area,
+                ImageRenderPhase::Resizing,
+            );
             state.images.prepare(url, end.area);
         }
     }

@@ -119,6 +119,26 @@ impl Overlay for OverlayKind {
         }
     }
 
+    fn prepare(
+        &mut self,
+        inner: Rect,
+        ctx: &mut AppState,
+        theme: &Theme,
+        advance: bool,
+        reveal: crate::runtime::state::OverlayReveal,
+    ) {
+        match self {
+            Self::TextPrompt(o) => o.prepare(inner, ctx, theme, advance, reveal),
+            Self::AudioSettings(o) => o.prepare(inner, ctx, theme, advance, reveal),
+            Self::Queue(o) => o.prepare(inner, ctx, theme, advance, reveal),
+            Self::Downloads(o) => o.prepare(inner, ctx, theme, advance, reveal),
+            Self::Confirm(o) => o.prepare(inner, ctx, theme, advance, reveal),
+            Self::Disconnect(o) => o.prepare(inner, ctx, theme, advance, reveal),
+            Self::Menu(o) => o.prepare(inner, ctx, theme, advance, reveal),
+            Self::Help(o) => o.prepare(inner, ctx, theme, advance, reveal),
+        }
+    }
+
     fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
         match self {
             Self::TextPrompt(o) => o.render_content(buf, inner, ctx, theme),
@@ -322,26 +342,36 @@ impl OverlayStack {
         Some(top.kind.on_key(key, ctx))
     }
 
+    /// 逐层准备完整布局和局部显示状态，绘制不回写浮层上下文。
+    pub(crate) fn prepare(&mut self, area: Rect, ctx: &mut AppState, theme: &Theme, advance: bool) {
+        let top = self.active_top_index();
+        let reveals = self
+            .stack
+            .iter()
+            .map(|layer| layer.anim.eased_settle())
+            .collect::<Vec<_>>();
+        for (index, layer) in self.stack.iter_mut().enumerate() {
+            let (base, _) = super::component::full_rect(&layer.kind.chrome(), area, ctx);
+            if base.width < 4 || base.height < 3 {
+                continue;
+            }
+            let inner = layer.kind.block(ctx, theme, Some(index) == top).inner(base);
+            let reveal = crate::runtime::state::OverlayReveal {
+                own: reveals[index],
+                above: reveals.get(index + 1).copied().unwrap_or(0),
+            };
+            layer.kind.prepare(inner, ctx, theme, advance, reveal);
+        }
+    }
+
     /// 自底向上渲染所有浮层;活跃栈顶标记为 `focused`(影响边框色)。
     pub(crate) fn render(&self, frame: &mut Frame<'_>, area: Rect, ctx: &AppState, theme: &Theme) {
         let top = self.active_top_index();
         for (i, m) in self.stack.iter().enumerate() {
             let focused = Some(i) == top;
             let settle = m.anim.eased_settle();
-            // 把「本层进度」与「上层进度」交给渲染:被压住的一层据此把选中高亮淡出,
-            // 上层据此淡入,两处读同一个数,交接不会错拍。
-            ctx.overlay_reveal
-                .set(crate::runtime::state::OverlayReveal {
-                    own: settle,
-                    above: self
-                        .stack
-                        .get(i + 1)
-                        .map_or(0, |upper| upper.anim.eased_settle()),
-                });
             render_overlay(frame, area, &m.kind, settle, focused, ctx, theme);
         }
-        ctx.overlay_reveal
-            .set(crate::runtime::state::OverlayReveal::default());
     }
 
     /// 当前栈内浮层数(含正在退场、尚未被 [`Self::tick`] 移除的)。

@@ -69,7 +69,7 @@ mod tests {
             ..TestClient::default()
         });
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))?;
-        terminal.draw(|frame| crate::view::draw(frame, &app))?;
+        terminal.draw(|frame| crate::test_support::prepare_and_draw(frame, &mut app))?;
         app.dispatch(Action::OpenQueue);
         key(&mut app, KeyCode::Char('o'));
         key(&mut app, KeyCode::Char('s'));
@@ -88,7 +88,7 @@ mod tests {
         for _ in 0..100 {
             app.overlays.tick();
         }
-        terminal.draw(|frame| crate::view::draw(frame, &app))?;
+        terminal.draw(|frame| crate::test_support::prepare_and_draw(frame, &mut app))?;
         println!(
             "Text prompt rendered by the application:\n{}",
             terminal.backend()

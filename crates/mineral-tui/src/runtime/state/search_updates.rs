@@ -206,7 +206,6 @@ mod tests {
         use mineral_channel_core::Page;
         use mineral_task::{SearchPayload, TaskEvent};
 
-        use crate::runtime::scroll::list::ScrollMotion;
         use crate::runtime::state::{ArtistSection, EntityRef};
 
         for switch_kind in [false, true] {
@@ -244,12 +243,7 @@ mod tests {
             frame.nudge_description(3);
             state.channel_search.tick();
             state.channel_search.tick();
-            assert_eq!(
-                current_frame(&state)?
-                    .list()
-                    .offset(8, 3, ScrollMotion::Frozen),
-                4
-            );
+            assert_eq!(current_frame(&state)?.list().offset(8, 3), 4);
 
             if switch_kind {
                 state.channel_search.select_kind(SearchKind::Album);
@@ -274,8 +268,8 @@ mod tests {
             let frame = current_frame(&state)?;
             assert_eq!(frame.section, ArtistSection::Albums);
             assert_eq!(frame.list().sel(), 6);
-            assert_eq!(frame.list().offset(8, 3, ScrollMotion::Frozen), 4);
-            assert_eq!(frame.description_scroll().get(), 3);
+            assert_eq!(frame.list().offset(8, 3), 4);
+            assert_eq!(frame.description_scroll(), 3);
             assert!(matches!(frame.row_entity(), Some(EntityRef::Album(album))
                 if album.id == album_fixture("album-6").id));
 

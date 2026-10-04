@@ -74,7 +74,7 @@ pub struct BrowsePage {
     pub search: BrowseSearch,
 
     /// 清除搜索的逐行展开；渲染时只缓存当前可见结果。
-    pub(crate) list_expansion: RefCell<ListExpansionState>,
+    pub(crate) list_expansion: ListExpansionState,
 
     /// 当前歌单过滤后的下标与时长；数据或查询变化时重建。
     filtered_tracks: RefCell<TrackFilterCache>,
@@ -101,7 +101,7 @@ impl BrowsePage {
                 playlists: SearchState::new(),
                 tracks: SearchState::new(),
             },
-            list_expansion: RefCell::new(ListExpansionState::default()),
+            list_expansion: ListExpansionState::default(),
             filtered_tracks: RefCell::new(TrackFilterCache::default()),
         }
     }
@@ -138,7 +138,6 @@ impl BrowsePage {
         let tick_ms = *anim.frame_tick_ms();
         let trail = anim.ambient_trail();
         self.list_expansion
-            .get_mut()
             .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
         self.view
             .retempo(ticks16_from_ms(*anim.sweep_ms(), tick_ms));

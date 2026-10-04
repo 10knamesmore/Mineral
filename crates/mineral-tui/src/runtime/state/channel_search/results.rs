@@ -118,6 +118,11 @@ impl KindResults {
         &self.list
     }
 
+    /// 列表准备入口更新视口，不改变搜索结果或选中实体。
+    pub(crate) fn list_mut(&mut self) -> &mut ScrollList {
+        &mut self.list
+    }
+
     /// 移动结果列光标到 `idx`（钳末行）；**真的移动了**才把 detail 栈复位到新选中实体
     /// （边界钳制不动则保留下钻栈）。
     pub fn set_sel(&mut self, idx: usize) {

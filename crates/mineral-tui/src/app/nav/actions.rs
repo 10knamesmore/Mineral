@@ -376,7 +376,7 @@ impl BrowsePage {
             let anim = model.cfg.tui().animation();
             let ticks = ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms());
             match self.view.current() {
-                View::Playlists => self.list_expansion.borrow_mut().start(
+                View::Playlists => self.list_expansion.start(
                     ListExpansionScope::Browse(View::Playlists),
                     model
                         .library
@@ -389,7 +389,7 @@ impl BrowsePage {
                     selected,
                     ticks,
                 ),
-                View::Library => self.list_expansion.borrow_mut().start(
+                View::Library => self.list_expansion.start(
                     ListExpansionScope::Browse(View::Library),
                     self.current_tracks(model)
                         .iter()
@@ -1213,7 +1213,7 @@ mod tests {
         app.state.browse.nav.track.set_sel(50);
         // 渲染若干帧让视口收敛(光标深处 → offset > 0,光标落在视口下安全边界)。
         for _ in 0..40 {
-            t.draw(|f| crate::view::draw(f, &app))?;
+            t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         }
         let off = app.state.browse.nav.track.scroll_target();
         assert!(off > 0 && off <= 50, "前置:视口已滚到深处: {off}");
@@ -1222,7 +1222,7 @@ mod tests {
         press(&mut app, KeyCode::Char('h'));
         press(&mut app, KeyCode::Char('l'));
         for _ in 0..5 {
-            t.draw(|f| crate::view::draw(f, &app))?;
+            t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         }
         assert_eq!(app.state.browse.nav.track.sel(), 50, "光标恢复原行");
         let row_after = 50_usize.saturating_sub(app.state.browse.nav.track.scroll_target());

@@ -57,7 +57,7 @@ pub(super) fn remaining_label(ctx: &AppState, width: u16) -> String {
     let head = format!(" {} left · {at_least}{}", rest.len(), format_total(ms));
     // ends 钟点只在「播放中 + 时长精确」时给:暂停会漂,未知项让钟点变下界。
     if ctx.playback.playing && unknown == 0 {
-        let now = ctx.now.get();
+        let now = ctx.now;
         let ends = now + chrono::Duration::milliseconds(i64::try_from(ms).unwrap_or(i64::MAX));
         format!("{head} → {} ", format_clock(now, ends))
     } else {

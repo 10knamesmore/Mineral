@@ -76,7 +76,7 @@ impl QueueOverlay {
         self.last_sel_change = Instant::now();
         if let Some(raw) = selected {
             self.list.place(raw, screen_row);
-            self.expansion.get_mut().start(
+            self.expansion.start(
                 ListExpansionScope::Queue,
                 (0..ctx.player.queue.len()).map(|index| (ListRowIdentity::Queue(index), index)),
                 raw,
@@ -84,7 +84,7 @@ impl QueueOverlay {
             );
         } else {
             self.list.place(0, 0);
-            self.expansion.get_mut().invalidate();
+            self.expansion.invalidate();
         }
         mineral_log::debug!(target: "tui", ?selected, screen_row, "clear queue filter preserving occurrence");
     }

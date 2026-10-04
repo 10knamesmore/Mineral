@@ -106,6 +106,7 @@ impl AppState {
         } else {
             self.browse.nav.last_sel_change
         };
-        last_sel_change.elapsed() < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
+        self.frame_now.saturating_duration_since(last_sel_change)
+            < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
     }
 }

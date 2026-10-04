@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders};
 
 use mineral_config::SearchFocusTransition;
 
-use crate::app::App;
+use super::preparation::FrameView;
 use crate::components::layout::browse::{lyrics, now_playing, sidebar, spectrum};
 use crate::components::layout::search::{detail, panel};
 use crate::components::layout::shared::compute::{
@@ -25,10 +25,8 @@ use crate::runtime::state::SearchFocus;
 
 /// 渲染当前页面；形变期间合成两端稳定排版，封面和播放信息独立移动。
 /// 通知与浮层叠在页面之上，最后绘制启动或退出的整屏边框。
-pub fn draw(frame: &mut Frame<'_>, app: &App) {
-    let theme = &app.theme;
-    // 回写本帧面积:按键路径(弹菜单求锚点)据此重算布局,不依赖 TTY 查询。
-    app.state.frame_area.set(frame.area());
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &FrameView<'_>) {
+    let theme = app.theme;
     let layout_cfg = app.state.cfg.tui().layout();
     let normal = compute(frame.area(), layout_cfg);
 
@@ -65,9 +63,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             normal.top_status,
             theme,
             app.state.browse.fullscreen.eased_in_out(),
-            &app.notice_hint,
+            app.notice_hint,
+            app.state.frame_now,
         );
-        app.overlays.render(frame, frame.area(), &app.state, theme);
+        app.overlays.render(frame, frame.area(), app.state, theme);
     }
 
     if let Some(anim) = &app.transition {
@@ -76,17 +75,17 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 }
 
 /// 常规(浏览态)布局:把各 area 分发给对应组件渲染。
-fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
-    let theme = &app.theme;
-    top_status::draw(frame, areas.top_status, &app.state, theme);
-    sidebar::draw(frame, areas.left, &app.state, theme);
+fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
+    let theme = app.theme;
+    top_status::draw(frame, areas.top_status, app.state, theme);
+    sidebar::draw(frame, areas.left, app.state, theme);
     if let Some(right) = areas.right {
         now_playing::draw(
-            frame, right, &app.state, theme, /*cover_in_flight*/ false,
+            frame, right, app.state, theme, /*cover_in_flight*/ false,
         );
     }
     if let Some(lyr) = areas.lyrics {
-        lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Compact);
+        lyrics::draw(frame, lyr, app.state, theme, lyrics::LyricMode::Compact);
     }
     if let Some(spec) = areas.spectrum {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
@@ -96,8 +95,8 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         areas.transport,
         &app.state.playback,
         &app.state.transport,
-        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
-        &WaveformCtx::new(&app.state, theme),
+        &MarqueeCtx::new(app.state, theme, /*fade_to*/ theme.base),
+        &WaveformCtx::new(app.state, theme),
         theme,
     );
 }
@@ -109,8 +108,8 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
 ///
 /// `cover_in_flight`:page morph 封面飞行层已接管主图(now_playing 封面 / detail 头图),
 /// 面板跳过自画防双画。
-fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App, cover_in_flight: bool) {
-    let theme = &app.theme;
+fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>, cover_in_flight: bool) {
+    let theme = app.theme;
     let rs = &app.state.channel_search;
     let sliding = matches!(
         app.state.cfg.tui().animation().search_focus_transition(),
@@ -133,7 +132,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App, cover_in_flight
         panel::draw_results(
             frame,
             left,
-            &app.state,
+            app.state,
             theme,
             border_focused(SearchFocus::Results),
         );
@@ -142,7 +141,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App, cover_in_flight
         detail::draw(
             frame,
             right,
-            &app.state,
+            app.state,
             theme,
             border_focused(SearchFocus::Detail),
             cover_in_flight,
@@ -165,15 +164,15 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &App, cover_in_flight
     }
     // chip 下拉(source/kind)画在最后,盖在 results 面板之上。
     if let Some(prompt) = areas.search_prompt {
-        panel::draw_prompt_dropdown(frame, prompt, &app.state, theme);
+        panel::draw_prompt_dropdown(frame, prompt, app.state, theme);
     }
     transport::draw(
         frame,
         areas.transport,
         &app.state.playback,
         &app.state.transport,
-        &MarqueeCtx::new(&app.state, theme, /*fade_to*/ theme.base),
-        &WaveformCtx::new(&app.state, theme),
+        &MarqueeCtx::new(app.state, theme, /*fade_to*/ theme.base),
+        &WaveformCtx::new(app.state, theme),
         theme,
     );
 }
@@ -189,8 +188,8 @@ fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
 }
 
 /// 全屏稳态：频谱、播放栏、封面与沉浸歌词。
-fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
-    let theme = &app.theme;
+fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
+    let theme = app.theme;
     if let Some(spec) = areas.spectrum.and_then(nonempty) {
         spectrum::draw(frame, spec, &app.state.spectrum, theme);
     }
@@ -206,15 +205,15 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
         areas.transport,
         &app.state.playback,
         &app.state.transport,
-        &MarqueeCtx::new(&app.state, theme, marquee_fade_to),
-        &WaveformCtx::new(&app.state, theme),
+        &MarqueeCtx::new(app.state, theme, marquee_fade_to),
+        &WaveformCtx::new(app.state, theme),
         theme,
     );
     if let Some(c) = areas.cover.and_then(nonempty) {
-        draw_fullscreen_cover(frame, c, areas.cover, app);
+        draw_fullscreen_cover(frame, c, app);
     }
     if let Some(lyr) = areas.lyrics.and_then(nonempty) {
-        lyrics::draw(frame, lyr, &app.state, theme, lyrics::LyricMode::Immersive);
+        lyrics::draw(frame, lyr, app.state, theme, lyrics::LyricMode::Immersive);
     }
 }
 
@@ -226,7 +225,7 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &App) {
 /// 避开背景重绘，防止首 cell 改色触发图协议载荷重发；其他区域保留动态背景。
 fn paint_backdrop(
     frame: &mut Frame<'_>,
-    app: &App,
+    app: &FrameView<'_>,
     normal: &Areas,
     layout_cfg: &mineral_config::LayoutConfig,
 ) {
@@ -241,7 +240,7 @@ fn paint_backdrop(
 ///   - 退出残留期(几何已回列表 `at_min`、氛围仍在褪):now_playing 面板的真图封面区;
 ///   - 其余(Kitty / halfblock / 形变途中):无洞。
 fn backdrop_skip(
-    app: &App,
+    app: &FrameView<'_>,
     area: Rect,
     normal: &Areas,
     layout_cfg: &mineral_config::LayoutConfig,
@@ -258,9 +257,9 @@ fn backdrop_skip(
 
 /// now_playing 面板当前 place 的真图封面视觉区(用于退出残留期挖洞);面板不画真图
 /// (无选中 / 无图 / 协议未就绪 / halfblock 兜底)时为 `None`。
-fn now_playing_cover_skip(app: &App, right: Option<Rect>) -> Option<Rect> {
+fn now_playing_cover_skip(app: &FrameView<'_>, right: Option<Rect>) -> Option<Rect> {
     let right = nonempty(right?)?;
-    let url = now_playing::main_cover::url(&app.state)?;
+    let url = now_playing::main_cover::url(app.state)?;
     let [cover_sec, _, _] = now_playing::main_cover::sections(right)?;
     app.state.images.ready_area(&url, nonempty(cover_sec)?)
 }
@@ -287,7 +286,7 @@ fn fill_bg(buf: &mut Buffer, area: Rect, color: Color, skip: Option<Rect>) {
 /// 时背景色慢半拍淡入 / 淡出,退出时几何已回列表、场仍越过列表慢褪(故门控用
 /// `ambient_reveal.active()` 而非全屏几何)。跟随静止在关态时整段跳过(背景填充已铺底);
 /// 功能关且色板淡出已到底、或 ANSI 主题无真彩底色时同样跳过。
-fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
+fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>, skip: Option<Rect>) {
     if !app.state.browse.ambient_reveal.active() {
         return;
     }
@@ -302,7 +301,7 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
     ambient::render(
         frame.buffer_mut(),
         area,
-        &app.ambient,
+        app.ambient,
         base,
         cfg,
         app.state.browse.ambient_reveal.progress(),
@@ -313,7 +312,7 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &App, skip: Option<Rect>) {
 
 /// Sixel / iTerm2 的实际图片外框避开背景重绘，防止首 cell 改色导致重发载荷。
 /// Kitty 逐格保留背景；halfblock 和转场按透明度合成，这些路径都不挖洞。
-fn ambient_skip_rect(app: &App, cover: Option<Rect>) -> Option<Rect> {
+fn ambient_skip_rect(app: &FrameView<'_>, cover: Option<Rect>) -> Option<Rect> {
     if !app.state.browse.fullscreen.at_max() || app.state.images.transition.is_some() {
         return None;
     }
@@ -325,24 +324,15 @@ fn ambient_skip_rect(app: &App, cover: Option<Rect>) -> Option<Rect> {
 /// 全屏独立封面跟随在播曲；形变中只画 halfblock，稳态全屏才使用终端图片成品
 /// (避免形变期每帧尺寸变化导致重复编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
 /// 重画安全,形变 / 稳态同一条路),盘面下段叠 `nothing playing` 提示。
-///
-/// # Params:
-///   - `steady_cover`: 终态全屏封面区,进入方向的形变期按它预热当前曲协议编码
-pub(super) fn draw_fullscreen_cover(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    steady_cover: Option<Rect>,
-    app: &App,
-) {
-    let theme = &app.theme;
+pub(super) fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &FrameView<'_>) {
+    let theme = app.theme;
     let Some(track) = app.state.playback.track.as_ref() else {
         vinyl::render(frame, area, &app.state.vinyl, theme);
         return;
     };
     if app.state.browse.fullscreen.at_max() {
         // 切歌转场窗口:新旧两图像素级合成 halfblock(纯 cell,逐帧重画安全),恰好盖住
-        // 新图的离线编码期;同时按当前尺寸预热新图协议((url, dims) 去重),推满落定
-        // 直接 place 高清零闪。缺任一图回落常规路径。
+        // 新图的离线编码期，推满后使用准备阶段已预热的终端成品。缺图时显示已就绪的一端。
         if let Some(transition) = app.state.images.transition.as_ref() {
             let style = BlendStyle::from(*app.state.cfg.tui().cover_transition().style());
             app.state.images.render(
@@ -357,8 +347,6 @@ pub(super) fn draw_fullscreen_cover(
                 frame.buffer_mut(),
                 ImageRenderPhase::Stable,
             );
-            app.state.images.prepare(&transition.to_url, area);
-            prewarm_upcoming(app, area);
             return;
         }
         app.state.images.render(
@@ -369,9 +357,6 @@ pub(super) fn draw_fullscreen_cover(
             frame.buffer_mut(),
             ImageRenderPhase::Stable,
         );
-        // 全屏稳态封面区尺寸固定:顺手把后续若干首按同尺寸提前编码,自动切歌时协议已就绪、
-        // 直接 place，避免切歌瞬间出现空白。
-        prewarm_upcoming(app, area);
     } else {
         // 形变期：halfblock 随封面区长大；无真实图片时保留背景。
         app.state.images.render(
@@ -382,34 +367,6 @@ pub(super) fn draw_fullscreen_cover(
             frame.buffer_mut(),
             ImageRenderPhase::Resizing,
         );
-        // 进入方向:终态封面区固定可知,按它把当前曲的协议编码与形变动画并行预热,
-        // 落定即命中直接上真图,消「落定后先糊后清晰」的等待。`(url, dims)` 去重,整段
-        // 形变只投一次;**绝不按形变中逐帧漂移的 `area` 预热**(那是 churn)。退出方向
-        // 不预热——面板尺寸协议在多尺寸槽位下仍在缓存,回去即命中。
-        if app.state.browse.fullscreen.on()
-            && let (Some(url), Some(steady)) =
-                (track.cover_url.as_ref(), steady_cover.and_then(nonempty))
-        {
-            app.state.images.prepare(url, steady);
-        }
-    }
-}
-
-/// 全屏稳态:给在播曲前后各 `prefetch.prewarm_ahead` 首(图已就绪者)的封面按当前尺寸提前
-/// 编码,切歌(`n` / `p` / 自动接续)时协议已就绪、直接 place 无闪,切歌转场也才拿得到进场图。
-/// 邻居按播放模式环回算(环回那一端也要预热);无在播 / 该首无封面 → 跳过。
-fn prewarm_upcoming(app: &App, area: Rect) {
-    let ahead = *app.state.cfg.tui().prefetch().prewarm_ahead();
-    for idx in app.state.queue_neighbor_indexes(ahead) {
-        if let Some(url) = app
-            .state
-            .player
-            .queue
-            .get(idx)
-            .and_then(|s| s.cover_url.as_ref())
-        {
-            app.state.images.prepare(url, area);
-        }
     }
 }
 
@@ -463,7 +420,7 @@ mod tests {
 
         // 从空 pending 开始形变,使首帧暴露端点预热请求。
         app.state.browse.fullscreen.set(true);
-        let mut morph_pending = app.state.images.encode_pending.borrow().clone();
+        let mut morph_pending = app.state.images.encode_pending.clone();
         assert!(morph_pending.is_empty(), "前置:尚未渲染,pending 为空");
         for frame_no in 0..5 {
             app.state.browse.fullscreen.tick();
@@ -471,17 +428,16 @@ mod tests {
                 !app.state.browse.fullscreen.settled(),
                 "测试需停留在形变中途"
             );
-            t.draw(|f| super::draw(f, &app))?;
+            t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
             if frame_no == 0 {
-                morph_pending = app.state.images.encode_pending.borrow().clone();
+                morph_pending = app.state.images.encode_pending.clone();
                 assert!(
                     !morph_pending.is_empty(),
                     "首个形变帧应派发端点稳态尺寸预热"
                 );
             } else {
                 assert_eq!(
-                    *app.state.images.encode_pending.borrow(),
-                    morph_pending,
+                    app.state.images.encode_pending, morph_pending,
                     "后续形变帧不应追加封面编码派发(churn)"
                 );
             }
@@ -494,10 +450,9 @@ mod tests {
             app.state.browse.fullscreen.tick();
         }
         assert!(app.state.browse.fullscreen.settled(), "形变应在上限内落定");
-        t.draw(|f| super::draw(f, &app))?;
+        t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         assert_eq!(
-            *app.state.images.encode_pending.borrow(),
-            morph_pending,
+            app.state.images.encode_pending, morph_pending,
             "稳态渲染应命中预热的同一 (url, dims) 去重键"
         );
         Ok(())
@@ -515,16 +470,15 @@ mod tests {
         active.tick();
         app.state.channel_search.active = active;
         let mut t = Terminal::new(TestBackend::new(120, 40))?;
-        t.draw(|f| super::draw(f, &app))?;
-        let pending = app.state.images.encode_pending.borrow().clone();
+        t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
+        let pending = app.state.images.encode_pending.clone();
         assert!(!pending.is_empty(), "首个形变帧应预热端点封面编码");
         for _ in 0..3 {
             app.state.channel_search.active.tick();
-            t.draw(|f| super::draw(f, &app))?;
+            t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
         }
         assert_eq!(
-            *app.state.images.encode_pending.borrow(),
-            pending,
+            app.state.images.encode_pending, pending,
             "后续形变帧不应追加编码派发(churn)"
         );
         Ok(())
@@ -560,14 +514,13 @@ mod tests {
         app.state.browse.fullscreen = fs;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
-        t.draw(|f| super::draw(f, &app))?;
+        t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
 
         let next_url = MediaUrl::remote("https://prewarm/1.jpg")?;
         let warmed = app
             .state
             .images
             .encode_pending
-            .borrow()
             .iter()
             .any(|key| key.matches_url(&next_url));
         assert!(warmed, "全屏稳态应提前编码下一首封面");
@@ -598,9 +551,9 @@ mod tests {
         app.state.browse.fullscreen = fs;
 
         let mut t = Terminal::new(TestBackend::new(80, 24))?;
-        t.draw(|f| super::draw(f, &app))?;
+        t.draw(|f| crate::test_support::prepare_and_draw(f, &mut app))?;
 
-        let pending = app.state.images.encode_pending.borrow();
+        let pending = app.state.images.encode_pending;
         for (idx, label) in [(0, "上一首"), (2, "下一首")] {
             let url = MediaUrl::remote(&format!("https://prewarm/{idx}.jpg"))?;
             assert!(

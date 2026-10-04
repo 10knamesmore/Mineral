@@ -209,6 +209,9 @@ pub(crate) struct PopMenu {
 
     /// 交叉轴对齐覆盖(`None` 跟随全局;display-only 下拉强制 `Left` 贴 chip 左下)。
     align: Option<MenuAlign>,
+
+    /// 本层的揭开进度，由浮层准备阶段更新。
+    reveal: OverlayReveal,
 }
 
 impl PopMenu {
@@ -226,6 +229,7 @@ impl PopMenu {
             anchor,
             placement,
             align: None,
+            reveal: OverlayReveal::default(),
         }
     }
 
@@ -245,6 +249,10 @@ impl PopMenu {
             anchor,
             placement,
             align: Some(MenuAlign::Left),
+            reveal: OverlayReveal {
+                own: OverlayReveal::FULL,
+                above: 0,
+            },
         }
     }
 
@@ -270,6 +278,17 @@ impl PopMenu {
 }
 
 impl Overlay for PopMenu {
+    fn prepare(
+        &mut self,
+        _inner: Rect,
+        _ctx: &mut AppState,
+        _theme: &Theme,
+        _advance: bool,
+        reveal: OverlayReveal,
+    ) {
+        self.reveal = reveal;
+    }
+
     fn chrome(&self) -> Chrome {
         let w = self.want_inner_w().saturating_add(2);
         // 外框最小 3 行:候选再少也保有可视的展开过程(1 行高动画退化成闪现)。
@@ -298,10 +317,10 @@ impl Overlay for PopMenu {
             .title(Line::from(format!(" {} ", self.title)).style(Style::new().fg(theme.subtext)))
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
         let list_h = inner.height;
         // 选中高亮随本层揭开进度淡入,与被压住那层的淡出严格同拍(读同一个进度)。
-        let own = ctx.overlay_reveal.get().own.min(OverlayReveal::FULL);
+        let own = self.reveal.own.min(OverlayReveal::FULL);
         let sel_bg = lerp_color(
             theme.base,
             theme.surface0,

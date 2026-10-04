@@ -1,4 +1,4 @@
-//! 详情帧的头图、元数据和列表绘制。稳态推进列表视口并使用终端图片，离屏帧冻结滚动并使用 halfblock。
+//! 详情帧的头图、元数据和列表绘制。稳态使用终端图片，离屏帧使用 halfblock；两者均只读显示状态。
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -10,16 +10,7 @@ use super::meta::draw_meta;
 use super::placeholder::draw_delimiter;
 use crate::image::{ImageContent, ImageRenderPhase};
 use crate::render::theme::Theme;
-use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, DetailFrame, EntityRef};
-
-/// 稳态实拍的视口推进语义(按 scrolloff + 缓动拍数);离屏合成 / 滑动期改用 [`ScrollMotion::Frozen`]。
-fn advancing(state: &AppState) -> ScrollMotion {
-    ScrollMotion::Advancing {
-        scrolloff: state.scrolloff(),
-        glide_ticks: state.list_glide_ticks(),
-    }
-}
 
 /// 稳态一帧：头图走图片引擎，元数据与列表画主帧。
 #[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
@@ -58,13 +49,7 @@ pub(super) fn draw_frame_real(
     let buf = frame.buffer_mut();
     draw_meta(buf, meta_a, dframe, theme, show_back);
     draw_delimiter(buf, delim, theme);
-    // 页面形变按端点离屏绘制，视口在搜索页落定后再推进。
-    let motion = if state.channel_search.active.at_max() {
-        advancing(state)
-    } else {
-        ScrollMotion::Frozen
-    };
-    draw_body(buf, body, dframe, state, theme, motion);
+    draw_body(buf, body, dframe, state, theme);
 }
 
 /// 把一帧渲染到离屏 Buffer：完整图走 halfblock，否则尝试 preview，均缺失时留空。
@@ -102,5 +87,5 @@ pub(super) fn render_frame_to(
     draw_meta(buf, meta_a, dframe, theme, /*show_back*/ false);
     draw_delimiter(buf, delim, theme);
     // 离屏合成(下钻 / 返回滑动期):只读展示当前视口,不推进动画、不改滚动目标。
-    draw_body(buf, body, dframe, state, theme, ScrollMotion::Frozen);
+    draw_body(buf, body, dframe, state, theme);
 }

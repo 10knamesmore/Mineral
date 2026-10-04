@@ -78,16 +78,63 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         draw_fallback(frame, inner, ink);
         return;
     };
-    let mut lyric_paint = state.browse.lyric_view.colors.begin(
-        state.playback.track.as_ref().map(|song| &song.id),
+    let lyric_paint =
+        state
+            .browse
+            .lyric_view
+            .colors
+            .begin(state.cfg.tui().lyrics(), motion, state.frame_now);
+    paint_window(frame, inner, window, theme, &lyric_paint);
+}
+
+/// 根据可见歌词和背景采样更新字词颜色；不生成任何字符格。
+pub(crate) fn prepare(
+    area: Rect,
+    state: &mut AppState,
+    theme: &Theme,
+    motion: LyricMode,
+    background: impl Fn(Rect) -> Color,
+) {
+    let targets = WindowLayout::for_panel(area, state, motion).map_or_else(Vec::new, |window| {
+        let mut targets = Vec::new();
+        for row in &window.rows {
+            let Cell::Primary { line_idx } = row.cell else {
+                continue;
+            };
+            let Some(line) = window.lines.get(line_idx) else {
+                continue;
+            };
+            let words = line.kind.words();
+            if words.is_empty() {
+                continue;
+            }
+            let row_bg = background(row.area);
+            let base = primary_base(row, window.ctx, window.denom, theme, row_bg);
+            let inactive = if Some(line_idx) == window.ctx.focus {
+                lerp_color(base, theme.text, 1, 2)
+            } else {
+                base
+            };
+            targets.extend(super::sweep::word_targets(
+                line_idx,
+                words,
+                (Some(line_idx) == window.ctx.cur).then_some(window.ctx.position_ms),
+                inactive,
+                theme,
+                row_bg,
+                state.cfg.tui().lyrics(),
+            ));
+        }
+        targets
+    });
+    let song = state.playback.track.as_ref().map(|song| &song.id);
+    state.browse.lyric_view.colors.prepare(
+        song,
         state.cfg.tui().lyrics(),
         motion,
-        window.rows.iter().filter_map(|row| match &row.cell {
-            Cell::Primary { line_idx } => Some(*line_idx),
-            Cell::Secondary { .. } | Cell::Spacer => None,
-        }),
+        targets,
+        state.frame_now,
     );
-    paint_window(frame, inner, window, theme, &mut lyric_paint);
 }
 
 /// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)× 时间轴信任档。两档同步用
@@ -546,7 +593,7 @@ fn paint_window(
     inner: Rect,
     window: &WindowLayout<'_>,
     theme: &Theme,
-    lyric_paint: &mut LyricPaint<'_>,
+    lyric_paint: &LyricPaint<'_>,
 ) {
     let cursor_y = inner.y + inner.height / 2;
     let cursor_time = window
@@ -615,6 +662,32 @@ struct CellCtx<'a> {
     text_alpha: &'a LyricTextAlphaConfig,
 }
 
+/// 原文行的距离弱化色，布局准备与绘制使用同一输入。
+fn primary_base(
+    row: &WindowRow,
+    ctx: CellCtx<'_>,
+    denom: u64,
+    theme: &Theme,
+    row_bg: Color,
+) -> Color {
+    let dist = row.dist;
+    let alpha = lerp_permille(
+        permille_of(*ctx.text_alpha.neighbor()),
+        permille_of(*ctx.text_alpha.distant()),
+        dist.saturating_sub(1),
+        denom,
+    );
+    let base = theme.text_over(row_bg, alpha).unwrap_or_else(|| {
+        lerp_color(
+            theme.surface1,
+            theme.surface0,
+            dist.saturating_sub(1),
+            denom,
+        )
+    });
+    base
+}
+
 /// 把一个视觉行渲成 [`Line`]:当前行高亮 / wipe,上一行交叉淡出,其余原文行按距中心 dim,
 /// 副歌词仅随距离弱化，空行渲空。
 fn render_cell<'a>(
@@ -624,7 +697,7 @@ fn render_cell<'a>(
     denom: u64,
     theme: &Theme,
     row_bg: Color,
-    lyric_paint: &mut LyricPaint<'_>,
+    lyric_paint: &LyricPaint<'_>,
 ) -> Line<'a> {
     let dist = row.dist;
     match &row.cell {
@@ -661,20 +734,7 @@ fn render_cell<'a>(
                 0
             };
             // 邻行应比当前行未唱部分更淡，避免切行时反而变暗。
-            let alpha = lerp_permille(
-                permille_of(*ctx.text_alpha.neighbor()),
-                permille_of(*ctx.text_alpha.distant()),
-                dist.saturating_sub(1),
-                denom,
-            );
-            let base = theme.text_over(row_bg, alpha).unwrap_or_else(|| {
-                lerp_color(
-                    theme.surface1,
-                    theme.surface0,
-                    dist.saturating_sub(1),
-                    denom,
-                )
-            });
+            let base = primary_base(row, ctx, denom, theme, row_bg);
             let mut rendered = if let Some(words) = words {
                 let inactive = if Some(*line_idx) == ctx.focus {
                     lerp_color(base, theme.text, 1, 2)

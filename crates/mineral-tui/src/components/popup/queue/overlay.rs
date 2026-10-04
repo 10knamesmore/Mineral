@@ -1,6 +1,5 @@
 //! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
-use std::cell::RefCell;
 use std::time::Instant;
 
 use crossterm::event::KeyEvent;
@@ -48,10 +47,13 @@ pub(crate) struct QueueOverlay {
     pub(super) search: Box<crate::runtime::state::SearchState>,
 
     /// 清除过滤的可见帧与展开进度；装箱避免增大整个浮层枚举。
-    pub(super) expansion: Box<RefCell<ListExpansionState>>,
+    pub(super) expansion: Box<ListExpansionState>,
 
     /// 最近的光标或过滤变化,用于缩略图编码防抖;时长从当前配置读取。
     pub(super) last_sel_change: Instant,
+
+    /// 准备阶段确定的本层与上层揭开进度。
+    pub(super) reveal: OverlayReveal,
 }
 
 impl QueueOverlay {
@@ -62,12 +64,13 @@ impl QueueOverlay {
             search: Box::new(crate::runtime::state::SearchState::new()),
             expansion: Box::default(),
             last_sel_change: Instant::now(),
+            reveal: OverlayReveal::default(),
         }
     }
 
     /// 队列快照替换后钳制光标，并丢弃不再对应当前队列的画面坐标。
     pub(crate) fn clamp(&mut self, len: usize) {
-        self.expansion.get_mut().invalidate();
+        self.expansion.invalidate();
         let selected = self.list.sel();
         self.list.clamp(len);
         if self.list.sel() != selected {
@@ -77,12 +80,12 @@ impl QueueOverlay {
 
     /// 与浮层栈同拍推进搜索展开，结束后释放可见帧。
     pub(crate) fn tick_search_expansion(&mut self) {
-        self.expansion.get_mut().tick();
+        self.expansion.tick();
     }
 
     /// 配置热更时保留搜索展开相位，只重设其速度。
     pub(crate) fn retempo_search_expansion(&mut self, ticks: u16) {
-        self.expansion.get_mut().retempo(ticks);
+        self.expansion.retempo(ticks);
     }
 
     /// 当前光标行(过滤视图位;集成测试断言用)。脚本 ctx 采集要队列真实下标走
@@ -96,7 +99,7 @@ impl QueueOverlay {
     /// ([`dock_full_rect`]),内区去边框后:表头占 1 行,选中行 = 内区 y + 1 + (光标 − 视口
     /// offset)。`offset` 走只读 `Frozen` 快照,平移途中 `pin_cursor` 钳边与渲染端一致。
     pub(crate) fn row_anchor(&self, ctx: &AppState) -> Rect {
-        let full = dock_full_rect(ctx.frame_area.get(), ctx);
+        let full = dock_full_rect(ctx.frame_area, ctx);
         // base_block 是 Borders::ALL,内区四周各去 1。
         let inner = Rect::new(
             full.x.saturating_add(1),
@@ -106,7 +109,7 @@ impl QueueOverlay {
         );
         let len = ctx.player.queue.len();
         let viewport = usize::from(inner.height.saturating_sub(1));
-        let offset = self.list.offset(len, viewport, ScrollMotion::Frozen);
+        let offset = self.list.offset(len, viewport);
         let pinned = scroll::viewport::pin_cursor(self.list.sel(), offset, viewport);
         let dy = u16::try_from(pinned.saturating_sub(offset)).unwrap_or(0);
         Rect::new(
@@ -136,72 +139,15 @@ impl QueueOverlay {
     }
 }
 
-impl Overlay for QueueOverlay {
-    fn chrome(&self) -> Chrome {
-        Chrome {
-            pct_w: 60,
-            pct_h: 70,
-            min_w: 40,
-            min_h: 12,
-            max_w: 96,
-            max_h: 32,
-            animated: true,
-            dock: true,
-            anchor: None,
-            align: None,
-        }
-    }
-
-    fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
-        let border_color = if focused {
-            theme.accent
-        } else {
-            theme.surface1
-        };
-        let inner_w = dock_full_rect(ctx.frame_area.get(), ctx).width;
-        // 顶栏:` queue ` + `/query` 输入片段(与浏览页同位,输入框在上不在底栏)。
-        let mut title = vec![Span::styled(" queue ", Style::new().fg(theme.subtext))];
-        title.extend(self.search_input(theme));
-        base_block(theme)
-            .border_style(Style::new().fg(border_color))
-            .title(Line::from(title))
-            // 底栏左下:过滤态 `命中位 / 命中数`,否则 `n / total`。
-            .title_bottom(
-                Line::from(self.position_bottom(ctx)).style(Style::new().fg(theme.overlay)),
-            )
-            .title_bottom(
-                Line::from(remaining_label(ctx, inner_w))
-                    .right_aligned()
-                    .style(Style::new().fg(theme.overlay)),
-            )
-    }
-
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
-        let reveal = ctx.overlay_reveal.get();
-        let surface = if reveal.own == OverlayReveal::FULL && reveal.yielded() == 0 {
-            let area = Rect::new(
-                inner.x.saturating_sub(1),
-                inner.y.saturating_sub(1),
-                inner.width.saturating_add(2),
-                inner.height.saturating_add(2),
-            );
-            let body = Rect::new(
-                inner.x,
-                inner.y.saturating_add(1),
-                inner.width,
-                inner.height.saturating_sub(1),
-            );
-            Some(list_expansion::begin_list(
-                buf,
-                area,
-                body,
-                &self.expansion.borrow(),
-                ListExpansionScope::Queue,
-            ))
-        } else {
-            self.expansion.borrow_mut().invalidate();
-            None
-        };
+impl QueueOverlay {
+    /// 按同一行构造器生成当前窗口或展开旧端的表格输入。
+    fn table(
+        &self,
+        inner: Rect,
+        ctx: &AppState,
+        theme: &Theme,
+        window: std::ops::Range<usize>,
+    ) -> (Table<'static>, Vec<Rect>, QueueColumns) {
         // 在播样式按 server 的队列位置锚点定位;按歌曲身份匹配会点亮重复曲的所有副本。
         let current_idx = ctx.queue_current_index();
         let cols =
@@ -220,10 +166,6 @@ impl Overlay for QueueOverlay {
             .map_or(0, |column| column.width);
         // 过滤视图:按匹配分降序的队列真实下标;无过滤词恒等 `0..len`。空命中时画占位。
         let visible = self.visible(ctx);
-        if visible.is_empty() && self.is_filtering() {
-            self.render_no_matches(buf, inner, theme);
-            return;
-        }
         let sel = self.list.sel();
         let build_table = |window: std::ops::Range<usize>| {
             let rows: Vec<Row<'_>> = window
@@ -248,7 +190,7 @@ impl Overlay for QueueOverlay {
 
             // 焦点让给压在上面的菜单时,选中高亮按其揭开进度淡向底色——两层同时全亮会读成
             // 「两处都在等输入」。用同一个进度插值,交接与菜单的淡入严格同拍。
-            let yielded = ctx.overlay_reveal.get().yielded();
+            let yielded = self.reveal.yielded();
             let (num, denom) = (u64::from(yielded), u64::from(OverlayReveal::FULL));
             let highlight_bg = lerp_color(theme.surface0, theme.base, num, denom);
             let highlight_fg = lerp_color(theme.accent, theme.subtext, num, denom);
@@ -263,30 +205,255 @@ impl Overlay for QueueOverlay {
                 .highlight_symbol("▌ ")
         };
 
-        // 视口行数 = 内区高 - 表头(边框归浮层 chrome);offset 跨帧持久 + 缓动平移。
-        // 行数按过滤视图长度(而非队列全长),视口 / offset 才与实际画的行数对齐。
-        let viewport = usize::from(inner.height.saturating_sub(1));
+        (build_table(window), columns, cols)
+    }
+}
+
+impl Overlay for QueueOverlay {
+    fn chrome(&self) -> Chrome {
+        Chrome {
+            pct_w: 60,
+            pct_h: 70,
+            min_w: 40,
+            min_h: 12,
+            max_w: 96,
+            max_h: 32,
+            animated: true,
+            dock: true,
+            anchor: None,
+            align: None,
+        }
+    }
+
+    fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+        let border_color = if focused {
+            theme.accent
+        } else {
+            theme.surface1
+        };
+        let inner_w = dock_full_rect(ctx.frame_area, ctx).width;
+        // 顶栏:` queue ` + `/query` 输入片段(与浏览页同位,输入框在上不在底栏)。
+        let mut title = vec![Span::styled(" queue ", Style::new().fg(theme.subtext))];
+        title.extend(self.search_input(theme));
+        base_block(theme)
+            .border_style(Style::new().fg(border_color))
+            .title(Line::from(title))
+            // 底栏左下:过滤态 `命中位 / 命中数`,否则 `n / total`。
+            .title_bottom(
+                Line::from(self.position_bottom(ctx)).style(Style::new().fg(theme.overlay)),
+            )
+            .title_bottom(
+                Line::from(remaining_label(ctx, inner_w))
+                    .right_aligned()
+                    .style(Style::new().fg(theme.overlay)),
+            )
+    }
+
+    fn prepare(
+        &mut self,
+        inner: Rect,
+        ctx: &mut AppState,
+        theme: &Theme,
+        advance: bool,
+        reveal: OverlayReveal,
+    ) {
+        self.reveal = reveal;
+        let visible = self.visible(ctx);
         let motion = ScrollMotion::Advancing {
             scrolloff: ctx.scrolloff(),
             glide_ticks: ctx.list_glide_ticks(),
         };
-        let window = render_scroll_table(
-            buf,
-            inner,
-            build_table,
-            &self.list,
+        let ticks = ctx.minimap_cursor_ticks();
+        let viewport = usize::from(inner.height.saturating_sub(1));
+        self.list
+            .prepare(visible.len(), viewport, motion, ticks, advance);
+        let current = ctx.queue_current_index();
+        let playing = visible
+            .iter()
+            .enumerate()
+            .filter_map(|(index, raw)| (Some(*raw) == current).then_some(index));
+        let track = Rect::new(inner.right(), inner.y, 1, inner.height);
+        crate::components::layout::shared::list_minimap::prepare_minimap(
+            &mut self.list,
             visible.len(),
-            viewport,
+            track,
+            playing,
             motion,
+            ticks,
+            ctx.cfg.tui().minimap(),
+            advance,
         );
+        let cols =
+            QueueColumns::for_width(inner.width).with_thumbnails(ctx.images.supports_thumbnails());
+        let columns = resolve_column_rects(inner, &cols.widths(), 2);
+        let offset = self.list.offset(visible.len(), viewport);
+        let window = offset..offset.saturating_add(viewport).min(visible.len());
+        let selected = self.list.sel();
+        if window.contains(&selected)
+            && let Some(song) = visible
+                .get(selected)
+                .and_then(|index| ctx.player.queue.get(*index))
+        {
+            let width = columns
+                .get(cols.title_index())
+                .map_or(0, |column| column.width);
+            crate::components::layout::shared::marquee::prepare_song(
+                &mut ctx.marquees,
+                Slot::QueueSelected,
+                song,
+                width,
+            );
+        }
         if cols.thumbnails
             && let Some(column) = columns.get(1)
         {
-            let phase = if ctx.overlay_reveal.get().own < OverlayReveal::FULL {
+            let phase = if reveal.own < OverlayReveal::FULL {
                 ImageRenderPhase::Offscreen
             } else {
                 thumbnail_phase(ctx, motion, self.last_sel_change)
             };
+            let covers = window.map(|index| {
+                visible
+                    .get(index)
+                    .and_then(|index| ctx.player.queue.get(*index))
+                    .and_then(|song| song.cover_url.as_ref())
+            });
+            crate::components::layout::shared::thumbnails::prepare_table_thumbnails(
+                &mut ctx.images,
+                *column,
+                covers,
+                phase,
+            );
+        }
+        if reveal.own != OverlayReveal::FULL || reveal.yielded() != 0 {
+            self.expansion.invalidate();
+        } else {
+            use crate::components::layout::shared::list_minimap::{MinimapCursor, MinimapEntry};
+            use crate::components::layout::shared::scroll_table::{PreparedMinimap, PreparedTable};
+            let area = Rect::new(
+                inner.x.saturating_sub(1),
+                inner.y.saturating_sub(1),
+                inner.width.saturating_add(2),
+                inner.height.saturating_add(2),
+            );
+            let body = Rect::new(
+                inner.x,
+                inner.y.saturating_add(1),
+                inner.width,
+                inner.height.saturating_sub(1),
+            );
+            let filtered = self.is_filtering().then(|| {
+                let range = offset..offset.saturating_add(viewport).min(visible.len());
+                let (table, columns, cols) = self.table(inner, ctx, theme, range.clone());
+                let images =
+                    columns
+                        .get(1)
+                        .filter(|_| cols.thumbnails)
+                        .map_or_else(Vec::new, |column| {
+                            crate::components::layout::shared::thumbnails::snapshot_thumbnails(
+                                &ctx.images,
+                                *column,
+                                range.clone().map(|index| {
+                                    visible
+                                        .get(index)
+                                        .and_then(|raw| ctx.player.queue.get(*raw))
+                                        .and_then(|song| song.cover_url.as_ref())
+                                }),
+                            )
+                        });
+                let rows = range
+                    .filter_map(|index| visible.get(index).copied())
+                    .map(ListRowIdentity::Queue)
+                    .collect();
+                let entries = visible
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, &raw)| {
+                        let song = ctx.player.queue.get(raw)?;
+                        let loved = ctx.is_liked(song);
+                        let playing = current == Some(raw);
+                        (loved || playing).then_some(MinimapEntry {
+                            index,
+                            loved,
+                            playing,
+                        })
+                    })
+                    .collect();
+                let content = PreparedTable {
+                    table,
+                    area: inner,
+                    border: Some((area, self.block(ctx, theme, true))),
+                    images,
+                    selected: (!visible.is_empty()).then(|| {
+                        scroll::viewport::pin_cursor(self.list.sel(), offset, viewport)
+                            .saturating_sub(offset)
+                    }),
+                    minimap: Some(PreparedMinimap {
+                        area: track,
+                        total: visible.len(),
+                        cursor: MinimapCursor::new(
+                            &self.list,
+                            visible.len(),
+                            ctx.cfg.tui().minimap(),
+                        ),
+                        entries,
+                        theme: *theme,
+                    }),
+                };
+                crate::runtime::state::FilteredListFrame {
+                    scope: ListExpansionScope::Queue,
+                    area,
+                    body,
+                    content,
+                    rows,
+                }
+            });
+            self.expansion.prepare(area, body, filtered);
+            self.expansion.retain_images(&mut ctx.images);
+        }
+    }
+
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
+        let reveal = self.reveal;
+        let surface = if reveal.own == OverlayReveal::FULL && reveal.yielded() == 0 {
+            let area = Rect::new(
+                inner.x.saturating_sub(1),
+                inner.y.saturating_sub(1),
+                inner.width.saturating_add(2),
+                inner.height.saturating_add(2),
+            );
+            let body = Rect::new(
+                inner.x,
+                inner.y.saturating_add(1),
+                inner.width,
+                inner.height.saturating_sub(1),
+            );
+            Some(list_expansion::begin_list(
+                buf,
+                area,
+                body,
+                &self.expansion,
+                ListExpansionScope::Queue,
+            ))
+        } else {
+            None
+        };
+        let visible = self.visible(ctx);
+        if visible.is_empty() && self.is_filtering() {
+            self.render_no_matches(buf, inner, theme);
+            return;
+        }
+        // 视口行数 = 内区高 - 表头(边框归浮层 chrome);offset 跨帧持久 + 缓动平移。
+        // 行数按过滤视图长度(而非队列全长),视口 / offset 才与实际画的行数对齐。
+        let viewport = usize::from(inner.height.saturating_sub(1));
+        let offset = self.list.offset(visible.len(), viewport);
+        let range = offset..offset.saturating_add(viewport).min(visible.len());
+        let (table, columns, cols) = self.table(inner, ctx, theme, range);
+        let window =
+            render_scroll_table(buf, inner, |_| table, &self.list, visible.len(), viewport);
+        if cols.thumbnails
+            && let Some(column) = columns.get(1)
+        {
             render_table_thumbnails(
                 buf,
                 &ctx.images,
@@ -297,21 +464,10 @@ impl Overlay for QueueOverlay {
                         .and_then(|&raw_index| ctx.player.queue.get(raw_index))
                         .and_then(|song| song.cover_url.as_ref())
                 }),
-                phase,
             );
         }
         if let Some(surface) = surface {
-            list_expansion::finish_list(
-                buf,
-                &mut self.expansion.borrow_mut(),
-                theme,
-                surface,
-                window.clone(),
-                window
-                    .filter_map(|index| visible.get(index).copied())
-                    .map(ListRowIdentity::Queue),
-                self.is_filtering(),
-            );
+            list_expansion::finish_list(buf, &self.expansion, theme, surface, window.clone());
         }
     }
 
@@ -327,7 +483,7 @@ impl Overlay for QueueOverlay {
     }
 
     fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
-        self.expansion.get_mut().interrupt();
+        self.expansion.interrupt();
         // `/` 输入态:吞键进过滤词(文本编辑),优先于一切动作与半穿透。
         if self.is_typing() {
             return self.on_search_key(key, ctx);
@@ -338,7 +494,7 @@ impl Overlay for QueueOverlay {
     }
 
     fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
-        self.expansion.get_mut().interrupt();
+        self.expansion.interrupt();
         // `/` 输入态:所有键让给 on_key 做文本编辑(裸 KeyCode 分派),动作层一律不认。
         if self.is_typing() {
             return None;
@@ -476,8 +632,7 @@ mod tests {
         use ratatui::layout::Rect;
 
         use crate::components::layout::shared::thumbnails::THUMBNAIL_COLUMNS;
-        use crate::image::{ImageEngine, ImageRenderPhase};
-        use crate::runtime::scroll::list::ScrollMotion;
+        use crate::image::ImageEngine;
         use crate::runtime::state::OverlayReveal;
 
         let theme = crate::test_support::default_theme()?;
@@ -496,12 +651,8 @@ mod tests {
                 let url = MediaUrl::remote(&format!("https://example.com/queue-{index}.png"))?;
                 ctx.images.insert_test_thumbnail(&url)?;
                 let mut probe = Buffer::empty(Rect::new(0, 0, THUMBNAIL_COLUMNS, 1));
-                ctx.images.render_thumbnail(
-                    Some(&url),
-                    probe.area,
-                    &mut probe,
-                    ImageRenderPhase::Stable,
-                );
+                ctx.images
+                    .render_thumbnail(Some(&url), probe.area, &mut probe);
                 previews.push(
                     probe
                         .cell((0, 0))
@@ -569,27 +720,23 @@ mod tests {
             };
 
             // 抽屉半开(own < FULL):封面按 Offscreen 阶段出,窗口在过滤视图首段(含缺图行)。
-            ctx.overlay_reveal.set(OverlayReveal { own: 500, above: 0 });
+            overlay.reveal = OverlayReveal { own: 500, above: 0 };
             let mut buffer = Buffer::empty(area);
             overlay.render_content(&mut buffer, area, &ctx, &theme);
-            let offset = overlay
-                .list
-                .offset(visible.len(), viewport, ScrollMotion::Frozen);
+            let offset = overlay.list.offset(visible.len(), viewport);
             assert_eq!(offset, 0);
             assert_window(offset, &buffer)?;
 
             // 稳态下将「末行」操作选中的曲目放到窗口底部,覆盖过滤视图尾段。
-            ctx.overlay_reveal.set(OverlayReveal {
+            overlay.reveal = OverlayReveal {
                 own: OverlayReveal::FULL,
                 above: 0,
-            });
+            };
             overlay.on_action(Action::MoveSelection(SelectionMove::Last), &ctx);
             overlay.list.place(overlay.cursor(), viewport - 1);
             let mut buffer = Buffer::empty(area);
             overlay.render_content(&mut buffer, area, &ctx, &theme);
-            let offset = overlay
-                .list
-                .offset(visible.len(), viewport, ScrollMotion::Frozen);
+            let offset = overlay.list.offset(visible.len(), viewport);
             assert_eq!(offset, visible.len() - viewport);
             assert_window(offset, &buffer)?;
         }

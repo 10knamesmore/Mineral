@@ -12,6 +12,25 @@ use crate::render::theme::Theme;
 use crate::runtime::marquee::{Marquees, Slot};
 use crate::runtime::state::AppState;
 
+/// 歌曲主名和别名在标题中的完整列宽；样式不会改变列数。
+pub(crate) fn song_title_width(song: &mineral_model::Song) -> u16 {
+    display_width(&song.name).saturating_add(
+        song.alias
+            .as_deref()
+            .map_or(0, |alias| display_width(alias).saturating_add(3)),
+    )
+}
+
+/// 在布局确定后绑定一个歌曲标题的显示身份与窗口。
+pub(crate) fn prepare_song(
+    marquees: &mut Marquees,
+    slot: Slot,
+    song: &mineral_model::Song,
+    width: u16,
+) {
+    marquees.prepare(slot, &song.id.qualified(), song_title_width(song), width);
+}
+
 /// 一次 title marquee 渲染的共享上下文:相位状态 + gap / fade 配置(从 [`AppState`] 摘取)。
 pub(crate) struct MarqueeCtx<'a> {
     /// 相位状态(槽 → 起始拍)。

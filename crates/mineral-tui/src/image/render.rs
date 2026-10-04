@@ -1,7 +1,7 @@
 //! 根据图片内容和渲染阶段统一选择终端成品或 halfblock。
 //!
 //! 稳定区域可以复用缓存的终端成品；区域逐帧变化或离屏合成只使用纯 cell
-//! halfblock。终端成品未就绪时当前帧仍显示低清图片，并在允许的阶段投递后台编码；
+//! halfblock。准备入口协调解码与编码；绘制只读取就绪成品，未就绪时显示低清图片。
 //! 完整源图片未就绪时优先显示真实低清 preview；preview 也未就绪时保留调用方背景。
 
 use std::sync::Arc;
@@ -109,6 +109,21 @@ pub(crate) enum ImageRenderPhase {
 }
 
 impl ImageEngine {
+    /// 测试中模拟一次图片需求准备和绘制；生产入口由组件准备分别调用。
+    #[cfg(test)]
+    pub(crate) fn prepare_and_render(
+        &mut self,
+        content: ImageContent<'_>,
+        area: Rect,
+        buf: &mut Buffer,
+        phase: ImageRenderPhase,
+    ) {
+        self.begin_preparation();
+        self.prepare_display(content, area, phase);
+        self.finish_preparation();
+        self.render(content, area, buf, phase);
+    }
+
     /// 按图片内容与渲染阶段完成本帧绘制。
     ///
     /// # Params:
@@ -150,7 +165,7 @@ impl ImageEngine {
     }
 
     /// 提前准备 URL 图片在稳定区域使用的终端成品。
-    pub(crate) fn prepare(&self, url: &MediaUrl, area: Rect) {
+    pub(crate) fn prepare(&mut self, url: &MediaUrl, area: Rect) {
         let target = square_subarea(area, self.cell_pixels());
         let Some(image) = self.cache.get(url).cloned() else {
             self.demand_decode(url);
@@ -158,6 +173,64 @@ impl ImageEngine {
         };
         let target = fitted_area(target, &image, self.cell_pixels());
         self.prepare_image(ImageIdentity::Url(url.clone()), image, target);
+    }
+
+    /// 根据内容、稳定尺寸和显示阶段协调资源；不生成像素或终端输出。
+    pub(crate) fn prepare_display(
+        &mut self,
+        content: ImageContent<'_>,
+        area: Rect,
+        phase: ImageRenderPhase,
+    ) {
+        if area.is_empty() {
+            return;
+        }
+        let url = match content {
+            ImageContent::Display { url } => url,
+            ImageContent::Blend { from, to, .. } => {
+                self.cache.observe_visible(from);
+                self.cache.observe_visible(to);
+                if self.cache.contains_key(from) && self.cache.contains_key(to) {
+                    return;
+                }
+                Some(to)
+            }
+        };
+        if let Some(url) = url {
+            self.cache.observe_visible(url);
+        }
+        let target = square_subarea(area, self.cell_pixels());
+        if matches!(
+            phase,
+            ImageRenderPhase::Stable | ImageRenderPhase::Scrolling
+        ) {
+            self.observe_preview_target(target);
+        }
+        if phase == ImageRenderPhase::Stable
+            && let Some(url) = url
+        {
+            self.demand_decode(url);
+        }
+        let Some((identity, image)) = self.resolve_display(url) else {
+            if let Some(url) = url {
+                self.preview_images.observe(&self.preview_key(url, target));
+            }
+            return;
+        };
+        if matches!(
+            phase,
+            ImageRenderPhase::Resizing | ImageRenderPhase::Offscreen
+        ) {
+            return;
+        }
+        let target = fitted_area(target, &image, self.cell_pixels());
+        let key = self.terminal_key(identity.clone(), target);
+        self.terminal_images.observe(&key);
+        if self.terminal_images.contains(&key) {
+            self.graphics_placements.push((key, target));
+        } else if phase == ImageRenderPhase::Stable {
+            self.prepare_image(identity, image, target);
+        }
     }
 
     /// 两张已解码封面是否同一张图(内容指纹比对)。任一未解码时为 `false`。
@@ -172,7 +245,7 @@ impl ImageEngine {
     ///
     /// # Params:
     ///   - `url`: 本帧确实参与展示的封面
-    pub(crate) fn observe_visible(&self, url: &MediaUrl) {
+    pub(crate) fn observe_visible(&mut self, url: &MediaUrl) {
         self.cache.observe_visible(url);
     }
 
@@ -207,21 +280,7 @@ impl ImageEngine {
         buf: &mut Buffer,
         phase: ImageRenderPhase,
     ) {
-        if let Some(url) = url {
-            self.cache.observe_visible(url);
-        }
         let target = square_subarea(area, self.cell_pixels());
-        if matches!(
-            phase,
-            ImageRenderPhase::Stable | ImageRenderPhase::Scrolling
-        ) {
-            self.observe_preview_target(target);
-        }
-        if phase == ImageRenderPhase::Stable
-            && let Some(url) = url
-        {
-            self.demand_decode(url);
-        }
         let Some((identity, image)) = self.resolve_display(url) else {
             if let Some(url) = url {
                 let key = self.preview_key(url, target);
@@ -243,17 +302,12 @@ impl ImageEngine {
         let rendered = self
             .terminal_images
             .render_if_ready(&key, |terminal_image| {
-                if let Some(command) = terminal_image.render(target, buf) {
-                    self.graphics_commands.borrow_mut().push_str(&command);
-                }
+                terminal_image.render(target, buf);
             });
         if rendered {
             return;
         }
         render_halfblock_to(buf, target, &image, self.cell_pixels(), self.cell_fit());
-        if phase == ImageRenderPhase::Stable {
-            self.prepare_image(identity, image, target);
-        }
     }
 
     /// 合成两张已解码图片；任一未就绪时尝试显示进场图片。
@@ -264,8 +318,6 @@ impl ImageEngine {
         buf: &mut Buffer,
         phase: ImageRenderPhase,
     ) {
-        self.cache.observe_visible(content.from);
-        self.cache.observe_visible(content.to);
         let (Some(from_image), Some(to_image)) =
             (self.cache.get(content.from), self.cache.get(content.to))
         else {
@@ -322,7 +374,7 @@ impl ImageEngine {
     }
 
     /// 去重并投递一个终端图片编码任务。
-    fn prepare_image(&self, identity: ImageIdentity, image: Arc<DynamicImage>, target: Rect) {
+    fn prepare_image(&mut self, identity: ImageIdentity, image: Arc<DynamicImage>, target: Rect) {
         if target.width == 0 || target.height == 0 {
             return;
         }
@@ -330,7 +382,7 @@ impl ImageEngine {
         if self.terminal_images.contains(&key) {
             return;
         }
-        if self.encode_pending.borrow_mut().insert(key.clone()) {
+        if self.encode_pending.insert(key.clone()) {
             mineral_log::debug!(target: "cover", source_width = image.width(), source_height = image.height(),
                 cells = ?(target.width, target.height), cell_pixels = ?self.cell_pixels(),
                 protocol = ?self.graphics_protocol(), cell_fit = ?self.cell_fit(), "prepare fitted cover image");
@@ -551,6 +603,48 @@ mod tests {
 
     use super::render_halfblock_to;
 
+    /// 绘制次数及对未准备图片的只读绘制，都不能改变请求或预算保活。
+    #[test]
+    fn painting_does_not_schedule_or_retain_images() -> color_eyre::Result<()> {
+        use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
+        use mineral_model::MediaUrl;
+        use std::sync::Arc;
+        let first = MediaUrl::remote("https://example.com/visible.png")?;
+        let second = MediaUrl::remote("https://example.com/unused.png")?;
+        let area = Rect::new(0, 0, 4, 2);
+        for paints in [0, 1, 2] {
+            let mut engine = ImageEngine::disabled(Arc::new(mineral_config::Config::defaults()?));
+            for url in [&first, &second] {
+                engine
+                    .cache
+                    .insert_test(url, Arc::new(DynamicImage::ImageRgb8(RgbImage::new(8, 8))));
+            }
+            engine.begin_preparation();
+            engine.prepare_display(
+                ImageContent::Display { url: Some(&first) },
+                area,
+                ImageRenderPhase::Stable,
+            );
+            engine.finish_preparation();
+            let requests = engine.encode_pending.clone();
+            for _ in 0..paints {
+                for url in [&first, &second] {
+                    engine.render(
+                        ImageContent::Display { url: Some(url) },
+                        area,
+                        &mut Buffer::empty(area),
+                        ImageRenderPhase::Stable,
+                    );
+                }
+            }
+            assert_eq!(engine.encode_pending, requests);
+            engine.set_budgets(8 * 8 * 3, 1024, 1024);
+            assert!(engine.cache.contains_key(&first));
+            assert!(!engine.cache.contains_key(&second));
+        }
+        Ok(())
+    }
+
     /// Kitty 图片已经就绪时，留白背景仍逐格更新，而且不再次传输或创建 placement。
     #[test]
     fn kitty_cover_background_updates_without_retransmission() -> color_eyre::Result<()> {
@@ -601,7 +695,7 @@ mod tests {
                         .set_bg(Color::Rgb(u8::try_from(x)?, u8::try_from(y)?, step * 100));
                 }
             }
-            engine.render(
+            engine.prepare_and_render(
                 ImageContent::Display { url: Some(&url) },
                 area,
                 &mut buffer,
@@ -619,11 +713,11 @@ mod tests {
                 }
             }
             if step == 0 {
-                let commands = std::mem::take(&mut *engine.graphics_commands.borrow_mut());
+                let commands = engine.take_graphics_commands();
                 assert!(commands.contains("a=t"));
                 assert!(commands.contains("a=p"));
             } else {
-                assert!(engine.graphics_commands.borrow().is_empty());
+                assert!(engine.take_graphics_commands().is_empty());
                 assert_eq!(
                     previous.diff(&buffer).len(),
                     usize::from(area.width) * usize::from(area.height)

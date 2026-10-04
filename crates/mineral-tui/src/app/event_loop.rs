@@ -28,7 +28,7 @@ impl App {
         ticks16_from_ms(*anim.transition_ms(), *anim.frame_tick_ms())
     }
 
-    /// 同步主事件循环:绘制 → 等事件 → 每帧间隔拉数据 + 推进动画/频谱
+    /// 同步主事件循环：准备显示输入 → 绘制并提交 → 等事件 → 更新数据与动画
     /// (节奏由配置 `animation.frame_tick_ms` 决定,默认 ~60fps)。
     pub fn run(&mut self, tui: &mut Tui) -> crate::Result<()> {
         // 启动时先灌一次镜像(订阅已在连接后建立,首帧通常已到达)。
@@ -48,6 +48,7 @@ impl App {
         // 让 `Tui::exit` 有机会还原终端。
         let shutdown = crate::runtime::signal::spawn_watcher()?;
 
+        let mut advance_preparation = true;
         while !self.should_quit {
             if shutdown.load(Ordering::Acquire) {
                 self.should_quit = true;
@@ -59,6 +60,15 @@ impl App {
                 mineral_log::error!(target: "tui", "daemon connection lost, awaiting key to exit");
                 self.overlays.push(OverlayKind::disconnect());
             }
+            if self.overlays.is_disconnected() {
+                self.transition = None;
+            }
+            let area = tui.area()?;
+            self.prepare_view(
+                area,
+                Instant::now(),
+                std::mem::take(&mut advance_preparation),
+            );
             // 窗口标题与 ratatui draw 走不同通道,在 draw 之前单独更新。
             // 歌词行仅在有模板引用它时才按需拼接(拼接要定位当前行 + 拥有化文本),
             // 先落局部持有,再借进 context。
@@ -85,10 +95,8 @@ impl App {
             if self.overlays.is_disconnected() {
                 // 只渲染断连提示 + 推进其弹出动画 + 等按键退出;daemon 没了,正常路径全是
                 // 兜底默认值,跳过后端同步。fatal 态直接退出(不走 dispatch,不玩退出收缩动画)。
-                // 清掉转场:本分支不推进它,启动即断连否则会把扩大动画卡在空屏。
-                self.transition = None;
                 tui.draw(|f| {
-                    draw(f, self);
+                    draw(f, &self.frame_view());
                     self.state.images.flush_graphics_commands()
                 })?;
                 if event::poll(self.frame_tick())?
@@ -98,11 +106,12 @@ impl App {
                     self.should_quit = true;
                 }
                 self.overlays.tick();
+                advance_preparation = true;
                 continue;
             }
 
             tui.draw(|f| {
-                draw(f, self);
+                draw(f, &self.frame_view());
                 self.state.images.flush_graphics_commands()
             })?;
 
@@ -115,6 +124,7 @@ impl App {
                 // 跳过后端同步;退出转场归零即退,启动转场推满即转入正常运行。
                 if self.transition.is_some() {
                     self.tick_transition();
+                    advance_preparation = true;
                     self.last_tick = Instant::now();
                     continue;
                 }
@@ -123,12 +133,13 @@ impl App {
                 self.sync_from_backend();
                 self.update_spectrum();
                 self.state.tick_frame();
+                advance_preparation = true;
                 self.tick_overlays();
                 self.tick_images();
                 self.client.flush_task_submissions();
                 self.notifications.tick();
                 // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。
-                self.state.now.set(chrono::Local::now());
+                self.state.now = chrono::Local::now();
                 self.last_tick = Instant::now();
                 // 心跳间隔现读配置(daemon.heartbeat_secs),热更下一轮生效。
                 let heartbeat = Duration::from_secs(*self.state.cfg.daemon().heartbeat_secs());

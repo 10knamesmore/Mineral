@@ -8,6 +8,7 @@ pub mod playlist;
 pub mod track;
 
 pub use panel::draw;
+pub(crate) use panel::prepare;
 
 #[cfg(test)]
 mod tests;

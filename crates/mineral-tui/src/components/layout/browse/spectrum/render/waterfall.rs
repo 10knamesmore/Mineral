@@ -23,7 +23,6 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
         return;
     }
     let cols = usize::from(area.width).max(1);
-    state.target_bars.set(cols);
     // 对比 gamma 现读,整面共用;幅度→色前统一按它重标(见 [`contrast_gamma`])。
     let contrast = *state.cfg().waterfall().contrast();
     // 端点色每字符列算一次,整面历史共用(热力色只差幅度档)。

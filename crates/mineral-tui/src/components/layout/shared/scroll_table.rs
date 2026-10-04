@@ -6,7 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::{StatefulWidget, Table, TableState};
 
-use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
+use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::scroll::viewport::pin_cursor;
 
 /// 先按完整列表求视口，再构造可见行并渲染到 `area`。
@@ -21,10 +21,9 @@ use crate::runtime::scroll::viewport::pin_cursor;
 ///   - `list`: 该列表的光标 + 视口滚动态
 ///   - `len`: 列表总行数
 ///   - `viewport`: 视口数据行数
-///   - `motion`: 视口推进语义
 ///
 /// # Return:
-///   本帧实际构造的可见范围；行上 overlay 必须复用它，避免再次求 offset 推进滚动。
+///   本帧实际构造的可见范围，供行内图片等内容复用。
 pub(crate) fn render_scroll_table<'a>(
     buf: &mut Buffer,
     area: Rect,
@@ -32,9 +31,8 @@ pub(crate) fn render_scroll_table<'a>(
     list: &ScrollList,
     len: usize,
     viewport: usize,
-    motion: ScrollMotion,
 ) -> Range<usize> {
-    let offset = list.offset(len, viewport, motion);
+    let offset = list.offset(len, viewport);
     let visible = offset..offset.saturating_add(viewport).min(len);
     let table = build_table(visible.clone());
     // Table 只含可见窗口，高亮下标也必须平移到窗口内；逻辑光标和滚动仍使用完整列表。
@@ -43,6 +41,70 @@ pub(crate) fn render_scroll_table<'a>(
     ));
     StatefulWidget::render(table, area, buf, &mut state);
     visible
+}
+
+/// 可在之后重新绘制的表格输入，保存可见文本而非已画出的屏幕。
+pub(crate) struct PreparedTable {
+    /// 已组装的可见表格行、表头和样式。
+    pub(crate) table: Table<'static>,
+
+    /// 表格区域，浮层表格不包含外框。
+    pub(crate) area: Rect,
+
+    /// 可见窗口内的选中行。
+    pub(crate) selected: Option<usize>,
+
+    /// 表格外部的浮层外框。
+    pub(crate) border: Option<(Rect, ratatui::widgets::Block<'static>)>,
+
+    /// 旧端已经就绪的行内图片。
+    pub(crate) images: Vec<crate::image::InlineImage>,
+
+    /// 原列表的右边框标记。
+    pub(crate) minimap: Option<PreparedMinimap>,
+}
+
+/// 列表概览的只读输入；只保留有标记的条目。
+pub(crate) struct PreparedMinimap {
+    /// 绘制轨道。
+    pub(crate) area: Rect,
+
+    /// 过滤后的列表长度。
+    pub(crate) total: usize,
+
+    /// 已采样的光标和吸附进度。
+    pub(crate) cursor: super::list_minimap::MinimapCursor,
+
+    /// 有喜欢或在播标记的条目。
+    pub(crate) entries: Vec<super::list_minimap::MinimapEntry>,
+
+    /// 旧视图的主题。
+    pub(crate) theme: crate::render::theme::Theme,
+}
+
+impl PreparedTable {
+    /// 从准备结果绘制旧视图；所有临时 widget 状态都局限于本次调用。
+    pub(crate) fn paint(&self, buffer: &mut Buffer) {
+        use ratatui::widgets::Widget;
+        if let Some((area, block)) = &self.border {
+            block.clone().render(*area, buffer);
+        }
+        let mut state = TableState::default().with_selected(self.selected);
+        StatefulWidget::render(self.table.clone(), self.area, buffer, &mut state);
+        for image in &self.images {
+            image.paint(buffer);
+        }
+        if let Some(minimap) = &self.minimap {
+            super::list_minimap::render_minimap(
+                buffer,
+                minimap.area,
+                minimap.total,
+                minimap.cursor,
+                minimap.entries.iter().copied(),
+                &minimap.theme,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -82,8 +144,9 @@ mod tests {
         for selected in [0, 55, 119, 1] {
             list.set_sel(selected);
             for _ in 0..8 {
+                list.prepare(len, viewport, motion, 4, true);
                 let reference = list.clone();
-                let offset = reference.offset(len, viewport, motion);
+                let offset = reference.offset(len, viewport);
                 let mut full = Buffer::empty(area);
                 let mut cursor = TableState::default()
                     .with_offset(offset)
@@ -100,7 +163,6 @@ mod tests {
                     &list,
                     len,
                     viewport,
-                    motion,
                 );
                 assert_eq!(windowed, full, "选中 {selected} 时屏幕内容应一致");
             }

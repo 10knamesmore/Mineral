@@ -61,7 +61,8 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
 }
 
 /// 通过生产入口绘制右栏以触发封面编码请求。
-fn render(state: &AppState, theme: &Theme, cover_in_flight: bool) -> color_eyre::Result<()> {
+fn render(state: &mut AppState, theme: &Theme, cover_in_flight: bool) -> color_eyre::Result<()> {
+    super::panel::prepare(PANEL, state, cover_in_flight);
     let mut terminal = Terminal::new(TestBackend::new(52, 28))?;
     terminal.draw(|frame| draw(frame, PANEL, state, theme, cover_in_flight))?;
     Ok(())
@@ -81,16 +82,15 @@ fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
     let to = cover_url(&state, View::Library)?;
     state.browse.view.switch_to(View::Library);
     state.browse.view.tick();
-    render(&state, &theme, false)?;
-    let pending = state.images.encode_pending.borrow().clone();
+    render(&mut state, &theme, false)?;
+    let pending = state.images.encode_pending.clone();
     assert_eq!(pending.len(), 2, "只预热当前选中的两张图");
     assert!(pending.iter().any(|key| key.matches_url(&from)));
     assert!(pending.iter().any(|key| key.matches_url(&to)));
     state.browse.view.tick();
-    render(&state, &theme, false)?;
+    render(&mut state, &theme, false)?;
     assert_eq!(
-        *state.images.encode_pending.borrow(),
-        pending,
+        state.images.encode_pending, pending,
         "固定尺寸不重复提交编码"
     );
     Ok(())
@@ -103,9 +103,9 @@ fn cover_in_flight_suppresses_local_encode_requests() -> color_eyre::Result<()> 
     let theme = default_theme()?;
     state.browse.view.switch_to(View::Library);
     for _ in 0..=4 {
-        render(&state, &theme, true)?;
+        render(&mut state, &theme, true)?;
         assert!(
-            state.images.encode_pending.borrow().is_empty(),
+            state.images.encode_pending.is_empty(),
             "被接管的两端不应自画或预热"
         );
         state.browse.view.tick();

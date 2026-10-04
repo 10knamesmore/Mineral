@@ -9,7 +9,6 @@ use crate::components::layout::shared::list_minimap::{
 };
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::scroll::list::ScrollMotion;
 use crate::runtime::state::{AppState, OverlayReveal};
 
 impl QueueOverlay {
@@ -31,16 +30,7 @@ impl QueueOverlay {
     ) {
         let visible = self.visible(ctx);
         let current = ctx.queue_current_index();
-        let cursor = MinimapCursor::new(
-            &self.list,
-            visible.len(),
-            ScrollMotion::Advancing {
-                scrolloff: ctx.scrolloff(),
-                glide_ticks: ctx.list_glide_ticks(),
-            },
-            ctx.minimap_cursor_ticks(),
-            ctx.cfg.tui().minimap(),
-        );
+        let cursor = MinimapCursor::new(&self.list, visible.len(), ctx.cfg.tui().minimap());
         let entries = visible.iter().enumerate().filter_map(|(index, &raw)| {
             ctx.player.queue.get(raw).map(|song| MinimapEntry {
                 index,
@@ -53,7 +43,7 @@ impl QueueOverlay {
             accent: lerp_color(
                 theme.accent,
                 theme.subtext,
-                u64::from(ctx.overlay_reveal.get().yielded()),
+                u64::from(self.reveal.yielded()),
                 u64::from(OverlayReveal::FULL),
             ),
             ..*theme
