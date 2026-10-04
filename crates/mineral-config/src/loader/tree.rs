@@ -150,11 +150,15 @@ mod tests {
         use mlua::LuaSerdeExt;
         let base_table = match lua.to_value(base)? {
             mlua::Value::Table(t) => t,
-            other => color_eyre::eyre::bail!("base 应转成表,得到 {other:?}"),
+            other => {
+                color_eyre::eyre::bail!("base 应转成表,得到 {other:?}");
+            }
         };
         let overlay_table = match lua.to_value(overlay)? {
             mlua::Value::Table(t) => t,
-            other => color_eyre::eyre::bail!("overlay 应转成表,得到 {other:?}"),
+            other => {
+                color_eyre::eyre::bail!("overlay 应转成表,得到 {other:?}");
+            }
         };
         let merged = crate::loader::merge::deep_merge(lua, base_table, overlay_table)?;
         Ok(serde_json::to_value(mlua::Value::Table(merged))?)
@@ -187,7 +191,9 @@ mod tests {
             Err(ConfigWarning::Deserialize { path, .. }) => {
                 assert_eq!(path.as_deref(), Some("audio.volume"), "路径应精确到字段");
             }
-            other => color_eyre::eyre::bail!("应报 Deserialize 告警,得到 {other:?}"),
+            other => {
+                color_eyre::eyre::bail!("应报 Deserialize 告警,得到 {other:?}");
+            }
         }
         Ok(())
     }

@@ -535,8 +535,7 @@ impl AmbientField {
             .skip(usize::from(y.saturating_sub(self.area.y)))
             .step_by(usize::from(self.area.height.max(1)));
         let (mut wsum, mut r, mut g, mut b) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
-        for ((blob, horizontal), vertical) in
-            self.blobs.iter().zip(column_weights).zip(row_weights)
+        for ((blob, horizontal), vertical) in self.blobs.iter().zip(column_weights).zip(row_weights)
         {
             let w = horizontal * vertical;
             wsum += w;

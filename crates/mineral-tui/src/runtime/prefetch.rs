@@ -1186,7 +1186,9 @@ mod tests {
                 frame.set_artist_detail(Box::new(artist));
                 frame.set_artist_albums(albums, mineral_channel_core::Page::default(), None);
             }
-            SearchKind::User => color_eyre::eyre::bail!("用户结果没有 detail 曲目或专辑列表"),
+            SearchKind::User => {
+                color_eyre::eyre::bail!("用户结果没有 detail 曲目或专辑列表");
+            }
         }
         frame.section = section;
         frame.list_mut().set_sel(3);

@@ -156,7 +156,7 @@ impl Harness {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        bail!("daemon did not become ready in time")
+        bail!("daemon did not become ready in time");
     }
 
     /// 让 daemon 优雅收尾(SIGTERM,与 `mineral stop` 同一条路)并等 socket 消失。
@@ -170,7 +170,7 @@ impl Harness {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        bail!("daemon did not exit in time")
+        bail!("daemon did not exit in time");
     }
 
     /// 在同一个隔离环境里跑一条 `mineral ctl` 命令(与 daemon 同一套 XDG / socket)。

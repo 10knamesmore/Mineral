@@ -437,7 +437,9 @@ mod tests {
             }
             match &current_frame(&s)?.data {
                 Some(DetailData::Album(received)) => assert_eq!(**received, detailed),
-                _ => color_eyre::eyre::bail!("切回后应有完整专辑详情"),
+                _ => {
+                    color_eyre::eyre::bail!("切回后应有完整专辑详情");
+                }
             }
         }
         Ok(())
@@ -522,7 +524,9 @@ mod tests {
                     assert_eq!(**received, artist);
                     assert_eq!(albums.items(), &[album]);
                 }
-                _ => color_eyre::eyre::bail!("返回父帧后应有两路艺人数据"),
+                _ => {
+                    color_eyre::eyre::bail!("返回父帧后应有两路艺人数据");
+                }
             }
         }
         Ok(())
@@ -595,7 +599,9 @@ mod tests {
         assert_eq!(frame.list().scroll_target(), 1, "保留原视口");
         match &frame.data {
             Some(DetailData::Album(received)) => assert_eq!(**received, album),
-            _ => color_eyre::eyre::bail!("应有更新后的专辑详情"),
+            _ => {
+                color_eyre::eyre::bail!("应有更新后的专辑详情");
+            }
         }
         Ok(())
     }
@@ -713,7 +719,9 @@ mod tests {
         s.ui.channel_search.select_kind(SearchKind::Playlist);
         match &current_frame(&s)?.data {
             Some(DetailData::PlaylistEntries(entries)) => assert_eq!(*entries, playlist.entries),
-            _ => color_eyre::eyre::bail!("切回歌单后应有曲目"),
+            _ => {
+                color_eyre::eyre::bail!("切回歌单后应有曲目");
+            }
         }
         Ok(())
     }

@@ -513,7 +513,9 @@ async fn run_section6_playlist_write(
                     Ok("dup correctly rejected with 502".into())
                 }
                 Err(e) => Err(e.into()),
-                Ok(()) => color_eyre::eyre::bail!("expected Api 502, got Ok"),
+                Ok(()) => {
+                    color_eyre::eyre::bail!("expected Api 502, got Ok");
+                }
             }
         })
         .await;

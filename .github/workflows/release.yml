@@ -51,27 +51,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: 安装最新 stable
+        run: rustup toolchain install stable --component rustfmt --component clippy --no-self-update
+
+      - name: 安装 Dylint nightly
+        working-directory: tooling/lints
+        run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            tooling/lints -> target
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,git-cliff
+          tool: cargo-nextest,stylua,git-cliff
 
-      # —— 门禁:与 ci.yml 同口径。dev 直接提交不经 PR,这里是发布前对 dev HEAD 的第一道 CI ——
-      - name: fmt
-        run: cargo fmt --all --check
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: test
-        run: cargo nextest run --workspace --no-fail-fast
-        env:
-          INSTA_UPDATE: "no"
-      - name: doctest
-        run: cargo test --workspace --doc
+      - name: 安装 Dylint
+        run: cargo install --locked cargo-dylint dylint-link
+
+      - name: 完整检查
+        run: scripts/check.sh
 
       # —— 生成 CHANGELOG:只渲染上个 tag 之后的 feat/fix/perf,prepend,不动历史条目 ——
       - name: CHANGELOG

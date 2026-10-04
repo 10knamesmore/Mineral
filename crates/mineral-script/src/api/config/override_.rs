@@ -133,7 +133,7 @@ mod tests {
                 Ok(ops)
             }
             (sole, _) => {
-                color_eyre::eyre::bail!("应恰有一条 ConfigOverride,实得 {cmds:?} + {sole:?}")
+                color_eyre::eyre::bail!("应恰有一条 ConfigOverride,实得 {cmds:?} + {sole:?}");
             }
         }
     }

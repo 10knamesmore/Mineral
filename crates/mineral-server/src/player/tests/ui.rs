@@ -42,7 +42,9 @@ fn config_leaf(
             .pointer(pointer)
             .cloned()
             .ok_or_else(|| color_eyre::eyre::eyre!("有效树缺 {pointer}")),
-        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+        other => {
+            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
+        }
     }
 }
 
@@ -194,7 +196,9 @@ async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
         Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
             assert_eq!(path, "tui.lyrics.compact_line_gap");
         }
-        other => color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}"),
+        other => {
+            color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}");
+        }
     }
     assert!(
         events_rx.try_recv().is_err(),
@@ -220,7 +224,9 @@ async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
         Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
             assert_eq!(path, "tui.lyrics.bogus");
         }
-        other => color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}"),
+        other => {
+            color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}");
+        }
     }
     assert!(
         events_rx.try_recv().is_err(),
@@ -251,7 +257,9 @@ async fn config_override_batch_single_broadcast() -> color_eyre::Result<()> {
     ]);
     let effective = match events_rx.try_recv()? {
         mineral_protocol::Event::ConfigChanged { config } => config.into_json(),
-        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+        other => {
+            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
+        }
     };
     assert_eq!(
         effective.pointer("/tui/lyrics/fullscreen_line_gap"),
@@ -283,11 +291,15 @@ async fn config_override_batch_evicts_only_bad_leaf() -> color_eyre::Result<()> 
         Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
             assert_eq!(path, "tui.lyrics.compact_line_gap");
         }
-        other => color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}"),
+        other => {
+            color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}");
+        }
     }
     let effective = match events_rx.try_recv()? {
         Event::ConfigChanged { config } => config.into_json(),
-        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+        other => {
+            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
+        }
     };
     assert_eq!(
         effective.pointer("/tui/lyrics/fullscreen_line_gap"),
@@ -321,7 +333,9 @@ async fn set_config_base_reapplies_overlay() -> color_eyre::Result<()> {
     core.set_config_base(new_base);
     let effective = match events_rx.try_recv()? {
         mineral_protocol::Event::ConfigChanged { config } => config.into_json(),
-        other => color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}"),
+        other => {
+            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
+        }
     };
     assert_eq!(
         effective.pointer("/audio/volume"),

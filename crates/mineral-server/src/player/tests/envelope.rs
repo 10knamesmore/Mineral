@@ -41,7 +41,7 @@ async fn wait_envelope(core: &PlayerCore) -> color_eyre::Result<(SongId, Envelop
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    color_eyre::eyre::bail!("超时未等到当前曲段携带包络")
+    color_eyre::eyre::bail!("超时未等到当前曲段携带包络");
 }
 
 /// Starts explicit playback through the production song entry point.

@@ -181,7 +181,7 @@ async fn wait_snapshot(
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    color_eyre::eyre::bail!("超时未收到 LibrarySnapshot")
+    color_eyre::eyre::bail!("超时未收到 LibrarySnapshot");
 }
 
 /// 组装带 curate registry 函数的 core(模拟 config 管线摘取结果):

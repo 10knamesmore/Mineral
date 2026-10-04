@@ -202,7 +202,7 @@ fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> color_eyre::
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    bail!("condition not met within {timeout:?}")
+    bail!("condition not met within {timeout:?}");
 }
 
 /// daemon 起来后 socket 可连;收到 SIGTERM 后 graceful 退出并 unlink socket 文件。

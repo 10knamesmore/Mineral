@@ -495,9 +495,11 @@ mod tests {
                 assert_eq!(target, 2, "exact target=选中第 3 个 occurrence");
                 assert_eq!(queue.get(target).map(|song| &song.id), want.as_ref());
             }
-            DetailActivate::Drill(_) => color_eyre::eyre::bail!("专辑详情曲目不应下钻"),
+            DetailActivate::Drill(_) => {
+                color_eyre::eyre::bail!("专辑详情曲目不应下钻");
+            }
             DetailActivate::None => {
-                color_eyre::eyre::bail!("回归:专辑详情 activate 落进 catch-all、静默无反应")
+                color_eyre::eyre::bail!("回归:专辑详情 activate 落进 catch-all、静默无反应");
             }
         }
         Ok(())

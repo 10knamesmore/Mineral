@@ -89,7 +89,7 @@ impl Daemon {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        bail!("daemon did not become ready in time")
+        bail!("daemon did not become ready in time");
     }
 
     /// 连一条新会话(每次调用是一个独立 client)。

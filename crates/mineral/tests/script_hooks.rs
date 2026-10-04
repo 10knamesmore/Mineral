@@ -96,7 +96,7 @@ impl Daemon {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        bail!("daemon did not become ready in time")
+        bail!("daemon did not become ready in time");
     }
 
     /// 在同一隔离环境下跑 `mineral action <name>`,捕获输出。
@@ -180,7 +180,9 @@ async fn store_get(
         .map_err(color_eyre::Report::new)?;
     match client.store_get(song, key).await {
         Outcome::Applied(value) => Ok(value),
-        other => bail!("unexpected outcome: {other:?}"),
+        other => {
+            bail!("unexpected outcome: {other:?}");
+        }
     }
 }
 
@@ -198,7 +200,7 @@ async fn wait_store_int(
         match store_get(socket, song.clone(), key).await {
             Ok(got) if got == StoreValue::Int(want) => return Ok(()),
             Ok(got) if Instant::now() > deadline => {
-                bail!("store 值未达期望 {want},实得 {got:?}")
+                bail!("store 值未达期望 {want},实得 {got:?}");
             }
             Err(e) if Instant::now() > deadline => {
                 return Err(e.wrap_err("store_get 直到超时仍失败"));
