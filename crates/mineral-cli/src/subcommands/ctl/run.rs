@@ -531,6 +531,21 @@ async fn connect(socket_path: &Path) -> std::result::Result<Client, CtlError> {
         .map_err(CtlError::Handshake)
 }
 
+/// 等待一次提交，不自动重发结果未知的创建操作。
+async fn await_pending<T>(
+    pending: std::result::Result<
+        mineral_client::operation::Pending<T>,
+        mineral_client::operation::SubmitError,
+    >,
+) -> Outcome<T> {
+    match pending {
+        Ok(pending) => pending.outcome().await,
+        Err(error) => Outcome::Unknown {
+            reason: error.into(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{clamp_position, clamp_volume};
@@ -552,20 +567,5 @@ mod tests {
         assert_eq!(clamp_volume(50, 5), 55);
         assert_eq!(clamp_volume(50, -5), 45);
         assert_eq!(clamp_volume(50, i16::MAX), 100, "荒谬增量也落在端点");
-    }
-}
-
-/// 等待一次提交，不自动重发结果未知的创建操作。
-async fn await_pending<T>(
-    pending: std::result::Result<
-        mineral_client::operation::Pending<T>,
-        mineral_client::operation::SubmitError,
-    >,
-) -> Outcome<T> {
-    match pending {
-        Ok(pending) => pending.outcome().await,
-        Err(error) => Outcome::Unknown {
-            reason: error.into(),
-        },
     }
 }

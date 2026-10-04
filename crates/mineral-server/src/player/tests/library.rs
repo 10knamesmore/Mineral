@@ -488,11 +488,10 @@ async fn toggle_favorite_repushes_aggregate_playlist() -> color_eyre::Result<()>
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        details.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-        vec![&favorites_id]
-    );
-    let detail = details[0].1;
+    let [(id, detail)] = details.as_slice() else {
+        color_eyre::eyre::bail!("应只推送聚合收藏歌单的详情，实际收到 {} 条", details.len());
+    };
+    assert_eq!(*id, &favorites_id);
     assert_eq!(detail.entries.len(), 1);
     assert_eq!(
         detail.entries.first().map(|entry| &entry.song.id),

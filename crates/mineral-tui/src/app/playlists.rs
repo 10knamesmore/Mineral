@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(
             *operations
                 .lock()
-                .map_err(|_| color_eyre::eyre::eyre!("poisoned operations"))?,
+                .map_err(|error| color_eyre::eyre::eyre!("poisoned operations: {error}"))?,
             vec![PlaylistOp::SaveQueue {
                 name: "夜跑 Q".to_owned()
             }]
@@ -118,15 +118,16 @@ mod tests {
             ..TestClient::default()
         });
         let id = PlaylistId::new(SourceKind::MINERAL, "saved");
+        let original_playlist = Playlist::builder()
+            .id(id.clone())
+            .name("夜跑".to_owned())
+            .actions(PlaylistActions {
+                rename: true,
+                delete: true,
+            })
+            .build();
         app.state.library.playlists = vec![PlaylistView {
-            data: Playlist::builder()
-                .id(id.clone())
-                .name("夜跑".to_owned())
-                .actions(PlaylistActions {
-                    rename: true,
-                    delete: true,
-                })
-                .build(),
+            data: original_playlist.clone(),
         }];
         app.state.browse.view.switch_to(View::Playlists);
         key(&mut app, KeyCode::Char('o'));
@@ -139,7 +140,6 @@ mod tests {
         }
         key(&mut app, KeyCode::Char('o'));
         key(&mut app, KeyCode::Char('r'));
-        let original_playlist = app.state.library.playlists[0].data.clone();
         let mut another_playlist = original_playlist.clone();
         another_playlist.id = PlaylistId::new(SourceKind::MINERAL, "another");
         app.state.apply(&mineral_task::TaskEvent::LibrarySnapshot {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(
             *operations
                 .lock()
-                .map_err(|_| color_eyre::eyre::eyre!("poisoned operations"))?,
+                .map_err(|_e| color_eyre::eyre::eyre!("poisoned operations"))?,
             vec![PlaylistOp::Rename {
                 id: id.clone(),
                 name: "夜行".to_owned()
