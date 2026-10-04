@@ -11,7 +11,9 @@ use unicode_width::UnicodeWidthStr;
 use mineral_model::ArtistRef;
 use mineral_task::SearchPayload;
 
+use super::SearchView;
 use super::detail::highlight_style;
+use crate::components::frame::PrepareCx;
 use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_widths};
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::spinner;
@@ -20,9 +22,7 @@ use crate::components::popup::{MenuItem, Placement, PopMenu, render_overlay};
 use crate::render::cursor::cursor_spans;
 use crate::render::theme::{Theme, resolve_source_color};
 use crate::runtime::format::format_ms_opt;
-use crate::runtime::marquee::Slot;
-use crate::runtime::scroll::list::ScrollMotion;
-use crate::runtime::state::{AppState, PromptSegment, SearchFocus, SearchPage, SearchSession};
+use crate::runtime::state::{PromptSegment, SearchFocus, SearchPage, SearchSession};
 
 /// 面板边框样式:焦点态 accent 高亮,否则 overlay 暗调。
 fn border_style(focused: bool, theme: &Theme) -> Style {
@@ -209,10 +209,10 @@ fn draw_query(
 pub(crate) fn draw_prompt_dropdown(
     frame: &mut Frame<'_>,
     prompt_area: Rect,
-    state: &AppState,
+    state: &SearchView<'_>,
     theme: &Theme,
 ) {
-    let rs = &state.channel_search;
+    let rs = state.page;
     // 画下拉归属的 chip 段(与 focus 解耦):切到 query / 别的 chip 后,仍把上一个 chip 的
     // 收起动画画完。
     let Some(seg) = rs.reveal_seg() else {
@@ -237,7 +237,7 @@ pub(crate) fn draw_prompt_dropdown(
                 .map(|s| {
                     MenuItem::display_tinted(
                         s.label(),
-                        resolve_source_color(theme, state.cfg.sources(), *s),
+                        resolve_source_color(theme, state.frame.config.sources(), *s),
                     )
                 })
                 .collect();
@@ -273,24 +273,22 @@ pub(crate) fn draw_prompt_dropdown(
         &menu,
         rs.seg_reveal(),
         /*focused*/ true,
-        state,
-        theme,
+        &(),
+        crate::components::popup::OverlayEnv {
+            frame: state.frame,
+            dock_right: state.dock_right,
+        },
     );
 }
 
 /// 搜索结果列表在布局确定后更新滚动和选中标题相位。
-pub(crate) fn prepare_results(area: Rect, state: &mut AppState, advance: bool) {
+pub(crate) fn prepare_results(area: Rect, page: &mut SearchPage, cx: &PrepareCx<'_>) {
     let inner = Block::new().borders(Borders::ALL).inner(area);
-    let motion = if state.channel_search.active.at_max() {
-        ScrollMotion::Advancing {
-            scrolloff: state.scrolloff(),
-            glide_ticks: state.list_glide_ticks(),
-        }
-    } else {
-        ScrollMotion::Frozen
-    };
-    let ticks = state.minimap_cursor_ticks();
-    let Some(results) = state.channel_search.active_results_mut() else {
+    let motion = cx.motion;
+    let ticks = cx.frame.cursor_ticks();
+    let now = cx.frame.now;
+    let advance = cx.advance;
+    let Some(results) = page.active_results_mut() else {
         return;
     };
     let total = results.len();
@@ -314,24 +312,24 @@ pub(crate) fn prepare_results(area: Rect, state: &mut AppState, advance: bool) {
                 2,
             );
             crate::components::layout::shared::marquee::prepare_song(
-                &mut state.marquees,
-                Slot::SearchResults,
+                &mut results.title,
                 song,
                 columns.first().copied().unwrap_or(0),
+                now,
             );
         }
     }
 }
 
 ///   - `border_focused`: 边框是否高亮(焦点环滑动期由调用方置 `false`)
-pub fn draw_results(
+pub(crate) fn draw_results(
     frame: &mut Frame<'_>,
     area: Rect,
-    state: &AppState,
+    state: &SearchView<'_>,
     theme: &Theme,
     border_focused: bool,
 ) {
-    let rs = &state.channel_search;
+    let rs = state.page;
     let mut block = Block::new()
         .borders(Borders::ALL)
         .border_style(border_style(border_focused, theme))
@@ -355,7 +353,7 @@ pub fn draw_results(
     let Some(kr) = rs.active_results().filter(|kr| kr.len() != 0) else {
         if rs.current_loading() {
             let glyph = spinner::glyph(
-                state.cfg.tui().animation().spinner_frames(),
+                state.frame.config.tui().animation().spinner_frames(),
                 rs.spinner_counter(),
             );
             draw_centered_hint(frame, inner, &format!("{glyph} searching"), theme);
@@ -373,7 +371,13 @@ pub fn draw_results(
             kr.list().sel(),
             // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
             // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
-            &MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0),
+            &MarqueeCtx::new(
+                &kr.title,
+                state.frame.config.tui().animation(),
+                state.frame.now,
+                theme,
+                /*fade_to*/ theme.surface0,
+            ),
             inner.width,
             theme,
         );
@@ -381,7 +385,12 @@ pub fn draw_results(
         let highlight = highlight_style(
             theme,
             rs.focus_permille(
-                *state.cfg.tui().animation().search_focus_transition(),
+                *state
+                    .frame
+                    .config
+                    .tui()
+                    .animation()
+                    .search_focus_transition(),
                 SearchFocus::Results,
             ),
         );
@@ -471,12 +480,7 @@ fn result_table(
                     let mut title_spans = vec![Span::styled(s.name.clone(), main)];
                     title_spans.extend(alias_span(s.alias.as_deref(), theme.overlay));
                     let title_cell = if idx == sel {
-                        Cell::from(marquee.line(
-                            title_spans,
-                            Slot::SearchResults,
-                            &s.id.qualified(),
-                            title_w,
-                        ))
+                        Cell::from(marquee.line(title_spans, &s.id.qualified(), title_w))
                     } else {
                         Cell::from(Line::from(title_spans))
                     };

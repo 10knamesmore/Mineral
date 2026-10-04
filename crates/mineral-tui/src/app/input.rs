@@ -1,8 +1,10 @@
 //! 终端事件与按键分发：文本输入、页面动作、浮层意图和退出操作。
 
+use crate::app::AppOverlay;
+
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse};
+use crate::components::popup::{OverlayAction, OverlayResponse};
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::render::anim::Transition;
 use crate::runtime::action::{Action, SeekDelta, VolumeDelta};
@@ -30,7 +32,7 @@ impl App {
                 }
             }
             Event::Resize(..) => {
-                self.state.browse.list_expansion.invalidate();
+                self.state.browse.invalidate_expansions();
                 self.state.images.refresh_cell_pixels();
                 self.report_terminal_state();
             }
@@ -48,7 +50,7 @@ impl App {
 
     /// 顶层按键分发:Ctrl-C 永远退出;活跃浮层优先吃键,否则走全局 / 主视图。
     fn handle_key(&mut self, key: &KeyEvent) {
-        self.state.browse.list_expansion.interrupt();
+        self.state.browse.interrupt_expansions();
         // Ctrl-C 强制退出(skip 一切)。
         if matches!(
             (key.modifiers, key.code),
@@ -118,10 +120,10 @@ impl App {
             Action::OpenQueue => self.open_queue(),
             Action::OpenDownloads => self.open_downloads(),
             Action::OpenAudioSettings => {
-                self.overlays.push(OverlayKind::audio_settings());
+                self.overlays.push(AppOverlay::audio_settings());
                 self.client.audio_outputs();
             }
-            Action::OpenQuitConfirm => self.overlays.push(OverlayKind::confirm()),
+            Action::OpenQuitConfirm => self.overlays.push(AppOverlay::confirm()),
             Action::CycleLyricExtra => self.cycle_lyric_extra(),
             Action::Scroll(step) => self.scroll(step),
             Action::EnterSearch => self.enter_search(),
@@ -214,7 +216,7 @@ impl App {
     fn cycle_lyric_extra(&mut self) {
         self.state.cycle_lyric_extra();
         self.ui_prefs
-            .save_lyric_extra(self.state.browse.lyric_view.extra);
+            .save_lyric_extra(self.state.browse.lyrics.extra);
     }
 
     /// 执行浮层产生的意图(浮层自身不持有 App,按键产出意图回这里执行)。
@@ -299,12 +301,12 @@ impl App {
             .queue_cursor_memo
             .filter(|at| *at < self.state.player.queue.len())
             .unwrap_or(fallback);
-        self.overlays.push(OverlayKind::queue(sel));
+        self.overlays.push(AppOverlay::queue(sel));
     }
 
     /// Opens the docked flat Song downloads overlay.
     fn open_downloads(&mut self) {
-        self.overlays.push(OverlayKind::downloads());
+        self.overlays.push(AppOverlay::downloads());
     }
 
     /// 打开键位 cheatsheet:目录与关闭提示在打开瞬间从 keymap 快照(重映射 /
@@ -316,7 +318,7 @@ impl App {
             .hint_chord(Action::OpenHelp)
             .map(crate::components::popup::chip_text);
         self.overlays
-            .push(OverlayKind::help(self.keymap.help().to_vec(), close_hint));
+            .push(AppOverlay::help(self.keymap.help().to_vec(), close_hint));
     }
 }
 
@@ -356,21 +358,21 @@ mod tests {
         );
         app.apply_pushed_config(mineral_protocol::BusValue::from_json(config));
         press(&mut app, KeyCode::Char('t'));
-        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::None);
+        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::None);
 
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Translation);
+        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::Translation);
 
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Romanization);
+        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::Romanization);
 
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::Romanization);
+        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::Romanization);
 
         app.state = crate::test_support::state_with_lrc_only()?;
         press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.state.browse.lyric_view.extra, LyricExtra::None);
+        assert_eq!(app.state.browse.lyrics.extra, LyricExtra::None);
         Ok(())
     }
 
@@ -528,7 +530,7 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('G'));
         assert_eq!(
-            app.state.browse.nav.track.sel(),
+            app.state.browse.tracks.scroll.sel(),
             4,
             "导航键应被 help 吞掉,Library 光标不动"
         );
@@ -1468,7 +1470,7 @@ mod tests {
             app.state.browse = browse.state.browse;
             app.state.library = browse.state.library;
             app.state.browse.active_search_mut().set_query("Track");
-            app.state.browse.nav.track.place(22, 4);
+            app.state.browse.tracks.scroll.place(22, 4);
             let client = Arc::new(TestClient::default());
             app.client = client.clone();
             for c in "remote".chars() {
@@ -1497,10 +1499,10 @@ mod tests {
             assert_eq!(app.state.browse.view.current(), View::Library);
             assert_eq!(app.state.browse.active_search().query(), "Track");
             assert!(!app.state.browse.active_search().typing);
-            assert_eq!(app.state.browse.nav.playlist.sel(), 0);
-            assert_eq!(app.state.browse.nav.playlist.scroll_target(), 0);
-            assert_eq!(app.state.browse.nav.track.sel(), 22);
-            assert_eq!(app.state.browse.nav.track.scroll_target(), 18);
+            assert_eq!(app.state.browse.playlists.scroll.sel(), 0);
+            assert_eq!(app.state.browse.playlists.scroll.scroll_target(), 0);
+            assert_eq!(app.state.browse.tracks.scroll.sel(), 22);
+            assert_eq!(app.state.browse.tracks.scroll.scroll_target(), 18);
             assert!(
                 app.state
                     .library

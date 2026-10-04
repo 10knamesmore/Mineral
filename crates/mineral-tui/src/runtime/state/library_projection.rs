@@ -22,10 +22,10 @@ impl AppState {
             playlist: self.selected_playlist_in_list()?.data.id.clone(),
             screen_row: self
                 .browse
-                .nav
-                .playlist
+                .playlists
+                .scroll
                 .sel()
-                .saturating_sub(self.browse.nav.playlist.scroll_target()),
+                .saturating_sub(self.browse.playlists.scroll.scroll_target()),
         })
     }
 
@@ -41,12 +41,12 @@ impl AppState {
                 .map(|index| (index, position.screen_row))
         });
         if let Some((index, screen_row)) = resolved {
-            if index != self.browse.nav.playlist.sel() {
-                mineral_log::debug!(target: "tui", previous_selection = self.browse.nav.playlist.sel(), selection = index, screen_row, "retain playlist selection after library update");
-                self.browse.nav.playlist.place(index, screen_row);
+            if index != self.browse.playlists.scroll.sel() {
+                mineral_log::debug!(target: "tui", previous_selection = self.browse.playlists.scroll.sel(), selection = index, screen_row, "retain playlist selection after library update");
+                self.browse.playlists.scroll.place(index, screen_row);
             }
         } else {
-            self.browse.nav.playlist.place(0, 0);
+            self.browse.playlists.scroll.place(0, 0);
         }
     }
 
@@ -74,7 +74,7 @@ impl AppState {
             && self
                 .selected_playlist()
                 .is_some_and(|p| p.data.id == pending.playlist);
-        if !still_there || self.browse.nav.track.sel() != 0 {
+        if !still_there || self.browse.tracks.scroll.sel() != 0 {
             return;
         }
         let Some(tracks) = self.library.tracks.get(&pending.playlist) else {
@@ -90,7 +90,7 @@ impl AppState {
         }
         let sel = pending.pos.resolve(tracks);
         // 与 activate 的即时恢复同语义:光标落位 + 按屏上相对行瞬时还原视口。
-        self.browse.nav.track.place(sel, pending.pos.screen_row);
+        self.browse.tracks.scroll.place(sel, pending.pos.screen_row);
     }
 
     /// 给定一条 PlaylistEntry，根据当前 user-data 装饰 relation 指向的 Song。
@@ -213,45 +213,12 @@ impl AppState {
         self.browse.opened_playlist(self.browse_model())
     }
 
-    /// 已打开歌单的曲目槽位(`None` = 尚未进入歌单或还没拉到)。
-    pub fn current_tracks_slot(&self) -> Option<&Vec<PlaylistEntryView>> {
-        self.browse.current_tracks_slot(self.browse_model())
-    }
-
-    /// 给定歌单的总时长(ms);槽位未到位时返回 0。未知时长的曲目不计入(只反映已知部分)。
-    pub fn total_duration_ms_of(&self, id: &PlaylistId) -> u64 {
-        self.library
-            .tracks
-            .get(id)
-            .map(|tracks| {
-                tracks
-                    .iter()
-                    .filter_map(|entry| entry.data.song.duration_ms)
-                    .sum()
-            })
-            .unwrap_or(0)
-    }
-
     /// 当前可见(被 search 过滤)的歌单列表。
     ///
     /// 空 query → 原序;非空 query → fzf 风格模糊匹配(拼音/首字母也算命中),
     /// 按 score 降序排,**stable** 保证同分按原序。
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
         self.browse.filtered_playlists(self.browse_model())
-    }
-
-    /// 某歌单的深度命中展示载荷(克隆一份给渲染)。空 query / 无命中返回 `None`。
-    ///
-    /// 调用前提:本帧已调用 [`Self::filtered_playlists`](渲染路径必然满足)，缓存已经就绪；
-    /// 此访问器信任该前提，避免重复比较缓存指纹。
-    pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<crate::runtime::deep_search::DeepHit> {
-        self.browse.deep_hit_for(id)
-    }
-
-    /// 当前过滤结果里是否存在任何深度命中。渲染端据此决定 match 列要不要占位——
-    /// 全员只命中歌单名时不挤压 name 列宽。调用前提同 [`Self::deep_hit_for`]。
-    pub fn has_deep_hits(&self) -> bool {
-        self.browse.has_deep_hits()
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。
@@ -299,13 +266,13 @@ mod tests {
                 .collect::<Vec<String>>()
         };
         assert_eq!(names(&s), vec!["甲", "乙"]);
-        s.browse.nav.playlist.set_sel(1);
+        s.browse.playlists.scroll.set_sel(1);
         // 新快照(重排 + 藏掉一个)整表替换:无重复、无挪尾,超界选中夹回 0。
         s.apply(&TaskEvent::LibrarySnapshot {
             playlists: vec![pl("p2", "乙")],
         });
         assert_eq!(names(&s), vec!["乙"], "整表替换,不残留旧条目");
-        assert_eq!(s.browse.nav.playlist.sel(), 0, "选中超界夹回");
+        assert_eq!(s.browse.playlists.scroll.sel(), 0, "选中超界夹回");
         Ok(())
     }
 
@@ -318,7 +285,7 @@ mod tests {
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
         ];
-        s.browse.search.playlists.set_query("cry");
+        s.browse.playlists.search.set_query("cry");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -336,7 +303,7 @@ mod tests {
             playlist_view("a", "春日影", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.browse.search.playlists.set_query("chunying");
+        s.browse.playlists.search.set_query("chunying");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -354,7 +321,7 @@ mod tests {
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.browse.search.playlists.set_query("my");
+        s.browse.playlists.search.set_query("my");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -368,7 +335,7 @@ mod tests {
     #[test]
     fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {
         let s = AppState::test_default()?;
-        assert!(s.browse.search.playlists.match_for("春日影").is_none());
+        assert!(s.browse.playlists.search.match_for("春日影").is_none());
         Ok(())
     }
 
@@ -385,8 +352,8 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.browse.view.switch_to(View::Library);
-        s.browse.nav.playlist.set_sel(0); // p1
-        s.browse.nav.track.set_sel(0);
+        s.browse.playlists.scroll.set_sel(0); // p1
+        s.browse.tracks.scroll.set_sel(0);
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         s.browse.nav.opened_playlist = Some(pid.clone());
         let tracks = endserenading(5);
@@ -415,7 +382,11 @@ mod tests {
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
         });
-        assert_eq!(s.browse.nav.track.sel(), 2, "曲目到达后应补落位到记忆行");
+        assert_eq!(
+            s.browse.tracks.scroll.sel(),
+            2,
+            "曲目到达后应补落位到记忆行"
+        );
         assert!(
             s.browse.nav.pending_track_restore.is_none(),
             "pending 应被消费"
@@ -435,8 +406,8 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.browse.view.switch_to(View::Library);
-        s.browse.nav.playlist.set_sel(0);
-        s.browse.nav.track.set_sel(1); // 已离开进入时的第 0 行
+        s.browse.playlists.scroll.set_sel(0);
+        s.browse.tracks.scroll.set_sel(1); // 已离开进入时的第 0 行
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         s.browse.nav.opened_playlist = Some(pid.clone());
         let tracks = endserenading(5);
@@ -465,7 +436,7 @@ mod tests {
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
         });
-        assert_eq!(s.browse.nav.track.sel(), 1, "用户已动光标,不得抢落位");
+        assert_eq!(s.browse.tracks.scroll.sel(), 1, "用户已动光标,不得抢落位");
         assert!(
             s.browse.nav.pending_track_restore.is_none(),
             "pending 仍应被消费"
@@ -485,8 +456,8 @@ mod tests {
 
         let mut s = state_with_playlists()?;
         s.browse.view.switch_to(View::Library);
-        s.browse.nav.playlist.set_sel(0);
-        s.browse.nav.track.set_sel(0);
+        s.browse.playlists.scroll.set_sel(0);
+        s.browse.tracks.scroll.set_sel(0);
         let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let other = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p2");
         s.browse.nav.opened_playlist = Some(target.clone());
@@ -516,7 +487,7 @@ mod tests {
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
         });
-        assert_eq!(s.browse.nav.track.sel(), 0);
+        assert_eq!(s.browse.tracks.scroll.sel(), 0);
         assert!(
             s.browse
                 .nav

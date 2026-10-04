@@ -2,4 +2,7 @@
 
 mod overlay;
 
-pub(super) use overlay::DownloadOverlay;
+pub(crate) use overlay::DownloadOverlay;
+
+mod input;
+pub(crate) use input::DownloadInput;

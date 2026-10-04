@@ -83,10 +83,7 @@ pub(super) fn build_row(
         title_spans.extend(alias_suffix(alias, &decor.hits.alias, theme));
     }
     let title_cell = match decor.marquee {
-        Some(m) => Cell::from(
-            m.ctx
-                .line(title_spans, m.slot, &song.id.qualified(), m.title_w),
-        ),
+        Some(m) => Cell::from(m.ctx.line(title_spans, &song.id.qualified(), m.title_w)),
         None => Cell::from(Line::from(title_spans)),
     };
     let mut cells = vec![love_cell(decor.loved, theme)];

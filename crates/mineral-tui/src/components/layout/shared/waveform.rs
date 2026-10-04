@@ -14,7 +14,6 @@ use crate::render::color::lerp_byte;
 use crate::render::palette::{CoverPalette, column_permille};
 use crate::render::theme::{Ink, Theme};
 use crate::runtime::playback::EnvelopeState;
-use crate::runtime::state::AppState;
 
 /// 已播段取色策略:封面色板就绪时沿整条 bar 逐列渐变,否则单色。
 pub enum PlayedStyle<'a> {
@@ -130,19 +129,21 @@ impl<'a> WaveformCtx<'a> {
     /// 直接读会让渐变在 Gradient↔Solid 间闪烁。
     ///
     /// # Params:
-    ///   - `state`: 应用状态
+    ///   - `cfg`: 当前波形配置
+    ///   - `playback`: 播放与包络状态
+    ///   - `palette`: 已应用到当前播放歌曲的稳定色板
     ///   - `theme`: 取色主题
     ///
     /// # Return:
     ///   当帧波形上下文。
-    pub fn new(state: &'a AppState, theme: &Theme) -> Self {
-        let cfg = state.cfg.tui().waveform();
+    pub fn new(
+        cfg: &mineral_config::WaveformConfig,
+        playback: &'a crate::runtime::playback::Playback,
+        palette: Option<&'a CoverPalette>,
+        theme: &Theme,
+    ) -> Self {
         let played = if *cfg.cover_color() {
-            state
-                .images
-                .current_palette
-                .as_ref()
-                .map_or(PlayedStyle::Solid(theme.accent_2), PlayedStyle::Gradient)
+            palette.map_or(PlayedStyle::Solid(theme.accent_2), PlayedStyle::Gradient)
         } else {
             PlayedStyle::Solid(theme.accent_2)
         };
@@ -155,7 +156,7 @@ impl<'a> WaveformCtx<'a> {
                 sweep: ratio_e3(*cfg.reveal().sweep_ratio()),
                 glow: ratio_e3(*cfg.reveal().glow()),
             },
-            envelope: state.playback.current_envelope(),
+            envelope: playback.current_envelope(),
         }
     }
 }

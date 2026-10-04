@@ -9,10 +9,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-use super::{library, playlists};
-use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
-
 /// 缓动进度满值(千分比),对齐 [`crate::render::anim::Transition::eased`]。
 const FULL: u32 = 1000;
 
@@ -30,16 +26,16 @@ const FULL: u32 = 1000;
 pub fn draw(
     buf: &mut Buffer,
     area: Rect,
-    state: &AppState,
-    theme: &Theme,
+    from: impl FnOnce(&mut Buffer),
+    to: impl FnOnce(&mut Buffer),
     eased: u16,
     style: SweepStyle,
 ) {
     // 两视图各渲染到等大离屏 buffer(坐标系与屏幕一致,含 area 的 x/y 偏移)。
     let mut pl = Buffer::empty(area);
     let mut lib = Buffer::empty(area);
-    playlists::render_to(&mut pl, area, state, theme);
-    library::render_to(&mut lib, area, state, theme);
+    from(&mut pl);
+    to(&mut lib);
 
     let w = area.width;
     // Library 已「进入」的列数(0..=w)。

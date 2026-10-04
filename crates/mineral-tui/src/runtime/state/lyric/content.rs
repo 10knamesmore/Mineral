@@ -70,47 +70,11 @@ impl AppState {
         lines.get(idx).map(|line| line.kind.text().into_owned())
     }
 
-    /// 当前曲目是否有任一副歌词(翻译 / 罗马音)可切换。无则歌词面板不显示 `t` 提示。
-    pub fn has_extra_lyrics(&self) -> bool {
-        self.current_lyrics_set()
-            .is_some_and(|l| l.has_translation() || l.has_romanization())
-    }
-
-    /// 当前生效的副歌词档(当前歌确有该档数据才算生效;`None` 档 / 该档无数据返回 `None`)。
-    pub fn active_lyric_extra(&self) -> Option<LyricExtra> {
-        let l = self.current_lyrics_set()?;
-        match self.browse.lyric_view.extra {
-            LyricExtra::None => None,
-            LyricExtra::Translation if l.has_translation() => Some(LyricExtra::Translation),
-            LyricExtra::Romanization if l.has_romanization() => Some(LyricExtra::Romanization),
-            LyricExtra::Translation | LyricExtra::Romanization => None,
-        }
-    }
-
-    /// 循环副歌词档:`None → Translation → Romanization → None`,跳过当前歌为空的档。
-    /// 翻译 / 罗马音都缺时停在 `None`。
+    /// 把副歌词切换意图交给当前歌词面板。
     pub fn cycle_lyric_extra(&mut self) {
-        let has_trans = self
-            .current_lyrics_set()
-            .is_some_and(Lyrics::has_translation);
-        let has_roma = self
-            .current_lyrics_set()
-            .is_some_and(Lyrics::has_romanization);
-        self.browse.lyric_view.extra = match self.browse.lyric_view.extra {
-            LyricExtra::None if has_trans => LyricExtra::Translation,
-            LyricExtra::None if has_roma => LyricExtra::Romanization,
-            LyricExtra::None => LyricExtra::None,
-            LyricExtra::Translation if has_roma => LyricExtra::Romanization,
-            LyricExtra::Translation => LyricExtra::None,
-            LyricExtra::Romanization => LyricExtra::None,
-        };
-        if has_trans || has_roma {
-            self.browse
-                .lyric_view
-                .extra_press
-                .trigger(self.cfg.tui().animation());
-            mineral_log::debug!(target: "tui::lyrics", extra = ?self.browse.lyric_view.extra,
-                "lyric extra switched");
-        }
+        let input = crate::view::lyrics::input(&self.playback, &self.library);
+        self.browse
+            .lyrics
+            .cycle_extra(input, self.cfg.tui().animation());
     }
 }

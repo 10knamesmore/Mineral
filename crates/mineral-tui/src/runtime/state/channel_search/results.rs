@@ -21,6 +21,9 @@ pub struct KindResults {
     /// 结果列光标 + 视口滚动（nvim 手感:offset 跨帧持久 + scrolloff + 缓动平移）。
     list: ScrollList,
 
+    /// 本列表选中标题的滚动状态。
+    pub(crate) title: crate::runtime::marquee::Marquee,
+
     /// 续页进度与待收取请求；随结果桶保留，编辑 query 或重新搜索时一起销毁。
     pagination: ListPagination,
 
@@ -47,6 +50,7 @@ impl KindResults {
         Self {
             results: payload,
             list: ScrollList::new(),
+            title: crate::runtime::marquee::Marquee::default(),
             pagination: ListPagination::first_page(count, Page::new(0, limit), has_more),
             detail,
             sections: None,

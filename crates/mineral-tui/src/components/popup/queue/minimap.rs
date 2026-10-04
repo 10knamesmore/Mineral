@@ -1,5 +1,6 @@
 //! 队列右边框的全列表概览；标记按过滤视图排列，在播身份由真实队列锚点决定。
 
+use super::QueueInput;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -9,7 +10,7 @@ use crate::components::layout::shared::list_minimap::{
 };
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, OverlayReveal};
+use crate::runtime::state::OverlayReveal;
 
 impl QueueOverlay {
     /// 在完整面板的右边框绘制过滤列表的位置与标记，从表头行到底行、不含圆角。
@@ -25,14 +26,14 @@ impl QueueOverlay {
         buf: &mut Buffer,
         area: Rect,
         inner: Rect,
-        ctx: &AppState,
+        ctx: &QueueInput<'_>,
         theme: &Theme,
     ) {
         let visible = self.visible(ctx);
-        let current = ctx.queue_current_index();
+        let current = ctx.current;
         let cursor = MinimapCursor::new(&self.list, visible.len(), ctx.cfg.tui().minimap());
         let entries = visible.iter().enumerate().filter_map(|(index, &raw)| {
-            ctx.player.queue.get(raw).map(|song| MinimapEntry {
+            ctx.queue.get(raw).map(|song| MinimapEntry {
                 index,
                 loved: ctx.is_liked(song),
                 playing: current == Some(raw),

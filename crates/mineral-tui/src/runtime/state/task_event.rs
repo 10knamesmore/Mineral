@@ -15,7 +15,7 @@ impl AppState {
     pub fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::LibrarySnapshot { playlists } => {
-                self.browse.list_expansion.invalidate();
+                self.browse.invalidate_expansions();
                 let position = self.playlist_list_position();
                 let mut incoming_ids = FxHashSet::default();
                 // 保留 server 的快照顺序；ID 索引只用于判断旧歌单是否仍在列表中。
@@ -75,7 +75,7 @@ impl AppState {
                 if self.browse.view == super::View::Library
                     && self.browse.nav.opened_playlist.as_ref() == Some(id)
                 {
-                    self.browse.list_expansion.invalidate();
+                    self.browse.invalidate_expansions();
                 }
                 let parent_position = self.playlist_list_position();
                 let playlist = &detail.playlist;
@@ -85,7 +85,7 @@ impl AppState {
                             .filter(|p| p.data.id == *id)
                             .and_then(|_| {
                                 self.filtered_tracks()
-                                    .get(self.browse.nav.track.sel())
+                                    .get(self.browse.tracks.scroll.sel())
                                     .map(|entry| entry.data.index)
                             })
                     })
@@ -112,7 +112,7 @@ impl AppState {
                         .position(|entry| entry.data.index == index)
                 });
                 if let Some(position) = position {
-                    self.browse.nav.track.set_sel(position);
+                    self.browse.tracks.scroll.set_sel(position);
                 }
                 self.apply_pending_restore(id);
                 // 搜索页保留的歌单帧按 ID 更新，切 source / kind 后也能收到曲目。

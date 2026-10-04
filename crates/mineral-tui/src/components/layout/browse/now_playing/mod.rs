@@ -4,11 +4,14 @@
 mod cover_transition;
 pub(crate) mod main_cover;
 mod panel;
+mod state;
+pub use state::NowPlaying;
 pub mod playlist;
 pub mod track;
 
-pub use panel::draw;
-pub(crate) use panel::prepare;
+pub(crate) use panel::draw;
+mod view;
+pub(crate) use view::{NowPlayingInput, NowPlayingView};
 
 #[cfg(test)]
 mod tests;

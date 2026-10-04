@@ -11,8 +11,6 @@
 
 use std::sync::Arc;
 
-use crate::runtime::marquee::Marquees;
-
 /// daemon 推送的配置落型失败时的驻留错误卡顶替键(下一帧好配置到来主动撤)。
 const PUSH_CARD_ID: &str = "config.push";
 
@@ -78,7 +76,6 @@ impl crate::app::App {
             ));
         }
         // 固化型(带槽相位,整体重建 + 相位 reconciliation 在其内部):marquee / 唱片纹。
-        self.state.marquees = Marquees::from_config(anim.marquee(), tick_ms);
         self.state.vinyl = crate::components::layout::shared::vinyl::VinylSpin::from_config(
             *anim.vinyl_rev_ms(),
             tick_ms,
@@ -270,22 +267,22 @@ mod tests {
         for _ in 0..6 {
             app.state.tick_frame();
         }
-        let before = app.state.browse.lyric_view.extra_press.strength();
+        let before = app.state.browse.lyrics.extra_press.strength();
         assert!(before > 0 && before < 1000);
-        let mut old_speed = app.state.browse.lyric_view.extra_press.clone();
+        let mut old_speed = app.state.browse.lyrics.extra_press.clone();
         old_speed.tick();
         app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "animation": {
             "controls_press_ms": 4400, "frame_tick_ms": 32
         } } }))?);
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), before);
+        assert_eq!(app.state.browse.lyrics.extra_press.strength(), before);
         app.state.tick_frame();
-        let after = app.state.browse.lyric_view.extra_press.strength();
+        let after = app.state.browse.lyrics.extra_press.strength();
         assert!(after < before);
         assert!(after > old_speed.strength());
         for _ in 0..160 {
             app.state.tick_frame();
         }
-        assert_eq!(app.state.browse.lyric_view.extra_press.strength(), 0);
+        assert_eq!(app.state.browse.lyrics.extra_press.strength(), 0);
         Ok(())
     }
 
@@ -300,49 +297,66 @@ mod tests {
             scrolloff: app.state.scrolloff(),
             glide_ticks: app.state.list_glide_ticks(),
         };
-        let ticks = app.state.minimap_cursor_ticks();
+        let ticks = crate::components::frame::FrameEnv {
+            config: &app.state.cfg,
+            theme: &app.theme,
+            now: app.state.frame_now,
+        }
+        .cursor_ticks();
         app.state
             .browse
-            .nav
-            .track
+            .tracks
+            .scroll
             .prepare(101, 10, motion, ticks, true);
-        app.state.browse.nav.track.set_sel(100);
+        app.state.browse.tracks.scroll.set_sel(100);
         for _ in 0..3 {
             app.state
                 .browse
-                .nav
-                .track
+                .tracks
+                .scroll
                 .prepare(101, 10, motion, ticks, true);
         }
-        let before = app.state.browse.nav.track.position(101);
+        let before = app.state.browse.tracks.scroll.position(101);
         assert!(before.is_some_and(|value| value > 0 && value < POSITION_SCALE));
-        let mut reference = app.state.browse.nav.track.clone();
+        let mut reference = app.state.browse.tracks.scroll.clone();
         app.apply_pushed_config(pushed_tree(serde_json::json!({
             "tui": { "animation": { "minimap_cursor_ms": 1600 } }
         }))?);
-        let slow_ticks = app.state.minimap_cursor_ticks();
-        assert_eq!(app.state.browse.nav.track.position(101), before);
+        let slow_ticks = crate::components::frame::FrameEnv {
+            config: &app.state.cfg,
+            theme: &app.theme,
+            now: app.state.frame_now,
+        }
+        .cursor_ticks();
+        assert_eq!(app.state.browse.tracks.scroll.position(101), before);
         app.state
             .browse
-            .nav
-            .track
+            .tracks
+            .scroll
             .prepare(101, 10, motion, slow_ticks, true);
         reference.prepare(101, 10, motion, ticks, true);
-        let slow = app.state.browse.nav.track.position(101);
+        let slow = app.state.browse.tracks.scroll.position(101);
         let fast = reference.position(101);
         assert!(slow.zip(before).is_some_and(|(now, old)| now > old));
         assert!(slow.zip(fast).is_some_and(|(slow, fast)| slow < fast));
         app.apply_pushed_config(pushed_tree(serde_json::json!({
             "tui": { "animation": { "minimap_cursor_ms": 0 } }
         }))?);
-        assert_eq!(app.state.browse.nav.track.position(101), slow);
-        app.state
-            .browse
-            .nav
-            .track
-            .prepare(101, 10, motion, app.state.minimap_cursor_ticks(), true);
+        assert_eq!(app.state.browse.tracks.scroll.position(101), slow);
+        app.state.browse.tracks.scroll.prepare(
+            101,
+            10,
+            motion,
+            crate::components::frame::FrameEnv {
+                config: &app.state.cfg,
+                theme: &app.theme,
+                now: app.state.frame_now,
+            }
+            .cursor_ticks(),
+            true,
+        );
         assert_eq!(
-            app.state.browse.nav.track.position(101),
+            app.state.browse.tracks.scroll.position(101),
             Some(POSITION_SCALE)
         );
         Ok(())
@@ -590,65 +604,35 @@ mod tests {
         Ok(())
     }
 
-    /// marquee 节奏随推送热更:mode 改 off 后溢出标题恒零相位
-    /// (证明 Marquees 用新配置重建了,而非沿用启动折算的快照)。
+    /// 每个组件现读跑马灯配置，关闭后无需重建组件或重新绑定标题。
     #[test]
-    fn pushed_config_rebuilds_marquee_tempo() -> color_eyre::Result<()> {
-        use crate::runtime::marquee::Slot;
-
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        // 默认 loop:溢出 + 推进足量后相位应非零(默认 pause 100ms/16ms ≈ 7 拍)。
-        app.state.marquees.prepare(Slot::Transport, "a", 40, 10);
-        for _ in 0..200 {
-            app.state.marquees.tick();
-        }
-        let scrolled = app
-            .state
-            .marquees
-            .phase(
-                Slot::Transport,
-                "a",
-                /*content_w*/ 40,
-                /*window_w*/ 10,
-                /*gap_w*/ 2,
-            )
-            .offset;
-        // 再推进一轮，避免循环恰好回到零偏移。
-        for _ in 0..200 {
-            app.state.marquees.tick();
-        }
-        let scrolled = scrolled.max(
+    fn pushed_config_changes_component_marquee() -> color_eyre::Result<()> {
+        use std::time::{Duration, Instant};
+        let mut app = app_with_queue(1, 0)?;
+        let start = Instant::now();
+        app.state.transport.title.prepare("a", 40, 10, start);
+        let tick_ms = *app.state.cfg.tui().animation().frame_tick_ms();
+        let now = start + Duration::from_millis(tick_ms * 200);
+        let later = start + Duration::from_millis(tick_ms * 400);
+        let sample = |now| {
             app.state
-                .marquees
-                .phase(
-                    Slot::Transport,
-                    "a",
-                    /*content_w*/ 40,
-                    /*window_w*/ 10,
-                    /*gap_w*/ 2,
-                )
-                .offset,
-        );
-        assert!(scrolled > 0, "应用前默认 loop 应在滚动");
+                .transport
+                .title
+                .phase("a", 40, 10, 2, app.state.cfg.tui().animation(), now)
+                .offset
+        };
+        assert!(sample(now).max(sample(later)) > 0);
         app.apply_pushed_config(pushed_tree(
             serde_json::json!({ "tui": { "animation": { "marquee": { "mode": "off" } } } }),
         )?);
-        app.state.marquees.prepare(Slot::Transport, "a", 40, 10);
-        for _ in 0..200 {
-            app.state.marquees.tick();
-        }
-        let after = app
-            .state
-            .marquees
-            .phase(
-                Slot::Transport,
-                "a",
-                /*content_w*/ 40,
-                /*window_w*/ 10,
-                /*gap_w*/ 2,
-            )
-            .offset;
-        assert_eq!(after, 0, "热更为 off 后应恒零相位");
+        assert_eq!(
+            app.state
+                .transport
+                .title
+                .phase("a", 40, 10, 2, app.state.cfg.tui().animation(), later)
+                .offset,
+            0
+        );
         Ok(())
     }
 

@@ -2,6 +2,8 @@
 
 mod feedback;
 mod paint;
+mod view;
+pub(crate) use view::{TransportInput, TransportView};
 
-pub(crate) use feedback::TransportFeedback;
-pub(crate) use paint::{draw, prepare, split_buffered_track};
+pub(crate) use feedback::TransportBar;
+pub(crate) use paint::split_buffered_track;

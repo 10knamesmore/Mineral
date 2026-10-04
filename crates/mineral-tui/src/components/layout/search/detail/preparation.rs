@@ -5,45 +5,40 @@ use super::{
     geometry, meta,
     track_table::TrackColumns,
 };
+use crate::components::frame::PrepareCx;
 use crate::components::layout::shared::{marquee, thumbnails};
-use crate::image::{ImageContent, ImageRenderPhase};
-use crate::render::theme::Theme;
+use crate::image::{ImageNeeds, ImageRenderPhase};
 use crate::runtime::scroll::list::ScrollMotion;
-use crate::runtime::state::{AppState, ArtistSection, DetailData, DetailFrame, EntityRef};
+use crate::runtime::state::{ArtistSection, DetailData, DetailFrame, EntityRef, SearchPage};
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders};
 
 /// 准备当前详情帧及仍参与过渡的出发帧。
 pub(crate) fn prepare(
     area: Rect,
-    state: &mut AppState,
-    theme: &Theme,
+    page: &mut SearchPage,
+    cx: &mut PrepareCx<'_>,
     cover_in_flight: bool,
-    advance: bool,
 ) {
     let inner = Block::new().borders(Borders::ALL).inner(area);
     if inner.height < 2 || inner.width == 0 {
         return;
     }
-    let phase = state.image_render_phase();
-    let motion = if state.channel_search.active.at_max() {
-        ScrollMotion::Advancing {
-            scrolloff: state.scrolloff(),
-            glide_ticks: state.list_glide_ticks(),
-        }
-    } else {
-        ScrollMotion::Frozen
-    };
-    let ticks = state.minimap_cursor_ticks();
-    let thumbnail_phase =
-        thumbnails::thumbnail_phase(state, motion, state.channel_search.last_sel_change);
-    let AppState {
-        channel_search,
-        images,
-        marquees,
-        ..
-    } = state;
-    let Some(results) = channel_search.active_results_mut() else {
+    let phase = cx.image_phase;
+    let motion = cx.motion;
+    let ticks = cx.frame.cursor_ticks();
+    let thumbnail_phase = thumbnails::thumbnail_phase(
+        phase,
+        motion,
+        cx.frame.now,
+        page.last_sel_change,
+        std::time::Duration::from_millis(*cx.frame.config.tui().cover().debounce_ms()),
+    );
+    let now = cx.frame.now;
+    let theme = cx.frame.theme;
+    let advance = cx.advance;
+    let images = &mut cx.images;
+    let Some(results) = page.active_results_mut() else {
         return;
     };
     let show_back = results.detail.depth() > 0;
@@ -57,22 +52,10 @@ pub(crate) fn prepare(
             ImageRenderPhase::Offscreen
         };
         if !cover_in_flight {
-            images.prepare_display(
-                ImageContent::Display {
-                    url: frame.entity.cover(),
-                },
-                cover,
-                phase,
-            );
+            images.display(frame.entity.cover(), cover, phase);
         }
         if let Some(area) = selected_cover {
-            images.prepare_display(
-                ImageContent::Display {
-                    url: frame.selected_cover(),
-                },
-                area,
-                phase,
-            );
+            images.display(frame.selected_cover(), area, phase);
         }
         meta::prepare(metadata, frame, theme, stable && show_back);
         let single = frame
@@ -102,24 +85,10 @@ pub(crate) fn prepare(
             thumbnail_phase
         };
         if artist && frame.section_eased().is_some() {
-            prepare_rows(
-                list_area,
-                frame,
-                ArtistSection::Hot,
-                images,
-                marquees,
-                phase,
-            );
-            prepare_rows(
-                list_area,
-                frame,
-                ArtistSection::Albums,
-                images,
-                marquees,
-                phase,
-            );
+            prepare_rows(list_area, frame, ArtistSection::Hot, images, phase, now);
+            prepare_rows(list_area, frame, ArtistSection::Albums, images, phase, now);
         } else {
-            prepare_rows(list_area, frame, frame.section, images, marquees, phase);
+            prepare_rows(list_area, frame, frame.section, images, phase, now);
         }
     });
 }
@@ -127,13 +96,13 @@ pub(crate) fn prepare(
 /// 按该帧现有列布局准备一个可见窗口，未加载的数据不产生行需求。
 fn prepare_rows(
     area: Rect,
-    frame: &DetailFrame,
+    frame: &mut DetailFrame,
     section: ArtistSection,
-    images: &mut crate::image::ImageEngine,
-    marquees: &mut crate::runtime::marquee::Marquees,
+    images: &mut ImageNeeds<'_>,
     phase: ImageRenderPhase,
+    now: std::time::Instant,
 ) {
-    let show_cover = images.supports_thumbnails();
+    let show_cover = images.ready().supports_thumbnails();
     let mut songs = TrackList::Songs(&[]);
     let mut albums = None;
     let mut cols = TrackColumns::new(true, false);
@@ -176,17 +145,17 @@ fn prepare_rows(
         && let Some(song) = songs.song(selected)
     {
         marquee::prepare_song(
-            marquees,
-            crate::runtime::marquee::Slot::SearchDetailSelected,
+            &mut frame.title,
             song,
             columns
                 .get(cols.title_index())
                 .map_or(0, |column| column.width),
+            now,
         );
     }
     let cover_index = usize::from(albums.is_none());
     if show_cover && let Some(column) = columns.get(cover_index) {
-        thumbnails::prepare_table_thumbnails(
+        thumbnails::declare_table_thumbnails(
             images,
             *column,
             visible.map(|index| match albums {

@@ -8,7 +8,7 @@ use ratatui::style::Color;
 
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::state::{ListExpansion, ListExpansionScope, ListExpansionState};
+use crate::runtime::state::ListExpansion;
 
 /// 一行的亚字符格位置，千分之一行。
 const ROW_SCALE: i64 = 1000;
@@ -34,9 +34,6 @@ struct RowPaint {
 
 /// 列表绘制前的几何与背景；展开时用它擦除目标位置的提前高亮。
 pub(crate) struct ListSurface {
-    /// 所属列表。
-    pub(crate) scope: ListExpansionScope,
-
     /// 含表头与底栏的面板范围。
     area: Rect,
 
@@ -52,16 +49,10 @@ pub(crate) fn begin_list(
     buf: &Buffer,
     area: Rect,
     body: Rect,
-    expansion: &ListExpansionState,
-    scope: ListExpansionScope,
+    active: Option<&ListExpansion>,
 ) -> ListSurface {
-    let backdrop = expansion
-        .active
-        .as_ref()
-        .filter(|active| active.before.scope == scope)
-        .map(|_| copy_panel(buf, area));
+    let backdrop = active.map(|_| copy_panel(buf, area));
     ListSurface {
-        scope,
         area,
         body,
         backdrop,
@@ -73,21 +64,20 @@ pub(crate) fn begin_list(
 /// 调用者负责只在稳定布局中接入；body 允许有边框和无边框的表格复用同一合成。
 pub(crate) fn finish_list(
     buf: &mut Buffer,
-    expansion: &ListExpansionState,
+    active: Option<&ListExpansion>,
     theme: &Theme,
     surface: ListSurface,
     visible: Range<usize>,
 ) {
     let ListSurface {
-        scope,
         area,
         body,
         backdrop,
     } = surface;
-    let Some(active) = &expansion.active else {
+    let Some(active) = active else {
         return;
     };
-    if active.before.scope != scope || active.before.area != area || active.before.body != body {
+    if active.before.area != area || active.before.body != body {
         return;
     }
     if let Some(backdrop) = backdrop {

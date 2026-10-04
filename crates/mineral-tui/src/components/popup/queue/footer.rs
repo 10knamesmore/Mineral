@@ -1,7 +1,7 @@
 //! queue 浮层的底栏标签:左下光标位置,右下剩余曲目数、时长与预计播完钟点。
 
+use super::QueueInput;
 use crate::runtime::format::{format_clock, format_total, sum_durations};
-use crate::runtime::state::AppState;
 
 /// 底栏放得下剩余信息所需的最小内区宽;窄于此右下留空。
 const REMAINING_MIN_W: u16 = 34;
@@ -14,8 +14,8 @@ const REMAINING_MIN_W: u16 = 34;
 ///
 /// # Return:
 ///   位置文本(两端各留一个空格,与边框标题的既有留白一致)。
-pub(super) fn position_label(sel: usize, ctx: &AppState) -> String {
-    let total = ctx.player.queue.len();
+pub(super) fn position_label(sel: usize, ctx: &QueueInput<'_>) -> String {
+    let total = ctx.queue.len();
     if total == 0 {
         return " 0 / 0 ".to_owned();
     }
@@ -40,23 +40,23 @@ pub(super) fn position_label(sel: usize, ctx: &AppState) -> String {
 ///
 /// # Return:
 ///   剩余文本(两端各留一个空格);无内容时为空串。
-pub(super) fn remaining_label(ctx: &AppState, width: u16) -> String {
-    if ctx.player.queue.is_empty() || width < REMAINING_MIN_W {
+pub(super) fn remaining_label(ctx: &QueueInput<'_>, width: u16) -> String {
+    if ctx.queue.is_empty() || width < REMAINING_MIN_W {
         return String::new();
     }
-    let from = ctx.queue_current_index().unwrap_or(0);
-    let rest = ctx.player.queue.get(from..).unwrap_or(&[]);
+    let from = ctx.current.unwrap_or(0);
+    let rest = ctx.queue.get(from..).unwrap_or(&[]);
     let (mut ms, unknown) = sum_durations(rest.iter().map(|s| s.duration_ms));
     // 在播曲(即 rest 首项)只剩未播部分:扣掉已播进度。悬空态无在播行,不扣。
-    if ctx.player.cursor.is_attached()
+    if ctx.attached
         && let Some(dur) = rest.first().and_then(|s| s.duration_ms)
     {
-        ms = ms.saturating_sub(dur.min(ctx.playback.position_ms));
+        ms = ms.saturating_sub(dur.min(ctx.position_ms));
     }
     let at_least = if unknown > 0 { "≥" } else { "" };
     let head = format!(" {} left · {at_least}{}", rest.len(), format_total(ms));
     // ends 钟点只在「播放中 + 时长精确」时给:暂停会漂,未知项让钟点变下界。
-    if ctx.playback.playing && unknown == 0 {
+    if ctx.playing && unknown == 0 {
         let now = ctx.now;
         let ends = now + chrono::Duration::milliseconds(i64::try_from(ms).unwrap_or(i64::MAX));
         format!("{head} → {} ", format_clock(now, ends))

@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 
 use crate::components::layout::shared::text::{char_width, display_width};
 use crate::render::theme::Theme;
-use crate::runtime::marquee::{Marquees, Slot};
-use crate::runtime::state::AppState;
+use crate::runtime::marquee::Marquee;
+use std::time::Instant;
 
 /// 歌曲主名和别名在标题中的完整列宽；样式不会改变列数。
 pub(crate) fn song_title_width(song: &mineral_model::Song) -> u16 {
@@ -23,18 +23,24 @@ pub(crate) fn song_title_width(song: &mineral_model::Song) -> u16 {
 
 /// 在布局确定后绑定一个歌曲标题的显示身份与窗口。
 pub(crate) fn prepare_song(
-    marquees: &mut Marquees,
-    slot: Slot,
+    marquee: &mut Marquee,
     song: &mineral_model::Song,
     width: u16,
+    now: Instant,
 ) {
-    marquees.prepare(slot, &song.id.qualified(), song_title_width(song), width);
+    marquee.prepare(&song.id.qualified(), song_title_width(song), width, now);
 }
 
-/// 一次 title marquee 渲染的共享上下文:相位状态 + gap / fade 配置(从 [`AppState`] 摘取)。
+/// 一次 title marquee 渲染的共享上下文:相位状态 + gap / fade 配置(借用当前组件与配置)。
 pub(crate) struct MarqueeCtx<'a> {
     /// 相位状态(槽 → 起始拍)。
-    pub(crate) marquees: &'a Marquees,
+    pub(crate) marquee: &'a Marquee,
+
+    /// 本次有效动画配置，绘制时现读。
+    anim: &'a mineral_config::AnimationConfig,
+
+    /// 主循环采样的本帧时刻。
+    now: Instant,
 
     /// 循环拼接处的分隔串(配置 `animation.marquee_gap`)。
     pub(crate) gap: &'a str,
@@ -57,10 +63,18 @@ impl<'a> MarqueeCtx<'a> {
     ///
     /// # Params:
     ///   - `fade_to`: 边缘 fade 目标色(所在渲染位的底色)
-    pub(crate) fn new(state: &'a AppState, theme: &Theme, fade_to: Color) -> Self {
-        let marquee = state.cfg.tui().animation().marquee();
+    pub(crate) fn new(
+        title: &'a Marquee,
+        anim: &'a mineral_config::AnimationConfig,
+        now: Instant,
+        theme: &Theme,
+        fade_to: Color,
+    ) -> Self {
+        let marquee = anim.marquee();
         Self {
-            marquees: &state.marquees,
+            marquee: title,
+            anim,
+            now,
             gap: marquee.loop_().gap(),
             gap_style: Style::new().fg(theme.overlay),
             fade_to,
@@ -72,7 +86,6 @@ impl<'a> MarqueeCtx<'a> {
     ///
     /// # Params:
     ///   - `spans`: 已组装的标题 spans(各段样式切片后保留)
-    ///   - `slot`: 渲染位
     ///   - `identity`: 当前显示对象的稳定 ID
     ///   - `window_w`: 可用窗口宽(列)
     ///
@@ -81,7 +94,6 @@ impl<'a> MarqueeCtx<'a> {
     pub(crate) fn line(
         &self,
         spans: Vec<Span<'static>>,
-        slot: Slot,
         identity: &str,
         window_w: u16,
     ) -> Line<'static> {
@@ -89,12 +101,13 @@ impl<'a> MarqueeCtx<'a> {
             .iter()
             .map(|s| u32::from(display_width(&s.content)))
             .sum::<u32>();
-        let phase = self.marquees.phase(
-            slot,
+        let phase = self.marquee.phase(
             identity,
             u16::try_from(content_w).unwrap_or(u16::MAX),
             window_w,
             display_width(self.gap),
+            self.anim,
+            self.now,
         );
         let fade = (phase.fade_permille > 0).then_some(EdgeFade {
             to: self.fade_to,
@@ -166,9 +179,6 @@ pub(crate) struct RowMarquee<'a> {
     /// 共享上下文。
     pub(crate) ctx: &'a MarqueeCtx<'a>,
 
-    /// 该行所属槽。
-    pub(crate) slot: Slot,
-
     /// title 列实际宽度(经 [`resolve_column_widths`] 解算)。
     pub(crate) title_w: u16,
 }
@@ -178,15 +188,13 @@ pub(crate) struct RowMarquee<'a> {
 /// # Params:
 ///   - `is_selected`: 该行是否为光标选中行
 ///   - `ctx`: 共享上下文
-///   - `slot`: 该表的选中槽
 ///   - `title_w`: title 列实际宽度
 pub(crate) fn row_marquee<'a>(
     is_selected: bool,
     ctx: &'a MarqueeCtx<'a>,
-    slot: Slot,
     title_w: u16,
 ) -> Option<RowMarquee<'a>> {
-    is_selected.then_some(RowMarquee { ctx, slot, title_w })
+    is_selected.then_some(RowMarquee { ctx, title_w })
 }
 
 /// 解算 Table 各列的实际宽度(镜像 ratatui `Table::get_columns_widths` 的求解:

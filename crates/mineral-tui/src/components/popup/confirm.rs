@@ -11,12 +11,13 @@ use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
 };
 use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
 
 /// 退出确认 modal。无 UI-local 状态。
 pub(crate) struct ConfirmOverlay;
 
 impl Overlay for ConfirmOverlay {
+    type Input<'a> = ();
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 35,
@@ -32,13 +33,13 @@ impl Overlay for ConfirmOverlay {
         }
     }
 
-    fn block(&self, _ctx: &AppState, theme: &Theme, _focused: bool) -> Block<'static> {
+    fn block(&self, _ctx: &(), theme: &Theme, _focused: bool) -> Block<'static> {
         base_block(theme)
             .border_style(Style::new().fg(theme.accent))
             .title(Line::from(" quit mineral? ").style(Style::new().fg(theme.subtext)))
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &(), theme: &Theme) {
         if inner.height < 3 || inner.width < 12 {
             return;
         }
@@ -70,7 +71,7 @@ impl Overlay for ConfirmOverlay {
             .render(opts_area, buf);
     }
 
-    fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(&mut self, key: &KeyEvent, _ctx: &()) -> OverlayResponse {
         match key.code {
             KeyCode::Char('y' | 'Y') | KeyCode::Enter => OverlayResponse::Do(OverlayAction::Quit),
             KeyCode::Char('n' | 'N') | KeyCode::Esc => OverlayResponse::Do(OverlayAction::CloseTop),

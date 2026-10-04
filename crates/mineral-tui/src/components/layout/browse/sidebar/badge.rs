@@ -5,7 +5,7 @@ use ratatui::text::Span;
 
 use crate::render::cursor::cursor_spans;
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, SearchState};
+use crate::runtime::state::SearchState;
 
 /// 把指定面板的搜索态渲染成可拼进标题的 [`Span`] 序列。
 ///
@@ -46,14 +46,4 @@ pub fn search_badge(
         ));
     }
     spans
-}
-
-/// 深度索引中正在补齐的歌单数；首批预览不重复计数。
-/// 深度搜索关闭或没有待补齐歌单时返回 `None`。
-pub fn indexing_count(state: &AppState) -> Option<usize> {
-    if !*state.cfg.tui().search().deep().enabled() {
-        return None;
-    }
-    let n = state.library.completing_playlists();
-    (n > 0).then_some(n)
 }

@@ -3,7 +3,6 @@
 use super::component::{Chrome, Overlay, OverlayAction, OverlayResponse, base_block};
 use crate::components::text_input::TextInput;
 use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
@@ -48,6 +47,8 @@ impl TextPrompt {
 }
 
 impl Overlay for TextPrompt {
+    type Input<'a> = ();
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 50,
@@ -62,16 +63,16 @@ impl Overlay for TextPrompt {
             align: None,
         }
     }
-    fn block(&self, _ctx: &AppState, theme: &Theme, _focused: bool) -> Block<'static> {
+    fn block(&self, _ctx: &(), theme: &Theme, _focused: bool) -> Block<'static> {
         base_block(theme)
             .title(self.title.clone())
             .title_alignment(Alignment::Center)
             .border_style(Style::new().fg(theme.accent))
     }
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &(), theme: &Theme) {
         self.input.render(buf, inner, Style::new().fg(theme.text));
     }
-    fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(&mut self, key: &KeyEvent, _ctx: &()) -> OverlayResponse {
         match key.code {
             KeyCode::Enter => (self.on_submit)(self.input.text()),
             KeyCode::Esc => OverlayResponse::Do(OverlayAction::CloseTop),

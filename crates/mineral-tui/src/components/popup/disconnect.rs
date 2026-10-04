@@ -12,12 +12,13 @@ use crate::components::popup::component::{
     Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
 };
 use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
 
 /// 断连提示 modal。无 UI-local 状态;任意键退出。
 pub(crate) struct DisconnectOverlay;
 
 impl Overlay for DisconnectOverlay {
+    type Input<'a> = ();
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 40,
@@ -33,13 +34,13 @@ impl Overlay for DisconnectOverlay {
         }
     }
 
-    fn block(&self, _ctx: &AppState, theme: &Theme, _focused: bool) -> Block<'static> {
+    fn block(&self, _ctx: &(), theme: &Theme, _focused: bool) -> Block<'static> {
         base_block(theme)
             .border_style(Style::new().fg(theme.red))
             .title(Line::from(" connection lost ").style(Style::new().fg(theme.red)))
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &(), theme: &Theme) {
         if inner.height < 3 || inner.width < 12 {
             return;
         }
@@ -62,7 +63,7 @@ impl Overlay for DisconnectOverlay {
             .render(hint_area, buf);
     }
 
-    fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(&mut self, _key: &KeyEvent, _ctx: &()) -> OverlayResponse {
         // 链路已断,正常路径全是兜底默认值:任意键直接退出。
         OverlayResponse::Do(OverlayAction::Quit)
     }

@@ -11,10 +11,28 @@ use mineral_task::ChannelFetchKindTag;
 
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, View};
+use crate::runtime::state::View;
+
+/// 状态行展示所需的事实；不借用任务执行或图片调度能力。
+pub(crate) struct StatusInput<'a> {
+    /// 当前浏览页。
+    pub(crate) view: View,
+
+    /// 终端失焦渐变进度。
+    pub(crate) dim: u16,
+
+    /// 在播状态及输出设备。
+    pub(crate) playback: &'a crate::runtime::playback::Playback,
+
+    /// 后台任务计数。
+    pub(crate) tasks: &'a mineral_task::Snapshot,
+
+    /// 图片管线待完成数量。
+    pub(crate) loading_images: usize,
+}
 
 /// 渲染状态行到给定 [`Rect`]。`queue_open` 由浮层栈给出,决定是否显示 `[queue]` tab。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
+pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme: &Theme) {
     let [left, right] =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(60)]).areas(area);
     paint_left(frame, left, state, theme);
@@ -24,8 +42,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) 
 
 /// 终端失焦时整行前景向背景色渐变(满进度混 [`UNFOCUS_BLEND_PERMILLE`]),
 /// 渲染后整行后处理,与「画什么」解耦。聚焦稳态(进度 0)零开销跳过。
-fn dim_unfocused(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
-    let t = state.dim.eased_in_out();
+fn dim_unfocused(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme: &Theme) {
+    let t = state.dim;
     if t == 0 {
         return;
     }
@@ -51,9 +69,9 @@ const UNFOCUS_BLEND_PERMILLE: u64 = 550;
 const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs。
-fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
-    let active_pl = state.browse.view == View::Playlists;
-    let active_lib = state.browse.view == View::Library;
+fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme: &Theme) {
+    let active_pl = state.view == View::Playlists;
+    let active_lib = state.view == View::Library;
     let spans = vec![
         Span::styled(
             format!("▌ mineral v{DISPLAY_VERSION}  "),
@@ -80,7 +98,7 @@ fn tab_style(active: bool, theme: &Theme) -> Style {
 ///
 /// 显示样:`pl:1 tr:2 song:1 lyr:1 cover:7  ● playing`。各段 N>0 才显示。
 /// 全 0 时只剩 glyph,不会假装"什么都没在跑"——封面在跑就显示 cover:N。
-fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme) {
+fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme: &Theme) {
     let pb = &state.playback;
     let (glyph, color, label) = if pb.playing {
         ("●", theme.green, "playing")
@@ -90,7 +108,7 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
     let mut spans = Vec::<Span<'_>>::new();
     // 失焦徽标:随 focus_fade 进度从背景色淡入到 overlay 灰,与整行变灰
     // ([`dim_unfocused`])同一进度源,文字与底色同步浮现/消隐。
-    let fade = state.dim.eased_in_out();
+    let fade = state.dim;
     if fade > 0 {
         spans.push(Span::styled(
             "◌ not focused  ",
@@ -110,7 +128,7 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
             Style::new().fg(theme.peach).add_modifier(Modifier::BOLD),
         ));
     }
-    let by = &state.tasks_snapshot.by_kind;
+    let by = &state.tasks.by_kind;
     // 固定顺序渲染,避免 hashmap 迭代顺序抖动。
     for (tag, label) in [
         (ChannelFetchKindTag::MyPlaylists, "pl"),
@@ -125,7 +143,7 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Them
             ));
         }
     }
-    let loading = state.images.loading_count();
+    let loading = state.loading_images;
     if loading > 0 {
         spans.push(Span::styled(
             format!("cover:{loading} "),

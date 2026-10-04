@@ -21,3 +21,6 @@ pub use application::App;
 
 #[cfg(test)]
 mod presentation_tests;
+
+pub(crate) mod overlays;
+pub(crate) use overlays::AppOverlay;

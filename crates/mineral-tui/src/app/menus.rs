@@ -4,6 +4,8 @@
 //! 锚点 = 选中行的屏幕矩形,由上一帧面积([`AppState::frame_area`])重算布局 +
 //! 列表滚动态的只读 offset 还原;菜单贴行下方弹出(`Placement::Below`)。
 
+use crate::app::AppOverlay;
+
 use mineral_config::{CopyContext, CopyTemplate};
 use mineral_model::{Album, Artist, ArtistRef, Song};
 use mineral_protocol::{CopyTemplateCtx, QueueAnchor, QueueOp, QueuePos};
@@ -12,9 +14,7 @@ use ratatui::layout::Rect;
 
 use crate::components::layout::search::detail::detail_list_area;
 use crate::components::layout::shared::compute::{compute, compute_search};
-use crate::components::popup::{
-    ContainerRef, MenuAction, MenuItem, OverlayKind, Placement, PopMenu,
-};
+use crate::components::popup::{ContainerRef, MenuAction, MenuItem, Placement, PopMenu};
 use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::scroll::viewport::pin_cursor;
 use crate::runtime::state::{EntityRef, SearchFocus, View};
@@ -132,7 +132,7 @@ impl App {
             MenuKind::Copy => "copy",
             MenuKind::Action => "actions",
         };
-        self.overlays.push(OverlayKind::menu(PopMenu::new(
+        self.overlays.push(AppOverlay::menu(PopMenu::new(
             label,
             items,
             sel.anchor,
@@ -152,7 +152,7 @@ impl App {
         if items.is_empty() {
             return;
         }
-        self.overlays.push(OverlayKind::menu(PopMenu::new(
+        self.overlays.push(AppOverlay::menu(PopMenu::new(
             "copy",
             items,
             anchor,
@@ -212,7 +212,7 @@ impl App {
             )
             .destructive(),
         );
-        self.overlays.push(OverlayKind::menu(PopMenu::new(
+        self.overlays.push(AppOverlay::menu(PopMenu::new(
             "queue",
             items,
             anchor,
@@ -489,7 +489,7 @@ impl App {
     fn selected_track_song(&self) -> Option<Song> {
         self.state
             .filtered_tracks()
-            .get(self.state.browse.nav.track.sel())
+            .get(self.state.browse.tracks.scroll.sel())
             .map(|entry| entry.data.song.clone())
     }
 
@@ -497,7 +497,7 @@ impl App {
     fn library_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            &self.state.browse.nav.track,
+            &self.state.browse.tracks.scroll,
             self.state.filtered_tracks().len(),
         )
     }
@@ -506,7 +506,7 @@ impl App {
     fn playlist_row_anchor(&self) -> Rect {
         row_anchor(
             self.left_panel(),
-            &self.state.browse.nav.playlist,
+            &self.state.browse.playlists.scroll,
             self.state.filtered_playlists().len(),
         )
     }
@@ -951,7 +951,7 @@ mod tests {
     #[test]
     fn filtered_o_menu_play_defaults_to_full_collection() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.browse.search.tracks.set_query("Gjs");
+        app.state.browse.tracks.search.set_query("Gjs");
         let want_id = app
             .state
             .filtered_tracks()
@@ -979,7 +979,7 @@ mod tests {
     fn filtered_o_menu_play_can_play_matches_only() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 3, /*sel_track*/ 0)?;
         set_filter_play_scope(&mut app, "matches")?;
-        app.state.browse.search.tracks.set_query("Gjs");
+        app.state.browse.tracks.search.set_query("Gjs");
         let want_id = app
             .state
             .filtered_tracks()

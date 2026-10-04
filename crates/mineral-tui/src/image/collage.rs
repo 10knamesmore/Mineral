@@ -79,16 +79,20 @@ pub(crate) fn tick(state: &mut AppState) {
 ///
 /// # Return:
 ///   可交给 [`crate::image::ImageContent::Display`] 的封面 URL。
-pub(crate) fn effective_cover_url(state: &AppState, playlist: &Playlist) -> Option<MediaUrl> {
+pub(crate) fn effective_cover_url(
+    library: &crate::runtime::state::LibraryData,
+    images: super::ReadyImages<'_>,
+    playlist: &Playlist,
+) -> Option<MediaUrl> {
     if let Some(url) = &playlist.cover_url {
         return Some(url.clone());
     }
     if playlist.source() != SourceKind::MINERAL {
         return None;
     }
-    let tracks = state.library.tracks.get(&playlist.id)?;
+    let tracks = library.tracks.get(&playlist.id)?;
     let key = collage_key(playlist, &member_covers(tracks))?;
-    state.images.cache.contains_key(&key).then_some(key)
+    images.contains_decoded(&key).then_some(key)
 }
 
 /// 歌单内前 [`MAX_TILES`] 首**有封面**的歌的 `(来源, 封面 URL)`(按歌单顺序,早停)。
@@ -342,7 +346,8 @@ mod tests {
         assert!(s.images.collage_ready.is_empty(), "无就绪成员不应合成");
         assert!(
             effective_cover_url(
-                &s,
+                &s.library,
+                s.images.ready(),
                 &s.library
                     .playlists
                     .first()
@@ -372,7 +377,8 @@ mod tests {
             .ok_or_else(|| eyre!("歌单在"))?
             .data
             .clone();
-        let key = effective_cover_url(&s, &playlist).ok_or_else(|| eyre!("2 张就绪应已合成"))?;
+        let key = effective_cover_url(&s.library, s.images.ready(), &playlist)
+            .ok_or_else(|| eyre!("2 张就绪应已合成"))?;
         assert_eq!(
             s.images.collage_ready.get(&key).copied(),
             Some(2),

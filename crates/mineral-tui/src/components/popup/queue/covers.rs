@@ -2,12 +2,12 @@
 
 use mineral_model::{MediaUrl, SourceKind};
 
+use super::QueueInput;
 use super::QueueOverlay;
-use crate::runtime::state::AppState;
 
 impl QueueOverlay {
     /// 按过滤后的光标与当前列表半径选取封面,选中项优先向两侧扩展。
-    pub(crate) fn cover_candidates(&self, ctx: &AppState) -> Vec<(SourceKind, MediaUrl)> {
+    pub(crate) fn cover_candidates(&self, ctx: &QueueInput<'_>) -> Vec<(SourceKind, MediaUrl)> {
         if !ctx.images.supports_thumbnails() {
             return Vec::new();
         }
@@ -16,9 +16,7 @@ impl QueueOverlay {
         let radius = *ctx.cfg.tui().prefetch().radius();
         let mut covers = Vec::new();
         let mut consider = |index: usize| {
-            if let Some(song) = visible
-                .get(index)
-                .and_then(|&raw| ctx.player.queue.get(raw))
+            if let Some(song) = visible.get(index).and_then(|&raw| ctx.queue.get(raw))
                 && let Some(url) = song.cover_url.as_ref()
             {
                 covers.push((song.source(), url.clone()));

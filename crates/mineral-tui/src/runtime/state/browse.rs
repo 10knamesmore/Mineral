@@ -3,31 +3,21 @@
 //! 与模型数据(library / caps / player)分离——模型留在外层聚合态,Browse 决策时按需借入。
 //! 全屏与 `/` 过滤都是这一页的内部子模式(同一套导航面),不另起独立页。
 
-use std::cell::RefCell;
-
 use mineral_config::{AnimationConfig, TrailTimingConfig};
 use mineral_model::{PlaylistId, Song};
 
 use crate::render::anim::{Toggle, TrailLeg, TrailingToggle, ticks16_from_ms};
-use crate::runtime::deep_search::{self, DeepHit};
+use crate::runtime::deep_search::DeepHit;
 use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
 
+use super::View;
 use super::library::LibraryData;
-use super::lyric::view::LyricView;
 use super::nav::NavState;
 use super::search::SearchState;
-use super::track_filter::{FilteredTracks, TrackFilterCache};
+use super::track_filter::FilteredTracks;
 use super::view_switch::ViewSwitch;
-use super::{ListExpansionState, View};
-
-/// 歌单列表与歌单内曲目各自的搜索；切换视图不清除另一层的查询。
-pub struct BrowseSearch {
-    /// Playlists 的查询与深度搜索缓存，进入歌单后保留。
-    pub playlists: SearchState,
-
-    /// 当前打开歌单的曲目查询，每次进入歌单时清空。
-    pub tracks: SearchState,
-}
+use crate::components::layout::browse::lyrics::LyricsPanel;
+use crate::components::layout::browse::sidebar::{library::TrackList, playlists::PlaylistList};
 
 /// Browse 视图逻辑所需的只读模型借用:歌曲库 + 配置——过滤 / 深度搜索 / 选中都读它,
 /// 但这些是 model 数据(留在外层聚合态),故借入而非拥有。
@@ -51,6 +41,9 @@ pub(crate) struct LibraryQueueProjection {
 
 /// Browse 布局层的 view 状态(光标 / 视图 / 全屏 / 歌词 / 过滤)。
 pub struct BrowsePage {
+    /// 当前选中项的详情面板。
+    pub now_playing: crate::components::layout::browse::now_playing::NowPlaying,
+
     /// 左栏视图切换:Playlists ↔ Library 两态 + 横向过渡,由 [`ViewSwitch`] 合一。
     /// `current()` 给路由 / 选中语义、`eased_in_out()` 给渲染;`== View::X` 直接可比。
     pub view: ViewSwitch,
@@ -65,19 +58,16 @@ pub struct BrowsePage {
     pub ambient_reveal: TrailingToggle,
 
     /// 歌词面板显示态(副歌词档 + 全屏手动滚动脱离态)。
-    pub lyric_view: LyricView,
+    pub lyrics: LyricsPanel,
 
     /// 列表浏览态(两个列表的光标 + 视口滚动、跨歌单位置记忆、选中变化时刻)。
     pub nav: NavState,
 
-    /// 两层列表各自的查询；过渡绘制按面板取值，按键使用当前视图的查询。
-    pub search: BrowseSearch,
+    /// 歌单列表组件，返回时保留自己的查询和光标。
+    pub playlists: PlaylistList,
 
-    /// 清除搜索的逐行展开；渲染时只缓存当前可见结果。
-    pub(crate) list_expansion: ListExpansionState,
-
-    /// 当前歌单过滤后的下标与时长；数据或查询变化时重建。
-    filtered_tracks: RefCell<TrackFilterCache>,
+    /// 已打开歌单的曲目列表组件。
+    pub tracks: TrackList,
 }
 
 impl BrowsePage {
@@ -89,36 +79,45 @@ impl BrowsePage {
         let tick_ms = *anim.frame_tick_ms();
         let trail = anim.ambient_trail();
         Self {
+            now_playing: Default::default(),
             view: ViewSwitch::new(ticks16_from_ms(*anim.sweep_ms(), tick_ms)),
             fullscreen: Toggle::new(ticks16_from_ms(*anim.fullscreen_ms(), tick_ms)),
             ambient_reveal: TrailingToggle::new(
                 trail_leg(trail.enter(), tick_ms),
                 trail_leg(trail.exit(), tick_ms),
             ),
-            lyric_view: LyricView::new(),
+            lyrics: LyricsPanel::new(),
             nav: NavState::new(),
-            search: BrowseSearch {
-                playlists: SearchState::new(),
-                tracks: SearchState::new(),
-            },
-            list_expansion: ListExpansionState::default(),
-            filtered_tracks: RefCell::new(TrackFilterCache::default()),
+            playlists: PlaylistList::new(),
+            tracks: TrackList::new(),
         }
+    }
+
+    /// 数据或尺寸改变后，两份旧显示输入均失效。
+    pub(crate) fn invalidate_expansions(&mut self) {
+        self.playlists.expansion.invalidate();
+        self.tracks.expansion.invalidate();
+    }
+
+    /// 输入立即接管正在展开的列表。
+    pub(crate) fn interrupt_expansions(&mut self) {
+        self.playlists.expansion.interrupt();
+        self.tracks.expansion.interrupt();
     }
 
     /// 当前接受按键的列表查询；离屏面板应直接读取自己的搜索状态。
     pub fn active_search(&self) -> &SearchState {
         match self.view.current() {
-            View::Playlists => &self.search.playlists,
-            View::Library => &self.search.tracks,
+            View::Playlists => &self.playlists.search,
+            View::Library => &self.tracks.search,
         }
     }
 
     /// 修改当前列表的查询，不影响另一层保留的搜索。
     pub fn active_search_mut(&mut self) -> &mut SearchState {
         match self.view.current() {
-            View::Playlists => &mut self.search.playlists,
-            View::Library => &mut self.search.tracks,
+            View::Playlists => &mut self.playlists.search,
+            View::Library => &mut self.tracks.search,
         }
     }
 
@@ -134,10 +133,14 @@ impl BrowsePage {
     /// # Params:
     ///   - `anim`: 新动画配置
     pub fn retempo(&mut self, anim: &AnimationConfig) {
-        self.lyric_view.extra_press.retempo(anim);
+        self.lyrics.extra_press.retempo(anim);
         let tick_ms = *anim.frame_tick_ms();
         let trail = anim.ambient_trail();
-        self.list_expansion
+        self.playlists
+            .expansion
+            .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
+        self.tracks
+            .expansion
             .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
         self.view
             .retempo(ticks16_from_ms(*anim.sweep_ms(), tick_ms));
@@ -175,7 +178,7 @@ impl BrowsePage {
         model: BrowseModel<'a>,
     ) -> Option<&'a PlaylistView> {
         self.filtered_playlists(model)
-            .get(self.nav.playlist.sel())
+            .get(self.playlists.scroll.sel())
             .copied()
     }
 
@@ -200,58 +203,14 @@ impl BrowsePage {
         self.current_tracks_slot(model).map_or(&[], Vec::as_slice)
     }
 
-    /// 当前可见(被 search 过滤)的歌单列表。
-    ///
-    /// 空 query → 原序;非空 query → fzf 风格模糊匹配(拼音/首字母也算命中),
-    /// 按 score 降序排,**stable** 保证同分按原序。
+    /// 借用歌单列表组件维护的过滤结果。
     pub fn filtered_playlists<'a>(&self, model: BrowseModel<'a>) -> Vec<&'a PlaylistView> {
-        let search = &self.search.playlists;
-        if search.query().is_empty() {
-            return model.library.playlists.iter().collect();
-        }
-        search.sync_query();
-        deep_search::ensure(search, model.library, model.cfg);
-        let deep = search.deep_cache.borrow();
-        let mut scored: Vec<(f64, &PlaylistView)> = model
-            .library
-            .playlists
-            .iter()
-            .filter_map(|p| {
-                let name = search.match_for(&p.data.name).map(|m| f64::from(m.score));
-                let inner = deep.score_of(&p.data.id);
-                let best = match (name, inner) {
-                    (Some(n), Some(i)) => n.max(i),
-                    (Some(n), None) => n,
-                    (None, Some(i)) => i,
-                    (None, None) => return None,
-                };
-                Some((best, p))
-            })
-            .collect();
-        // total_cmp 全序 + sort_by 稳定:同分项保持原序。
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-        scored.into_iter().map(|(_, p)| p).collect()
+        self.playlists.rows(model.library, model.cfg)
     }
 
-    /// 某歌单的深度命中展示载荷(克隆一份给渲染)。空 query / 无命中返回 `None`。
-    ///
-    /// 调用前提:本帧已调用 [`Self::filtered_playlists`]，深度搜索缓存已经就绪。
+    /// 借用该歌单的深度命中展示内容。
     pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<DeepHit> {
-        if self.search.playlists.query().is_empty() {
-            return None;
-        }
-        self.search
-            .playlists
-            .deep_cache
-            .borrow()
-            .hit_of(id)
-            .cloned()
-    }
-
-    /// 当前过滤结果里是否存在任何深度命中。调用前提同 [`Self::deep_hit_for`]。
-    pub fn has_deep_hits(&self) -> bool {
-        !self.search.playlists.query().is_empty()
-            && self.search.playlists.deep_cache.borrow().has_hits()
+        self.playlists.deep_hit_for(id)
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分。
@@ -262,12 +221,8 @@ impl BrowsePage {
         let Some(entries) = model.library.tracks.get(&playlist.data.id) else {
             return FilteredTracks::empty();
         };
-        self.filtered_tracks.borrow_mut().view(
-            &playlist.data.id,
-            model.library.tracks_generation,
-            entries,
-            &self.search.tracks,
-        )
+        self.tracks
+            .filtered(&playlist.data.id, model.library.tracks_generation, entries)
     }
 
     /// 按 `behavior.filter_play_scope` 建立 Library 起播队列，并保留过滤结果中选中的 exact
@@ -287,7 +242,7 @@ impl BrowsePage {
         model: BrowseModel<'_>,
     ) -> Option<LibraryQueueProjection> {
         let filtered = self.filtered_tracks(model);
-        let filtered_target = self.nav.track.sel();
+        let filtered_target = self.tracks.scroll.sel();
         let selected_index = filtered.get(filtered_target)?.data.index;
         if model
             .cfg

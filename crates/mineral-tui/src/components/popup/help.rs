@@ -21,7 +21,6 @@ use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
 use crate::runtime::keymap::help::HelpEntry;
 use crate::runtime::scroll;
-use crate::runtime::state::AppState;
 
 /// 每行最多露出的键帽数;同义余键折进 `+N`。
 const MAX_CHIPS: usize = 2;
@@ -130,6 +129,8 @@ impl HelpOverlay {
 }
 
 impl Overlay for HelpOverlay {
+    type Input<'a> = mineral_config::BehaviorConfig;
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 80,
@@ -146,7 +147,12 @@ impl Overlay for HelpOverlay {
         }
     }
 
-    fn block(&self, _ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+    fn block(
+        &self,
+        _ctx: &mineral_config::BehaviorConfig,
+        theme: &Theme,
+        focused: bool,
+    ) -> Block<'static> {
         let border_color = if focused {
             theme.accent
         } else {
@@ -168,11 +174,11 @@ impl Overlay for HelpOverlay {
     fn prepare(
         &mut self,
         inner: Rect,
-        _ctx: &mut AppState,
-        theme: &Theme,
-        _advance: bool,
+        _ctx: &mineral_config::BehaviorConfig,
+        cx: &mut crate::components::frame::PrepareCx<'_>,
         _reveal: crate::runtime::state::OverlayReveal,
     ) {
+        let theme = cx.frame.theme;
         let width = usize::from(inner.width.saturating_sub(2));
         if width < 8 || inner.height == 0 || self.entries.is_empty() {
             return;
@@ -187,7 +193,13 @@ impl Overlay for HelpOverlay {
         self.scroll = self.scroll.min(self.max_scroll);
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+    fn render_content(
+        &self,
+        buf: &mut Buffer,
+        inner: Rect,
+        _ctx: &mineral_config::BehaviorConfig,
+        theme: &Theme,
+    ) {
         // 左缘留 1 格边距;右缘固定留 1 格滚动条道(不溢出时是空白边距,
         // 避免溢出瞬间列宽跳变)。
         let content_w = usize::from(inner.width.saturating_sub(2));
@@ -228,12 +240,20 @@ impl Overlay for HelpOverlay {
         }
     }
 
-    fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(
+        &mut self,
+        _key: &KeyEvent,
+        _ctx: &mineral_config::BehaviorConfig,
+    ) -> OverlayResponse {
         // 未映射裸键半穿透给全局(播放控制族白名单在 App::passes_overlay)。
         OverlayResponse::Pass
     }
 
-    fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
+    fn on_action(
+        &mut self,
+        action: Action,
+        ctx: &mineral_config::BehaviorConfig,
+    ) -> Option<OverlayResponse> {
         match action {
             // 开关键语义:help 已开,open_help(toggle)/ back / quit 都收敛为关闭。
             Action::OpenHelp | Action::BackOrClearSearch | Action::OpenQuitConfirm => {
@@ -253,7 +273,7 @@ impl Overlay for HelpOverlay {
                 Some(OverlayResponse::Consumed)
             }
             Action::Scroll(step) => {
-                self.scroll_by(scroll::viewport::step_delta(step, ctx.cfg.tui().behavior()));
+                self.scroll_by(scroll::viewport::step_delta(step, ctx));
                 Some(OverlayResponse::Consumed)
             }
             // 播放控制族 + 歌词切换 + 关通知:不认 → 回落裸键 Pass(半穿透,边看边试)。

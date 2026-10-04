@@ -13,7 +13,6 @@ use super::component::{Chrome, Overlay, OverlayAction, OverlayResponse, base_blo
 use crate::render::theme::Theme;
 use crate::runtime::action::Action;
 use crate::runtime::scroll::cursor::ListCursor;
-use crate::runtime::state::AppState;
 
 /// Displays output devices and tracks the cursor and pending switch.
 pub(crate) struct AudioSettingsOverlay {
@@ -46,12 +45,14 @@ impl AudioSettingsOverlay {
     }
 
     /// Installs the enumerated devices and initially selects the confirmed route.
-    pub(crate) fn apply_devices(&mut self, outcome: Outcome<Vec<OutputDevice>>, ctx: &AppState) {
+    pub(crate) fn apply_devices(
+        &mut self,
+        outcome: Outcome<Vec<OutputDevice>>,
+        ctx: &Option<&mineral_audio::AudioOutput>,
+    ) {
         match outcome {
             Outcome::Applied(devices) | Outcome::Accepted(devices) => {
                 let selected = ctx
-                    .playback
-                    .output
                     .as_ref()
                     .and_then(|output| match &output.target {
                         OutputTarget::SystemDefault => None,
@@ -115,7 +116,13 @@ impl AudioSettingsOverlay {
     }
 
     /// Renders one row per device, keeping current output distinct from system default.
-    fn render_devices(&self, buf: &mut Buffer, area: Rect, ctx: &AppState, theme: &Theme) {
+    fn render_devices(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        ctx: &Option<&mineral_audio::AudioOutput>,
+        theme: &Theme,
+    ) {
         let Some(devices) = &self.devices else {
             if self.error.is_none() {
                 Paragraph::new(" Loading devices…")
@@ -135,8 +142,6 @@ impl AudioSettingsOverlay {
         ])];
         for device in devices {
             let active = ctx
-                .playback
-                .output
                 .as_ref()
                 .is_some_and(|output| output.device_id == device.id);
             let status = match (active, device.is_default) {
@@ -175,6 +180,8 @@ impl AudioSettingsOverlay {
 }
 
 impl Overlay for AudioSettingsOverlay {
+    type Input<'a> = Option<&'a mineral_audio::AudioOutput>;
+
     fn chrome(&self) -> Chrome {
         let rows = self
             .devices
@@ -197,7 +204,12 @@ impl Overlay for AudioSettingsOverlay {
         }
     }
 
-    fn block(&self, _ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+    fn block(
+        &self,
+        _ctx: &Option<&mineral_audio::AudioOutput>,
+        theme: &Theme,
+        focused: bool,
+    ) -> Block<'static> {
         base_block(theme)
             .border_style(Style::new().fg(if focused {
                 theme.accent
@@ -210,9 +222,8 @@ impl Overlay for AudioSettingsOverlay {
     fn prepare(
         &mut self,
         inner: Rect,
-        _ctx: &mut AppState,
-        _theme: &Theme,
-        _advance: bool,
+        _ctx: &Option<&mineral_audio::AudioOutput>,
+        _cx: &mut crate::components::frame::PrepareCx<'_>,
         _reveal: crate::runtime::state::OverlayReveal,
     ) {
         if inner.height < 3 || inner.width < 2 {
@@ -229,7 +240,13 @@ impl Overlay for AudioSettingsOverlay {
         }
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
+    fn render_content(
+        &self,
+        buf: &mut Buffer,
+        inner: Rect,
+        ctx: &Option<&mineral_audio::AudioOutput>,
+        theme: &Theme,
+    ) {
         if inner.height < 3 || inner.width < 2 {
             return;
         }
@@ -252,7 +269,7 @@ impl Overlay for AudioSettingsOverlay {
                 .style(Style::new().fg(theme.peach))
                 .render(Rect::new(inner.x, inner.bottom() - 2, inner.width, 1), buf);
         }
-        let format = ctx.playback.output.as_ref().map_or_else(
+        let format = ctx.as_ref().map_or_else(
             || "—".to_owned(),
             |output| {
                 format!(
@@ -268,7 +285,11 @@ impl Overlay for AudioSettingsOverlay {
             .render(Rect::new(inner.x, inner.bottom() - 1, inner.width, 1), buf);
     }
 
-    fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(
+        &mut self,
+        key: &KeyEvent,
+        _ctx: &Option<&mineral_audio::AudioOutput>,
+    ) -> OverlayResponse {
         if key.code == KeyCode::Esc {
             OverlayResponse::Do(OverlayAction::CloseTop)
         } else {
@@ -276,7 +297,11 @@ impl Overlay for AudioSettingsOverlay {
         }
     }
 
-    fn on_action(&mut self, action: Action, _ctx: &AppState) -> Option<OverlayResponse> {
+    fn on_action(
+        &mut self,
+        action: Action,
+        _ctx: &Option<&mineral_audio::AudioOutput>,
+    ) -> Option<OverlayResponse> {
         match action {
             Action::OpenAudioSettings | Action::BackOrClearSearch | Action::OpenQuitConfirm => {
                 Some(OverlayResponse::Do(OverlayAction::CloseTop))

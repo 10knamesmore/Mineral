@@ -2,41 +2,13 @@
 
 use rustc_hash::FxHashMap;
 
-use mineral_model::{CollectionIndex, PlaylistId};
 use ratatui::layout::Rect;
+use std::hash::Hash;
 
 use crate::render::anim::Transition;
 
-use super::View;
-
-/// 展开动画所属的列表，避免借用其他面板的旧画面。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ListExpansionScope {
-    /// 浏览页的歌单或曲目列表。
-    Browse(View),
-
-    /// 当前队列浮层。
-    Queue,
-}
-
-/// 列表行的身份；同一首歌在歌单中的不同位置分别参与动画。
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ListRowIdentity {
-    /// 外层歌单。
-    Playlist(PlaylistId),
-
-    /// 当前歌单中的一次曲目出现。
-    Track(CollectionIndex),
-
-    /// 当前队列快照中的具体位置；队列更新时整段动画失效。
-    Queue(usize),
-}
-
 /// 最后准备的搜索结果，只保存一个可见窗口。
-pub(crate) struct FilteredListFrame {
-    /// 画面所属列表。
-    pub(crate) scope: ListExpansionScope,
-
+pub(crate) struct FilteredListFrame<K> {
     /// 数据行范围，不含表头、边框或底栏。
     pub(crate) body: Rect,
 
@@ -47,7 +19,19 @@ pub(crate) struct FilteredListFrame {
     pub(crate) area: Rect,
 
     /// 从第一条可见数据行开始的身份序列。
-    pub(crate) rows: Vec<ListRowIdentity>,
+    pub(crate) rows: Vec<K>,
+}
+
+/// 已绑定到屏幕区域的表格输入，动画启动后不再需要原始行键。
+pub(crate) struct PreparedListFrame {
+    /// 数据行范围。
+    pub(crate) body: Rect,
+
+    /// 面板整体区域。
+    pub(crate) area: Rect,
+
+    /// 可重复绘制的内容。
+    pub(crate) content: crate::components::layout::shared::scroll_table::PreparedTable,
 }
 
 /// 一条已显示的命中行在清除前后的坐标。
@@ -62,7 +46,7 @@ pub(crate) struct ExpandingRow {
 /// 一次清除动作的画面与进度；逻辑查询在启动前已经清空。
 pub(crate) struct ListExpansion {
     /// 清除前的可见结果。
-    pub(crate) before: FilteredListFrame,
+    pub(crate) before: PreparedListFrame,
 
     /// 可见命中行映射到完整列表的位置。
     pub(crate) rows: Vec<ExpandingRow>,
@@ -75,18 +59,31 @@ pub(crate) struct ListExpansion {
 }
 
 /// 搜索结果的最后一帧与正在播放的展开共用生命周期。
-#[derive(Default)]
-pub(crate) struct ListExpansionState {
+pub(crate) struct ListExpansionState<K> {
     /// 搜索态准备时更新，清除时交给动画。
-    pub(crate) filtered_frame: Option<FilteredListFrame>,
+    pub(crate) filtered_frame: Option<FilteredListFrame<K>>,
 
     /// 没有展开时不持有旧画面。
     pub(crate) active: Option<ListExpansion>,
 }
 
-impl ListExpansionState {
+impl<K> Default for ListExpansionState<K> {
+    fn default() -> Self {
+        Self {
+            filtered_frame: None,
+            active: None,
+        }
+    }
+}
+
+impl<K> ListExpansionState<K> {
     /// 布局准备阶段替换筛选输入，并在几何变化时结束旧转场。
-    pub(crate) fn prepare(&mut self, area: Rect, body: Rect, filtered: Option<FilteredListFrame>) {
+    pub(crate) fn prepare(
+        &mut self,
+        area: Rect,
+        body: Rect,
+        filtered: Option<FilteredListFrame<K>>,
+    ) {
         if self
             .active
             .as_ref()
@@ -97,22 +94,22 @@ impl ListExpansionState {
         self.filtered_frame = filtered;
     }
 
-    /// 转场旧端的图片需求由生命周期保留，与是否执行绘制无关。
-    pub(crate) fn retain_images(&mut self, images: &mut crate::image::ImageEngine) {
+    /// 准备期间声明旧端的资源使用，协议变更时结束旧输入。
+    pub(crate) fn declare_images(&mut self, images: &mut crate::image::ImageNeeds<'_>) {
         if self.active.as_ref().is_some_and(|active| {
             active
                 .before
                 .content
                 .images
                 .iter()
-                .any(|image| !images.inline_is_current(image))
+                .any(|image| !images.ready().inline_is_current(image))
         }) {
             self.invalidate();
             return;
         }
         if let Some(active) = &self.active {
             for image in &active.before.content.images {
-                images.retain_inline(image);
+                images.retain(image);
             }
         }
     }
@@ -120,16 +117,13 @@ impl ListExpansionState {
     /// 将可见行身份映射到完整列表，开始一次展开。
     pub(crate) fn start(
         &mut self,
-        scope: ListExpansionScope,
-        order: impl Iterator<Item = (ListRowIdentity, usize)>,
+        order: impl Iterator<Item = (K, usize)>,
         selected_index: usize,
         ticks: u16,
-    ) {
-        let Some(before) = self
-            .filtered_frame
-            .take()
-            .filter(|frame| frame.scope == scope)
-        else {
+    ) where
+        K: Clone + Eq + Hash,
+    {
+        let Some(before) = self.filtered_frame.take() else {
             return;
         };
         let screen_rows = before
@@ -150,9 +144,13 @@ impl ListExpansionState {
         if !rows.iter().any(|row| row.full_index == selected_index) {
             return;
         }
-        mineral_log::debug!(target: "tui", ?scope, visible_rows = rows.len(), selected_index, ticks, "start search result expansion");
+        mineral_log::debug!(target: "tui", visible_rows = rows.len(), selected_index, ticks, "start search result expansion");
         self.active = Some(ListExpansion {
-            before,
+            before: PreparedListFrame {
+                area: before.area,
+                body: before.body,
+                content: before.content,
+            },
             rows,
             selected_index,
             progress: Transition::expanding(ticks),

@@ -3,11 +3,6 @@
 mod badge;
 mod expansion;
 pub mod library;
-mod panel;
 pub mod playlists;
-mod preparation;
-mod sweep;
-
-pub use panel::draw;
-
-pub(crate) use preparation::prepare;
+pub(crate) mod preparation;
+pub(crate) mod sweep;

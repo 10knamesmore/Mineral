@@ -136,7 +136,7 @@ impl App {
             }
             Completion::AudioOutputs(outcome) => {
                 if let Some(popup) = self.overlays.audio_settings_mut() {
-                    popup.apply_devices(outcome, &self.state);
+                    popup.apply_devices(outcome, &self.state.playback.output.as_deref());
                 }
             }
             Completion::AudioOutputSelected(outcome) => {

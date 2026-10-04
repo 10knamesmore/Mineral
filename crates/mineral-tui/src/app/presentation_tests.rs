@@ -26,7 +26,7 @@ fn presentation_state_does_not_depend_on_paint_count() -> color_eyre::Result<()>
             for _ in 0..paints {
                 terminal.draw(|frame| crate::view::draw(frame, &app.frame_view()))?;
             }
-            let list = &app.state.browse.nav.track;
+            let list = &app.state.browse.tracks.scroll;
             positions.push((
                 list.scroll_target(),
                 list.offset(120, 10),
@@ -44,21 +44,21 @@ fn presentation_state_does_not_depend_on_paint_count() -> color_eyre::Result<()>
         }
         app.dispatch(Action::BackOrClearSearch);
         assert!(
-            app.state.browse.list_expansion.active.is_some(),
+            app.state.browse.tracks.expansion.active.is_some(),
             "清除筛选所需的旧视图由准备入口保留"
         );
-        let restored = app.state.browse.nav.track.sel();
+        let restored = app.state.browse.tracks.scroll.sel();
         let smaller = Rect::new(0, 0, 80, 24);
         app.handle_event(&Event::Resize(smaller.width, smaller.height));
         app.prepare_view(smaller, start + Duration::from_millis(240), false);
-        assert!(app.state.browse.list_expansion.active.is_none());
+        assert!(app.state.browse.tracks.expansion.active.is_none());
         app.dispatch(Action::MoveSelection(SelectionMove::Down(1)));
         app.prepare_view(smaller, start + Duration::from_millis(256), true);
         outcomes.push((
             positions,
             restored,
-            app.state.browse.nav.track.sel(),
-            app.state.browse.nav.track.scroll_target(),
+            app.state.browse.tracks.scroll.sel(),
+            app.state.browse.tracks.scroll.scroll_target(),
             app.state.frame_area,
         ));
     }

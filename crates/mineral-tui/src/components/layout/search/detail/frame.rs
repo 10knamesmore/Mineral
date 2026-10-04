@@ -1,5 +1,6 @@
 //! 详情帧的头图、元数据和列表绘制。稳态使用终端图片，离屏帧使用 halfblock；两者均只读显示状态。
 
+use super::DetailPaint;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -10,7 +11,7 @@ use super::meta::draw_meta;
 use super::placeholder::draw_delimiter;
 use crate::image::{ImageContent, ImageRenderPhase};
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, DetailFrame, EntityRef};
+use crate::runtime::state::{DetailFrame, EntityRef};
 
 /// 稳态一帧：头图走图片引擎，元数据与列表画主帧。
 #[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
@@ -18,7 +19,7 @@ pub(super) fn draw_frame_real(
     frame: &mut Frame<'_>,
     inner: Rect,
     dframe: &DetailFrame,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
     show_back: bool,
     cover_in_flight: bool,
@@ -33,7 +34,7 @@ pub(super) fn draw_frame_real(
             },
             cover_a,
             frame.buffer_mut(),
-            state.image_render_phase(),
+            state.phase,
         );
     }
     // artist 帧右栏:当前列表选中项封面(随 [ ] 切区 / 光标移动;preview 也未到时留空)。
@@ -43,7 +44,7 @@ pub(super) fn draw_frame_real(
             ImageContent::Display { url: sel_cover },
             right_a,
             frame.buffer_mut(),
-            state.image_render_phase(),
+            state.phase,
         );
     }
     let buf = frame.buffer_mut();
@@ -57,7 +58,7 @@ pub(super) fn render_frame_to(
     buf: &mut Buffer,
     inner: Rect,
     dframe: &DetailFrame,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
     cover_in_flight: bool,
 ) {

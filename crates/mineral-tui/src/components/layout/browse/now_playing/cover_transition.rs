@@ -7,10 +7,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
+use super::NowPlayingView;
 use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, View};
 
 use super::main_cover;
 
@@ -22,18 +22,21 @@ use super::main_cover;
 pub(super) fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
-    state: &AppState,
+    state: &NowPlayingView<'_>,
     theme: &Theme,
     progress: u16,
 ) {
     let Some([cover_area, _, _]) = main_cover::sections(area) else {
         return;
     };
-    let from = main_cover::url_for_view(state, View::Playlists);
-    let to = main_cover::url_for_view(state, View::Library);
+    let from = &state.input.playlist_cover;
+    let to = state
+        .input
+        .track
+        .and_then(|track| track.data.song.cover_url.as_ref());
     // 两端本来就是同一张封面(URL 相同,或 Netease 那种同图多 URL 的内容指纹相同)时没有
     // 可看的交叉渐变:按稳态贴成品图,免得中途把已经清晰的图退回 halfblock 再闪回来。
-    if same_picture(state, from.as_ref(), to.as_ref()) {
+    if same_picture(state, from.as_ref(), to) {
         state.images.render(
             ImageContent::Display { url: from.as_ref() },
             cover_area,
@@ -45,8 +48,8 @@ pub(super) fn draw(
     let square = state.images.square_area(cover_area);
 
     if let (Some(from), Some(to)) = (&from, &to)
-        && state.images.cache.contains_key(from)
-        && state.images.cache.contains_key(to)
+        && state.images.contains_decoded(from)
+        && state.images.contains_decoded(to)
     {
         state.images.render(
             ImageContent::Blend {
@@ -65,14 +68,14 @@ pub(super) fn draw(
         // Blend 缺一张完整图时会直接显示目标图；分开绘制可保留真实 preview，
         // 并让没有可用像素的一端渐变到当前背景。
         let from = cover_cells(state, cover_area, from.as_ref());
-        let to = cover_cells(state, cover_area, to.as_ref());
+        let to = cover_cells(state, cover_area, to);
         fade_available_cells(frame.buffer_mut(), square, &from, &to, progress, theme);
     }
 }
 
 /// 两端是不是同一张封面:都没有、URL 相同,或已解码像素判为同一张图。
 pub(super) fn same_picture(
-    state: &AppState,
+    state: &NowPlayingView<'_>,
     from: Option<&MediaUrl>,
     to: Option<&MediaUrl>,
 ) -> bool {
@@ -84,7 +87,7 @@ pub(super) fn same_picture(
 }
 
 /// 使用与稳态一致的几何获取真实图片或 preview；无图保持空 cell。
-fn cover_cells(state: &AppState, area: Rect, url: Option<&MediaUrl>) -> Buffer {
+fn cover_cells(state: &NowPlayingView<'_>, area: Rect, url: Option<&MediaUrl>) -> Buffer {
     let mut cells = Buffer::empty(area);
     state.images.render(
         ImageContent::Display { url },

@@ -10,19 +10,15 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-use crate::components::layout::browse::now_playing::main_cover;
-use crate::components::layout::search::detail;
-use crate::components::layout::shared::compute::Areas;
 use crate::components::layout::shared::transform::{lerp_rect, zero_center};
 use crate::components::layout::shared::vinyl;
-use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
+use crate::image::{BlendStyle, ImageContent, ImageNeeds, ImageRenderPhase, ReadyImages};
 use crate::render::blit;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, EntityRef};
 
 /// 飞行端点的可绘制内容；唱片仅用于没有在播曲的全屏端。
-enum FlightContent {
+pub(crate) enum FlightContent {
     /// 已解码的真实封面。
     Cover(MediaUrl),
 
@@ -31,101 +27,27 @@ enum FlightContent {
 }
 
 /// 飞行一端：端点稳态的区域与内容。
-struct FlightEnd {
+pub(crate) struct FlightEnd {
     /// 端点稳态区域，正方几何与对应内容的稳态绘制一致。
-    area: Rect,
+    pub(crate) area: Rect,
 
     /// 要显示的封面或唱片。
-    content: FlightContent,
+    pub(crate) content: FlightContent,
 }
 
 /// 一次 page morph 的封面飞行计划:两端至少一端就绪。
 pub(crate) struct FlightPlan {
     /// browse 端(进度 0 端):now_playing 主封面。
-    from: Option<FlightEnd>,
+    pub(crate) from: Option<FlightEnd>,
 
     /// 进度 1000 端：搜索详情封面、全屏在播封面或待机唱片。
-    to: Option<FlightEnd>,
-}
-
-/// 按两端点布局与当前状态解析封面飞行计划。两端图都缺(无 url / 未入缓存 / 面板画不下)
-/// 返回 `None`——调用方保持面板自画,不抑制。
-///
-/// # Params:
-///   - `normal`: browse 端点布局(`compute` 产出)
-///   - `search`: search 端点布局(`compute_search` 产出)
-///
-/// # Return:
-///   至少一端就绪的飞行计划;两端全缺为 `None`。
-pub(crate) fn plan(normal: &Areas, search: &Areas, state: &AppState) -> Option<FlightPlan> {
-    let from = browse_end(normal, state);
-    let to = detail_end(search, state);
-    (from.is_some() || to.is_some()).then_some(FlightPlan { from, to })
-}
-
-/// 浏览封面 ↔ 全屏在播封面或待机唱片；两端内容都可绘制时开启飞行。
-///
-/// # Params:
-///   - `normal`: browse 端点布局(`compute` 产出)
-///   - `full`: 全屏端点布局(`compute_fullscreen` 产出)
-///
-/// # Return:
-///   两端都就绪的飞行计划;任一端缺席为 `None`。
-pub(crate) fn plan_fullscreen(
-    normal: &Areas,
-    full: &Areas,
-    state: &AppState,
-) -> Option<FlightPlan> {
-    let from = browse_end(normal, state)?;
-    let to = fullscreen_end(full, state)?;
-    Some(FlightPlan {
-        from: Some(from),
-        to: Some(to),
-    })
-}
-
-/// 全屏端：无在播曲时采用待机唱片，有在播曲时等待其封面解码。
-fn fullscreen_end(full: &Areas, state: &AppState) -> Option<FlightEnd> {
-    let area = full.cover?;
-    let Some(track) = state.playback.track.as_ref() else {
-        return Some(FlightEnd {
-            area,
-            content: FlightContent::Vinyl,
-        });
-    };
-    let url = track.cover_url.clone()?;
-    resolve_end(area, url, state)
-}
-
-/// browse 端:now_playing 面板内主封面区 + 当前选中实体封面(几何与面板绘制共享同一源)。
-fn browse_end(normal: &Areas, state: &AppState) -> Option<FlightEnd> {
-    let panel = normal.right?;
-    let [cover_area, _, _] = main_cover::sections(panel)?;
-    let url = main_cover::url(state)?;
-    resolve_end(cover_area, url, state)
-}
-
-/// search 端:detail 面板头图区 + 栈顶帧实体封面(几何与面板绘制共享同一源)。
-fn detail_end(search: &Areas, state: &AppState) -> Option<FlightEnd> {
-    let panel = search.right?;
-    let dframe = state.channel_search.active_results()?.detail.current()?;
-    let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
-    let cover_area = detail::header_cover_area(panel, is_artist)?;
-    resolve_end(cover_area, dframe.entity.cover().cloned()?, state)
-}
-
-/// 端就绪判定：有 URL 且图片已解码。
-fn resolve_end(area: Rect, url: MediaUrl, state: &AppState) -> Option<FlightEnd> {
-    state.images.cache.contains_key(&url).then_some(FlightEnd {
-        area,
-        content: FlightContent::Cover(url),
-    })
+    pub(crate) to: Option<FlightEnd>,
 }
 
 /// 画一帧飞行层(叠在面板之上):双端 fade 合成、单端独图收放，读取准备阶段保留的图片。
 ///
 /// # Params:
-///   - `plan`: [`plan`] 产出的飞行计划
+///   - `plan`: [`FlightPlan`] 产出的飞行计划
 ///   - `progress`: 已缓动千分比，0 为浏览端、1000 为搜索或全屏端；反向沿用同一进度
 ///   - `state`: 图片缓存与终端成品状态
 ///   - `theme`: 待机唱片本帧使用的主题
@@ -133,11 +55,12 @@ pub(crate) fn render(
     frame: &mut Frame<'_>,
     plan: &FlightPlan,
     progress: u16,
-    state: &AppState,
+    images: ReadyImages<'_>,
+    spin: &vinyl::VinylSpin,
     theme: &Theme,
 ) {
     let square = |end: &FlightEnd| match &end.content {
-        FlightContent::Cover(_) => state.images.square_area(end.area),
+        FlightContent::Cover(_) => images.square_area(end.area),
         FlightContent::Vinyl => crate::image::square_cells(end.area),
     };
     match (&plan.from, &plan.to) {
@@ -146,7 +69,7 @@ pub(crate) fn render(
                 (&from.content, &to.content)
             {
                 let rect = lerp_rect(square(from), square(to), progress);
-                state.images.render(
+                images.render(
                     ImageContent::Blend {
                         from: from_url,
                         to: to_url,
@@ -165,8 +88,8 @@ pub(crate) fn render(
                 let mut old = Buffer::empty(rect);
                 blit::copy_window(&mut old, screen, rect, rect.x, rect.y);
                 let mut new = old.clone();
-                render_end(&mut old, rect, &from.content, state, theme);
-                render_end(&mut new, rect, &to.content, state, theme);
+                render_end(&mut old, rect, &from.content, images, spin, theme);
+                render_end(&mut new, rect, &to.content, images, spin, theme);
                 blend_halfblocks(screen, &old, &new, progress);
             }
         }
@@ -174,27 +97,23 @@ pub(crate) fn render(
         (Some(from), None) => {
             let sq = square(from);
             let rect = lerp_rect(sq, zero_center(sq), progress);
-            render_end(frame.buffer_mut(), rect, &from.content, state, theme);
+            render_end(frame.buffer_mut(), rect, &from.content, images, spin, theme);
         }
         (None, Some(to)) => {
             let sq = square(to);
             let rect = lerp_rect(zero_center(sq), sq, progress);
-            render_end(frame.buffer_mut(), rect, &to.content, state, theme);
+            render_end(frame.buffer_mut(), rect, &to.content, images, spin, theme);
         }
         (None, None) => {}
     }
 }
 
 /// 飞行两端的图片在准备阶段保活，并按各自稳定尺寸预编码。
-pub(crate) fn prepare(plan: &FlightPlan, state: &mut AppState) {
+pub(crate) fn prepare(plan: &FlightPlan, images: &mut ImageNeeds<'_>) {
     for end in [plan.from.as_ref(), plan.to.as_ref()].into_iter().flatten() {
         if let FlightContent::Cover(url) = &end.content {
-            state.images.prepare_display(
-                ImageContent::Display { url: Some(url) },
-                end.area,
-                ImageRenderPhase::Resizing,
-            );
-            state.images.prepare(url, end.area);
+            images.display(Some(url), end.area, ImageRenderPhase::Resizing);
+            images.prewarm(url, end.area);
         }
     }
 }
@@ -204,17 +123,18 @@ fn render_end(
     buf: &mut Buffer,
     area: Rect,
     content: &FlightContent,
-    state: &AppState,
+    images: ReadyImages<'_>,
+    spin: &vinyl::VinylSpin,
     theme: &Theme,
 ) {
     match content {
-        FlightContent::Cover(url) => state.images.render(
+        FlightContent::Cover(url) => images.render(
             ImageContent::Display { url: Some(url) },
             area,
             buf,
             ImageRenderPhase::Resizing,
         ),
-        FlightContent::Vinyl => vinyl::render_to(buf, area, &state.vinyl, theme),
+        FlightContent::Vinyl => vinyl::render_to(buf, area, spin, theme),
     }
 }
 
@@ -271,7 +191,7 @@ mod tests {
         let normal = compute(area, &cfg);
         let search = compute_search(area, &cfg);
         assert!(
-            super::plan(&normal, &search, &app.state).is_none(),
+            crate::view::flight::plan(&normal, &search, &app.state).is_none(),
             "无缓存图不应开飞行层"
         );
         Ok(())
@@ -285,7 +205,7 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         let normal = compute(area, &cfg);
         let search = compute_search(area, &cfg);
-        let plan = super::plan(&normal, &search, &app.state)
+        let plan = crate::view::flight::plan(&normal, &search, &app.state)
             .ok_or_else(|| eyre!("browse 端图已缓存,应有单端计划"))?;
         assert!(plan.from.is_some(), "browse 端应就绪");
         assert!(plan.to.is_none(), "detail 端图未缓存应缺席");

@@ -132,7 +132,7 @@ impl App {
                             let sel = self
                                 .state
                                 .filtered_tracks()
-                                .get(self.state.browse.nav.track.sel());
+                                .get(self.state.browse.tracks.scroll.sel());
                             let loved = sel.as_ref().map(|entry| entry.loved);
                             (
                                 ViewKind::Tracks,
@@ -212,7 +212,7 @@ impl App {
                 }
                 self.state
                     .filtered_tracks()
-                    .get(self.state.browse.nav.track.sel())
+                    .get(self.state.browse.tracks.scroll.sel())
                     .map(|entry| entry.data.song.clone())
             }
         };
@@ -318,7 +318,7 @@ impl App {
                 let id = self
                     .state
                     .filtered_playlists()
-                    .get(self.state.browse.nav.playlist.sel())
+                    .get(self.state.browse.playlists.scroll.sel())
                     .map(|p| p.data.id.clone());
                 if let Some(id) = id {
                     self.client.download(DownloadTarget::Playlist(id));
@@ -328,7 +328,7 @@ impl App {
                 let song = self
                     .state
                     .filtered_tracks()
-                    .get(self.state.browse.nav.track.sel())
+                    .get(self.state.browse.tracks.scroll.sel())
                     .map(|entry| entry.data.song.clone());
                 if let Some(song) = song {
                     self.client.download(DownloadTarget::Song(Box::new(song)));
@@ -1063,8 +1063,7 @@ mod tests {
     #[test]
     fn keyctx_queue_overlay_selects_cursor_entry() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 3, /*current_idx*/ 0)?;
-        app.overlays
-            .push(crate::components::popup::OverlayKind::queue(/*sel*/ 2));
+        app.overlays.push(crate::app::AppOverlay::queue(/*sel*/ 2));
         let ctx = app.collect_key_context();
         assert_eq!(*ctx.view(), ViewKind::Queue);
         assert_eq!(
@@ -1114,8 +1113,7 @@ mod tests {
     fn keyctx_non_queue_overlay_is_transparent() -> color_eyre::Result<()> {
         let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
         app.state.channel_search.active.set(true);
-        app.overlays
-            .push(crate::components::popup::OverlayKind::confirm());
+        app.overlays.push(crate::app::AppOverlay::confirm());
         let ctx = app.collect_key_context();
         assert_eq!(
             *ctx.view(),

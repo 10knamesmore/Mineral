@@ -3,15 +3,15 @@
 
 use mineral_model::SearchKind;
 
+use super::DetailView;
 use crate::components::layout::shared::text::{char_width, display_width};
-use crate::runtime::state::AppState;
 
 /// detail 顶栏 title：当前结果集的详情栈 breadcrumb；无结果 / 空栈回退固定 `detail`。
 /// `width` 是面板外框宽，扣掉圆角边框占位后按显示宽度截断。
-pub fn for_panel(state: &AppState, width: u16) -> String {
+pub(super) fn for_panel(state: &DetailView<'_>, width: u16) -> String {
     let budget = width.saturating_sub(4);
-    match state.channel_search.active_results() {
-        Some(kr) => frame_title(&kr.detail.title_crumbs(), budget),
+    match state.stack {
+        Some(stack) => frame_title(&stack.title_crumbs(), budget),
         None => "detail".to_owned(),
     }
 }

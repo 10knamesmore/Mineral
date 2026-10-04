@@ -8,6 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Row, Table};
 
+use super::DownloadInput;
 use crate::components::layout::shared::marquee::{
     MarqueeCtx, RowMarquee, resolve_column_widths, row_marquee,
 };
@@ -18,9 +19,7 @@ use crate::components::popup::component::{
 };
 use crate::render::theme::Theme;
 use crate::runtime::action::Action;
-use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
-use crate::runtime::state::AppState;
 
 /// Song title column, following the status icon.
 const TITLE_COL: usize = 1;
@@ -29,6 +28,9 @@ const TITLE_COL: usize = 1;
 pub(crate) struct DownloadOverlay {
     /// Cursor and smooth viewport state.
     list: ScrollList,
+
+    /// 本列表选中标题的滚动状态。
+    pub(crate) title: crate::runtime::marquee::Marquee,
 }
 
 /// TUI presentation adapter for one protocol download row.
@@ -56,9 +58,7 @@ impl DownloadRow<'_> {
     fn song_title(&self, marquee: Option<RowMarquee<'_>>) -> Line<'static> {
         let spans = vec![Span::raw(self.download.song.name.clone())];
         match marquee {
-            Some(m) => m
-                .ctx
-                .line(spans, m.slot, self.download.id.as_str(), m.title_w),
+            Some(m) => m.ctx.line(spans, self.download.id.as_str(), m.title_w),
             None => Line::from(spans),
         }
     }
@@ -125,6 +125,7 @@ impl DownloadOverlay {
     pub(crate) fn new() -> Self {
         Self {
             list: ScrollList::new(),
+            title: crate::runtime::marquee::Marquee::default(),
         }
     }
 
@@ -134,15 +135,15 @@ impl DownloadOverlay {
     }
 
     /// Returns the selected row from the current snapshot.
-    fn selected<'a>(&self, ctx: &'a AppState) -> Option<&'a SongDownloadView> {
+    fn selected<'a>(&self, ctx: &'a DownloadInput<'a>) -> Option<&'a SongDownloadView> {
         ctx.downloads.get(self.list.sel())
     }
 
     /// Sizes metadata columns to their content so empty metrics leave room for song titles.
-    fn column_constraints(ctx: &AppState) -> [Constraint; 4] {
+    fn column_constraints(ctx: &DownloadInput<'_>) -> [Constraint; 4] {
         let mut size_width = 0;
         let mut metric_width = 0;
-        for download in &ctx.downloads {
+        for download in ctx.downloads {
             let row = DownloadRow { download };
             size_width = size_width.max(display_width(&row.total_size()));
             metric_width = metric_width.max(display_width(&row.metric()));
@@ -156,7 +157,7 @@ impl DownloadOverlay {
     }
 
     /// Builds the bottom-right border title for the aggregate summary.
-    fn summary_footer(ctx: &AppState, theme: &Theme) -> Line<'static> {
+    fn summary_footer(ctx: &DownloadInput<'_>, theme: &Theme) -> Line<'static> {
         let summary = &ctx.downloads_summary;
         let label = format!(
             " ↓ {} songs  · {} queued  · {} ",
@@ -170,7 +171,7 @@ impl DownloadOverlay {
     }
 
     /// Builds the top-right border title for selected-row provenance and failure detail.
-    fn detail_title(&self, ctx: &AppState, theme: &Theme) -> Option<Line<'static>> {
+    fn detail_title(&self, ctx: &DownloadInput<'_>, theme: &Theme) -> Option<Line<'static>> {
         let row = self.selected(ctx)?;
         let origin = match &row.origin {
             DownloadOrigin::Direct => "direct".to_owned(),
@@ -190,6 +191,8 @@ impl DownloadOverlay {
 }
 
 impl Overlay for DownloadOverlay {
+    type Input<'a> = DownloadInput<'a>;
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 60,
@@ -205,7 +208,7 @@ impl Overlay for DownloadOverlay {
         }
     }
 
-    fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+    fn block(&self, ctx: &DownloadInput<'_>, theme: &Theme, focused: bool) -> Block<'static> {
         let border = if focused {
             theme.accent
         } else {
@@ -224,11 +227,11 @@ impl Overlay for DownloadOverlay {
     fn prepare(
         &mut self,
         inner: Rect,
-        ctx: &mut AppState,
-        _theme: &Theme,
-        advance: bool,
+        ctx: &DownloadInput<'_>,
+        cx: &mut crate::components::frame::PrepareCx<'_>,
         _reveal: crate::runtime::state::OverlayReveal,
     ) {
+        let advance = cx.advance;
         let motion = ScrollMotion::Advancing {
             scrolloff: ctx.scrolloff(),
             glide_ticks: ctx.list_glide_ticks(),
@@ -246,16 +249,22 @@ impl Overlay for DownloadOverlay {
             .copied()
             .unwrap_or(0);
         if let Some(download) = ctx.downloads.get(self.list.sel()) {
-            ctx.marquees.prepare(
-                Slot::DownloadSelected,
+            self.title.prepare(
                 download.id.as_str(),
                 display_width(&download.song.name),
                 title_width,
+                ctx.frame_now,
             );
         }
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
+    fn render_content(
+        &self,
+        buf: &mut Buffer,
+        inner: Rect,
+        ctx: &DownloadInput<'_>,
+        theme: &Theme,
+    ) {
         if inner.height == 0 {
             return;
         }
@@ -264,17 +273,18 @@ impl Overlay for DownloadOverlay {
             .get(TITLE_COL)
             .copied()
             .unwrap_or_default();
-        let marquee_ctx = MarqueeCtx::new(ctx, theme, theme.surface0);
+        let marquee_ctx = MarqueeCtx::new(
+            &self.title,
+            ctx.cfg.tui().animation(),
+            ctx.frame_now,
+            theme,
+            theme.surface0,
+        );
         let build_table = |visible: std::ops::Range<usize>| {
             let rows = visible
                 .filter_map(|index| ctx.downloads.get(index).map(|download| (index, download)))
                 .map(|(index, download)| {
-                    let marquee = row_marquee(
-                        index == self.list.sel(),
-                        &marquee_ctx,
-                        Slot::DownloadSelected,
-                        title_width,
-                    );
+                    let marquee = row_marquee(index == self.list.sel(), &marquee_ctx, title_width);
                     DownloadRow { download }.render(theme, marquee)
                 })
                 .collect::<Vec<_>>();
@@ -297,11 +307,11 @@ impl Overlay for DownloadOverlay {
         );
     }
 
-    fn on_key(&mut self, _key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(&mut self, _key: &KeyEvent, _ctx: &DownloadInput<'_>) -> OverlayResponse {
         OverlayResponse::Pass
     }
 
-    fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
+    fn on_action(&mut self, action: Action, ctx: &DownloadInput<'_>) -> Option<OverlayResponse> {
         self.list.clamp(ctx.downloads.len());
         match action {
             Action::MoveSelection(movement) => {

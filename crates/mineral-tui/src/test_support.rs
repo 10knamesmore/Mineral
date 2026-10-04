@@ -152,7 +152,7 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
             next_offset: None,
         },
     );
-    s.browse.nav.track.set_sel(1);
+    s.browse.tracks.scroll.set_sel(1);
     Ok(s)
 }
 
@@ -178,7 +178,7 @@ pub(crate) fn state_with_lyrics(
     s.library.lyrics.insert(track.id.clone(), lyrics);
     s.playback.track = Some(track);
     s.playback.position_ms = 62_000;
-    s.browse.lyric_view.extra = extra;
+    s.browse.lyrics.extra = extra;
     Ok(s)
 }
 
@@ -650,8 +650,8 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     while !app.state.browse.view.at_max() {
         app.state.browse.view.tick();
     }
-    app.state.browse.nav.playlist.set_sel(0);
-    app.state.browse.nav.track.set_sel(sel_track);
+    app.state.browse.playlists.scroll.set_sel(0);
+    app.state.browse.tracks.scroll.set_sel(sel_track);
     Ok(app)
 }
 
@@ -768,7 +768,7 @@ pub(crate) fn app_with_library_probed(
     while !app.state.browse.view.at_max() {
         app.state.browse.view.tick();
     }
-    app.state.browse.nav.track.set_sel(sel_track);
+    app.state.browse.tracks.scroll.set_sel(sel_track);
     Ok((app, queue_ops))
 }
 
@@ -793,7 +793,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
             next_offset: None,
         },
     );
-    app.state.browse.nav.track.set_sel(sel_track);
+    app.state.browse.tracks.scroll.set_sel(sel_track);
     Ok(app)
 }
 

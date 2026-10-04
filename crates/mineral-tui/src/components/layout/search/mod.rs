@@ -3,3 +3,6 @@
 
 pub mod detail;
 pub mod panel;
+
+mod view;
+pub(crate) use view::SearchView;

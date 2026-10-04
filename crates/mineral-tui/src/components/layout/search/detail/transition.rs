@@ -1,5 +1,6 @@
 //! 详情下钻与返回过渡：把出发帧和目标帧离屏绘制，再按方向、风格与缓动进度合成。
 
+use super::DetailPaint;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -7,7 +8,7 @@ use ratatui::layout::Rect;
 use super::frame::render_frame_to;
 use super::sweep::{FULL, SweepLayer, copy_col, sweep_column};
 use crate::render::theme::Theme;
-use crate::runtime::state::{AppState, DetailFrame};
+use crate::runtime::state::DetailFrame;
 
 /// 下钻/返回滑动的合成参数：出发/目标帧 + 缓动进度 + 方向（打包避免 `draw_sweep` 参数过多）。
 #[derive(Clone, Copy)]
@@ -35,7 +36,7 @@ pub(super) fn draw_sweep(
     frame: &mut Frame<'_>,
     inner: Rect,
     args: SweepArgs<'_>,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
 ) {
     let SweepArgs {
@@ -53,7 +54,7 @@ pub(super) fn draw_sweep(
     let advance = u16::try_from(u32::from(w) * u32::from(eased) / FULL)
         .unwrap_or(w)
         .min(w);
-    let style = *state.cfg.tui().animation().view_sweep();
+    let style = *state.frame.config.tui().animation().view_sweep();
     let buf = frame.buffer_mut();
     for c in 0..w {
         let (src, src_c) = match sweep_column(style, is_push, c, w, advance) {

@@ -18,6 +18,8 @@ use mineral_model::LyricLine;
 
 use super::sweep::LyricPaint;
 
+use super::{LyricsInput, LyricsPanel, LyricsView};
+use crate::components::frame::FrameEnv;
 use crate::components::layout::shared::text::center_bg;
 use crate::render::anim::ease_in_out;
 use crate::render::color::{lerp_color, lerp_permille};
@@ -25,23 +27,33 @@ use crate::render::control_press;
 use crate::render::theme::{Ink, Theme, permille_of};
 use crate::runtime::format::format_ms;
 use crate::runtime::playback::SyncTrust;
-use crate::runtime::state::{AppState, LyricExtra};
+use crate::runtime::state::LyricExtra;
 
 /// 渲染 lyrics 面板到给定 [`Rect`]。
 ///
 /// # Params:
 ///   - `motion`: 呈现模式。[`LyricMode::Compact`] 给嵌入面板(紧凑 + 瞬时高亮);
 ///     [`LyricMode::Immersive`] 给全屏(行间距 + 缓动平移 + 高亮交叉淡入)。
-pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, motion: LyricMode) {
+pub fn draw(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &LyricsView<'_>,
+    theme: &Theme,
+    motion: LyricMode,
+) {
     let window = WindowLayout::for_panel(area, state, motion);
-    let lines = state.current_lines().filter(|v| !v.is_empty());
-    let extra = state.active_lyric_extra();
-    let trust = state.playback.sync_trust();
+    let lines = state
+        .input
+        .lyrics
+        .map(|lyrics| lyrics.lines.as_slice())
+        .filter(|v| !v.is_empty());
+    let extra = state.active_extra();
+    let trust = state.input.trust;
 
     // 面板 chrome(边框 / 标题弱化色)按实际背景现算:氛围场上贴场色;无人铺 bg 采到
     // Reset 按 base 混合,ANSI 主题回落静态 token(回落链见 Theme::text_over)。
     let ink = theme.ink_over(center_bg(frame, area));
-    let press_strength = state.browse.lyric_view.extra_press.strength();
+    let press_strength = state.panel.extra_press.strength();
     let press_bg = (press_strength > 0).then(|| {
         let key_area = Rect::new(area.right().saturating_sub(4).max(area.x), area.y, 1, 1);
         control_press::background(center_bg(frame, key_area), press_strength, theme)
@@ -59,7 +71,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
         )))
         .title_top(
             Line::from(title_right_spans(
-                state.has_extra_lyrics(),
+                state.has_extra(),
                 extra,
                 theme,
                 ink,
@@ -80,61 +92,67 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: &Theme, 
     };
     let lyric_paint =
         state
-            .browse
-            .lyric_view
+            .panel
             .colors
-            .begin(state.cfg.tui().lyrics(), motion, state.frame_now);
+            .begin(state.frame.config.tui().lyrics(), motion, state.frame.now);
     paint_window(frame, inner, window, theme, &lyric_paint);
 }
 
 /// 根据可见歌词和背景采样更新字词颜色；不生成任何字符格。
-pub(crate) fn prepare(
-    area: Rect,
-    state: &mut AppState,
-    theme: &Theme,
-    motion: LyricMode,
-    background: impl Fn(Rect) -> Color,
-) {
-    let targets = WindowLayout::for_panel(area, state, motion).map_or_else(Vec::new, |window| {
-        let mut targets = Vec::new();
-        for row in &window.rows {
-            let Cell::Primary { line_idx } = row.cell else {
-                continue;
-            };
-            let Some(line) = window.lines.get(line_idx) else {
-                continue;
-            };
-            let words = line.kind.words();
-            if words.is_empty() {
-                continue;
-            }
-            let row_bg = background(row.area);
-            let base = primary_base(row, window.ctx, window.denom, theme, row_bg);
-            let inactive = if Some(line_idx) == window.ctx.focus {
-                lerp_color(base, theme.text, 1, 2)
-            } else {
-                base
-            };
-            targets.extend(super::sweep::word_targets(
-                line_idx,
-                words,
-                (Some(line_idx) == window.ctx.cur).then_some(window.ctx.position_ms),
-                inactive,
-                theme,
-                row_bg,
-                state.cfg.tui().lyrics(),
-            ));
-        }
-        targets
-    });
-    let song = state.playback.track.as_ref().map(|song| &song.id);
-    state.browse.lyric_view.colors.prepare(
-        song,
-        state.cfg.tui().lyrics(),
-        motion,
-        targets,
-        state.frame_now,
-    );
+impl LyricsPanel {
+    /// 根据当前布局和显式播放事实更新字词颜色，绘制不再更新它。
+    pub(crate) fn prepare(
+        &mut self,
+        area: Rect,
+        input: LyricsInput<'_>,
+        frame: FrameEnv<'_>,
+        motion: LyricMode,
+        background: impl Fn(Rect) -> Color,
+    ) {
+        let state = self.view(input, frame);
+        let theme = frame.theme;
+        let targets =
+            WindowLayout::for_panel(area, &state, motion).map_or_else(Vec::new, |window| {
+                let mut targets = Vec::new();
+                for row in &window.rows {
+                    let Cell::Primary { line_idx } = row.cell else {
+                        continue;
+                    };
+                    let Some(line) = window.lines.get(line_idx) else {
+                        continue;
+                    };
+                    let words = line.kind.words();
+                    if words.is_empty() {
+                        continue;
+                    }
+                    let row_bg = background(row.area);
+                    let base = primary_base(row, window.ctx, window.denom, theme, row_bg);
+                    let inactive = if Some(line_idx) == window.ctx.focus {
+                        lerp_color(base, theme.text, 1, 2)
+                    } else {
+                        base
+                    };
+                    targets.extend(super::sweep::word_targets(
+                        line_idx,
+                        words,
+                        (Some(line_idx) == window.ctx.cur).then_some(window.ctx.position_ms),
+                        inactive,
+                        theme,
+                        row_bg,
+                        state.frame.config.tui().lyrics(),
+                    ));
+                }
+                targets
+            });
+        let song = input.song;
+        self.colors.prepare(
+            song,
+            frame.config.tui().lyrics(),
+            motion,
+            targets,
+            frame.now,
+        );
+    }
 }
 
 /// 左上标识:数据档(`lyrics` / `synced` / `synced ✦`)× 时间轴信任档。两档同步用
@@ -432,15 +450,19 @@ struct WindowRow {
 
 impl<'a> WindowLayout<'a> {
     /// 按端点模式现读配置和歌词状态；无内容或内区为空时没有窗口。
-    fn for_panel(area: Rect, state: &'a AppState, motion: LyricMode) -> Option<Self> {
+    fn for_panel(area: Rect, state: &'a LyricsView<'a>, motion: LyricMode) -> Option<Self> {
         let inner = Block::new().borders(Borders::ALL).inner(area);
         if inner.width == 0 || inner.height == 0 {
             return None;
         }
-        let lines = state.current_lines().filter(|lines| !lines.is_empty())?;
-        let position_ms = state.playback.position_ms;
+        let lines = state
+            .input
+            .lyrics
+            .map(|lyrics| lyrics.lines.as_slice())
+            .filter(|lines| !lines.is_empty())?;
+        let position_ms = state.input.position_ms;
         // 失真的时间轴保留静态内容和手动滚动，不生成播放高亮。
-        let cur = match state.playback.sync_trust() {
+        let cur = match state.input.trust {
             SyncTrust::Broken => None,
             SyncTrust::Native | SyncTrust::Borrowed => {
                 mineral_model::current_line(lines, position_ms)
@@ -452,19 +474,19 @@ impl<'a> WindowLayout<'a> {
                 lines,
                 cur,
                 position_ms,
-                text_alpha: state.cfg.tui().lyrics().text_alpha(),
-                extra: state.active_lyric_extra(),
+                text_alpha: state.frame.config.tui().lyrics().text_alpha(),
+                extra: state.active_extra(),
                 motion,
-                fullscreen_line_gap: *state.cfg.tui().lyrics().fullscreen_line_gap(),
-                compact_line_gap: *state.cfg.tui().lyrics().compact_line_gap(),
-                scroll_ms: *state.cfg.tui().lyrics().scroll_ms(),
+                fullscreen_line_gap: *state.frame.config.tui().lyrics().fullscreen_line_gap(),
+                compact_line_gap: *state.frame.config.tui().lyrics().compact_line_gap(),
+                scroll_ms: *state.frame.config.tui().lyrics().scroll_ms(),
                 // 紧凑面板恒附着，不继承全屏手动偏移。
                 manual_anchor_milli: match motion {
-                    LyricMode::Immersive => state.manual_lyric_anchor_milli(),
+                    LyricMode::Immersive => state.manual_anchor(),
                     LyricMode::Compact => None,
                 },
                 manual_focus: match motion {
-                    LyricMode::Immersive => state.manual_lyric_focus_line(),
+                    LyricMode::Immersive => state.manual_focus(),
                     LyricMode::Compact => None,
                 },
             },

@@ -5,3 +5,5 @@ pub mod popup;
 pub mod toast;
 
 pub(crate) mod text_input;
+
+pub(crate) mod frame;

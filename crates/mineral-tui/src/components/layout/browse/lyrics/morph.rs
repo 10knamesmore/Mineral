@@ -3,19 +3,19 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
+use super::LyricsView;
 use super::panel::{LyricMode, draw};
 use crate::components::layout::shared::transform::{lerp_rect, zero_center};
 use crate::components::layout::transition;
 use crate::render::anim::ease_in_out;
 use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
 
 /// 按千分比进度交接完整歌词面板；普通布局没有歌词时仅绘制全屏端。
 pub(crate) fn draw_transition(
     frame: &mut Frame<'_>,
     from: Option<Rect>,
     to: Rect,
-    state: &AppState,
+    state: &LyricsView<'_>,
     theme: &Theme,
     raw_progress: u16,
 ) {

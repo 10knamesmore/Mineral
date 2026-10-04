@@ -9,3 +9,6 @@ mod row;
 mod search;
 
 pub(crate) use overlay::QueueOverlay;
+
+mod input;
+pub(crate) use input::QueueInput;

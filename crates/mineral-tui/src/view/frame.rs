@@ -11,14 +11,12 @@ use ratatui::widgets::{Block, Borders};
 use mineral_config::SearchFocusTransition;
 
 use super::preparation::FrameView;
-use crate::components::layout::browse::{lyrics, now_playing, sidebar, spectrum};
-use crate::components::layout::search::{detail, panel};
+use crate::components::layout::browse::{lyrics, spectrum};
+use crate::components::layout::search::panel;
 use crate::components::layout::shared::compute::{
     Areas, compute, compute_fullscreen, compute_search,
 };
-use crate::components::layout::shared::marquee::MarqueeCtx;
-use crate::components::layout::shared::waveform::WaveformCtx;
-use crate::components::layout::shared::{top_status, transform, transport, vinyl};
+use crate::components::layout::shared::{transform, vinyl};
 use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
 use crate::render::ambient;
 use crate::runtime::state::SearchFocus;
@@ -26,8 +24,8 @@ use crate::runtime::state::SearchFocus;
 /// 渲染当前页面；形变期间合成两端稳定排版，封面和播放信息独立移动。
 /// 通知与浮层叠在页面之上，最后绘制启动或退出的整屏边框。
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &FrameView<'_>) {
-    let theme = app.theme;
-    let layout_cfg = app.state.cfg.tui().layout();
+    let theme = app.env.theme;
+    let layout_cfg = app.env.config.tui().layout();
     let normal = compute(frame.area(), layout_cfg);
 
     // 整屏背景底(在任何布局面板之下):先铺 `theme.background`(普通页也有底色,消除进退
@@ -36,16 +34,16 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &FrameView<'_>) {
     paint_backdrop(frame, app, &normal, layout_cfg);
 
     // 互斥保证 fullscreen / search 两个 Toggle 同时只一个离开 at_min,故顺序判即可。
-    if !app.state.browse.fullscreen.at_min() {
+    if !app.fullscreen.at_min() {
         let full = compute_fullscreen(frame.area(), layout_cfg);
-        if app.state.browse.fullscreen.at_max() {
+        if app.fullscreen.at_max() {
             paint_fullscreen(frame, &full, app);
         } else {
             page_morph::fullscreen(frame, &normal, &full, app);
         }
-    } else if !app.state.channel_search.active.at_min() {
+    } else if !app.search.page.active.at_min() {
         let search = compute_search(frame.area(), layout_cfg);
-        if app.state.channel_search.active.at_max() {
+        if app.search.page.active.at_max() {
             paint_search(frame, &search, app, /*cover_in_flight*/ false);
         } else {
             page_morph::search(frame, &normal, &search, app);
@@ -62,11 +60,19 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &FrameView<'_>) {
             frame,
             normal.top_status,
             theme,
-            app.state.browse.fullscreen.eased_in_out(),
+            app.fullscreen.eased_in_out(),
             app.notice_hint,
-            app.state.frame_now,
+            app.env.now,
         );
-        app.overlays.render(frame, frame.area(), app.state, theme);
+        app.overlays.render(
+            frame,
+            frame.area(),
+            &app.overlay_inputs,
+            crate::components::popup::OverlayEnv {
+                frame: app.env,
+                dock_right: app.fullscreen.on(),
+            },
+        );
     }
 
     if let Some(anim) = &app.transition {
@@ -76,29 +82,30 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &FrameView<'_>) {
 
 /// 常规(浏览态)布局:把各 area 分发给对应组件渲染。
 fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
-    let theme = app.theme;
-    top_status::draw(frame, areas.top_status, app.state, theme);
-    sidebar::draw(frame, areas.left, app.state, theme);
+    let theme = app.env.theme;
+    crate::components::layout::shared::top_status::draw(
+        frame,
+        areas.top_status,
+        &app.status,
+        theme,
+    );
+    app.browse.paint(frame, areas.left);
     if let Some(right) = areas.right {
-        now_playing::draw(
-            frame, right, app.state, theme, /*cover_in_flight*/ false,
+        crate::components::layout::browse::now_playing::draw(
+            frame,
+            right,
+            &app.selected,
+            theme,
+            /*cover_in_flight*/ false,
         );
     }
     if let Some(lyr) = areas.lyrics {
-        lyrics::draw(frame, lyr, app.state, theme, lyrics::LyricMode::Compact);
+        lyrics::draw(frame, lyr, &app.lyrics, theme, lyrics::LyricMode::Compact);
     }
     if let Some(spec) = areas.spectrum {
-        spectrum::draw(frame, spec, &app.state.spectrum, theme);
+        spectrum::draw(frame, spec, app.spectrum, theme);
     }
-    transport::draw(
-        frame,
-        areas.transport,
-        &app.state.playback,
-        &app.state.transport,
-        &MarqueeCtx::new(app.state, theme, /*fade_to*/ theme.base),
-        &WaveformCtx::new(app.state, theme),
-        theme,
-    );
+    app.transport.paint(frame, areas.transport, theme.base);
 }
 
 /// Search 稳态布局：prompt 接管顶行，主体为结果与详情面板，播放栏全宽贴底。
@@ -109,10 +116,10 @@ fn paint_browse(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
 /// `cover_in_flight`:page morph 封面飞行层已接管主图(now_playing 封面 / detail 头图),
 /// 面板跳过自画防双画。
 fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>, cover_in_flight: bool) {
-    let theme = app.theme;
-    let rs = &app.state.channel_search;
+    let theme = app.env.theme;
+    let rs = app.search.page;
     let sliding = matches!(
-        app.state.cfg.tui().animation().search_focus_transition(),
+        app.env.config.tui().animation().search_focus_transition(),
         SearchFocusTransition::Slide
     ) && !rs.focus_ring.settled();
     // 滑动期所有面板边框压暗,高亮交给浮动环;否则当前焦点面板边框高亮。
@@ -124,7 +131,7 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>, cover
             prompt,
             rs,
             theme,
-            app.state.cfg.sources(),
+            app.env.config.sources(),
             border_focused(SearchFocus::Prompt),
         );
     }
@@ -132,16 +139,16 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>, cover
         panel::draw_results(
             frame,
             left,
-            app.state,
+            &app.search,
             theme,
             border_focused(SearchFocus::Results),
         );
     }
     if let Some(right) = areas.right.and_then(nonempty) {
-        detail::draw(
+        crate::components::layout::search::detail::draw(
             frame,
             right,
-            app.state,
+            &app.detail,
             theme,
             border_focused(SearchFocus::Detail),
             cover_in_flight,
@@ -164,17 +171,9 @@ fn paint_search(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>, cover
     }
     // chip 下拉(source/kind)画在最后,盖在 results 面板之上。
     if let Some(prompt) = areas.search_prompt {
-        panel::draw_prompt_dropdown(frame, prompt, app.state, theme);
+        panel::draw_prompt_dropdown(frame, prompt, &app.search, theme);
     }
-    transport::draw(
-        frame,
-        areas.transport,
-        &app.state.playback,
-        &app.state.transport,
-        &MarqueeCtx::new(app.state, theme, /*fade_to*/ theme.base),
-        &WaveformCtx::new(app.state, theme),
-        theme,
-    );
+    app.transport.paint(frame, areas.transport, theme.base);
 }
 
 /// 焦点对应的面板矩形(prompt 行 / results 左 / detail 右);该面板在当前端点不存在为 `None`。
@@ -189,9 +188,9 @@ fn search_focus_rect(areas: &Areas, focus: SearchFocus) -> Option<Rect> {
 
 /// 全屏稳态：频谱、播放栏、封面与沉浸歌词。
 fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
-    let theme = app.theme;
+    let theme = app.env.theme;
     if let Some(spec) = areas.spectrum.and_then(nonempty) {
-        spectrum::draw(frame, spec, &app.state.spectrum, theme);
+        spectrum::draw(frame, spec, app.spectrum, theme);
     }
     // marquee 边缘 fade 的目标 = transport 面实际背景(ambient 场色);采到 Reset
     // (ambient 关 / ANSI 主题)回落 base,与非全屏调用点一致。
@@ -200,20 +199,12 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
             bg @ ratatui::style::Color::Rgb(..) => bg,
             _ => theme.base,
         };
-    transport::draw(
-        frame,
-        areas.transport,
-        &app.state.playback,
-        &app.state.transport,
-        &MarqueeCtx::new(app.state, theme, marquee_fade_to),
-        &WaveformCtx::new(app.state, theme),
-        theme,
-    );
+    app.transport.paint(frame, areas.transport, marquee_fade_to);
     if let Some(c) = areas.cover.and_then(nonempty) {
         draw_fullscreen_cover(frame, c, app);
     }
     if let Some(lyr) = areas.lyrics.and_then(nonempty) {
-        lyrics::draw(frame, lyr, app.state, theme, lyrics::LyricMode::Immersive);
+        lyrics::draw(frame, lyr, &app.lyrics, theme, lyrics::LyricMode::Immersive);
     }
 }
 
@@ -231,7 +222,7 @@ fn paint_backdrop(
 ) {
     let area = frame.area();
     let skip = backdrop_skip(app, area, normal, layout_cfg);
-    fill_bg(frame.buffer_mut(), area, app.theme.background, skip);
+    fill_bg(frame.buffer_mut(), area, app.env.theme.background, skip);
     draw_ambient(frame, app, skip);
 }
 
@@ -245,11 +236,11 @@ fn backdrop_skip(
     normal: &Areas,
     layout_cfg: &mineral_config::LayoutConfig,
 ) -> Option<Rect> {
-    let fullscreen = &app.state.browse.fullscreen;
+    let fullscreen = app.fullscreen;
     if fullscreen.at_max() {
         return ambient_skip_rect(app, compute_fullscreen(area, layout_cfg).cover);
     }
-    if fullscreen.at_min() && app.state.browse.ambient_reveal.active() {
+    if fullscreen.at_min() && app.ambient_reveal.active() {
         return now_playing_cover_skip(app, normal.right);
     }
     None
@@ -259,9 +250,17 @@ fn backdrop_skip(
 /// (无选中 / 无图 / 协议未就绪 / halfblock 兜底)时为 `None`。
 fn now_playing_cover_skip(app: &FrameView<'_>, right: Option<Rect>) -> Option<Rect> {
     let right = nonempty(right?)?;
-    let url = now_playing::main_cover::url(app.state)?;
-    let [cover_sec, _, _] = now_playing::main_cover::sections(right)?;
-    app.state.images.ready_area(&url, nonempty(cover_sec)?)
+    let url = match app.selected.input.switch.current() {
+        crate::runtime::state::View::Playlists => app.selected.input.playlist_cover.as_ref(),
+        crate::runtime::state::View::Library => app
+            .selected
+            .input
+            .track
+            .and_then(|entry| entry.data.song.cover_url.as_ref()),
+    }?;
+    let [cover_sec, _, _] =
+        crate::components::layout::browse::now_playing::main_cover::sections(right)?;
+    app.images.ready_area(url, nonempty(cover_sec)?)
 }
 
 /// 整屏背景填充:把 `area` 内每格底色刷成 `color`;`color == Reset` 时不改已有背景。
@@ -287,14 +286,14 @@ fn fill_bg(buf: &mut Buffer, area: Rect, color: Color, skip: Option<Rect>) {
 /// `ambient_reveal.active()` 而非全屏几何)。跟随静止在关态时整段跳过(背景填充已铺底);
 /// 功能关且色板淡出已到底、或 ANSI 主题无真彩底色时同样跳过。
 fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>, skip: Option<Rect>) {
-    if !app.state.browse.ambient_reveal.active() {
+    if !app.ambient_reveal.active() {
         return;
     }
-    let cfg = app.state.cfg.tui().ambient();
+    let cfg = app.env.config.tui().ambient();
     if !*cfg.enabled() && app.ambient.settled_at_base() {
         return;
     }
-    let Some(base) = ambient::rgb_of(app.theme.base) else {
+    let Some(base) = ambient::rgb_of(app.env.theme.base) else {
         return;
     };
     let area = frame.area();
@@ -304,7 +303,7 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>, skip: Option<Rect>) 
         app.ambient,
         base,
         cfg,
-        app.state.browse.ambient_reveal.progress(),
+        app.ambient_reveal.progress(),
         app.ambient_pulse.level_permille(cfg.pulse()),
         skip,
     );
@@ -313,29 +312,29 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>, skip: Option<Rect>) 
 /// Sixel / iTerm2 的实际图片外框避开背景重绘，防止首 cell 改色导致重发载荷。
 /// Kitty 逐格保留背景；halfblock 和转场按透明度合成，这些路径都不挖洞。
 fn ambient_skip_rect(app: &FrameView<'_>, cover: Option<Rect>) -> Option<Rect> {
-    if !app.state.browse.fullscreen.at_max() || app.state.images.transition.is_some() {
+    if !app.fullscreen.at_max() || app.cover_transition.is_some() {
         return None;
     }
-    let track = app.state.playback.track.as_ref()?;
+    let track = app.playing?;
     let url = track.cover_url.as_ref()?;
-    app.state.images.ready_area(url, cover.and_then(nonempty)?)
+    app.images.ready_area(url, cover.and_then(nonempty)?)
 }
 
 /// 全屏独立封面跟随在播曲；形变中只画 halfblock，稳态全屏才使用终端图片成品
 /// (避免形变期每帧尺寸变化导致重复编码)。无在播曲时画待机唱片纹(纯 cell、逐帧
 /// 重画安全,形变 / 稳态同一条路),盘面下段叠 `nothing playing` 提示。
 pub(super) fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &FrameView<'_>) {
-    let theme = app.theme;
-    let Some(track) = app.state.playback.track.as_ref() else {
-        vinyl::render(frame, area, &app.state.vinyl, theme);
+    let theme = app.env.theme;
+    let Some(track) = app.playing else {
+        vinyl::render(frame, area, app.vinyl, theme);
         return;
     };
-    if app.state.browse.fullscreen.at_max() {
+    if app.fullscreen.at_max() {
         // 切歌转场窗口:新旧两图像素级合成 halfblock(纯 cell,逐帧重画安全),恰好盖住
         // 新图的离线编码期，推满后使用准备阶段已预热的终端成品。缺图时显示已就绪的一端。
-        if let Some(transition) = app.state.images.transition.as_ref() {
-            let style = BlendStyle::from(*app.state.cfg.tui().cover_transition().style());
-            app.state.images.render(
+        if let Some(transition) = app.cover_transition {
+            let style = BlendStyle::from(*app.env.config.tui().cover_transition().style());
+            app.images.render(
                 ImageContent::Blend {
                     from: &transition.from_url,
                     to: &transition.to_url,
@@ -349,7 +348,7 @@ pub(super) fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &Fra
             );
             return;
         }
-        app.state.images.render(
+        app.images.render(
             ImageContent::Display {
                 url: track.cover_url.as_ref(),
             },
@@ -359,7 +358,7 @@ pub(super) fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &Fra
         );
     } else {
         // 形变期：halfblock 随封面区长大；无真实图片时保留背景。
-        app.state.images.render(
+        app.images.render(
             ImageContent::Display {
                 url: track.cover_url.as_ref(),
             },

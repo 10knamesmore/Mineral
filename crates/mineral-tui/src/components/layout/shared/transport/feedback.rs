@@ -424,7 +424,10 @@ impl CaptionWidth {
 /// 与播放栏同生命周期的反馈状态，由 AppState 持有，输入与 tick 显式更新。
 /// 三个期限仅由对应动作刷新；后端重复同步、绘制、resize 和页面形变均不续期。
 #[derive(Clone, Debug)]
-pub(crate) struct TransportFeedback {
+pub(crate) struct TransportBar {
+    /// 当前播放标题的滚动状态。
+    pub(crate) title: crate::runtime::marquee::Marquee,
+
     /// 音量提示到期时刻，未触发或已到期为 None。
     volume_until: Option<Instant>,
 
@@ -447,10 +450,11 @@ pub(crate) struct TransportFeedback {
     elapsed_press: ControlPress,
 }
 
-impl TransportFeedback {
+impl TransportBar {
     /// 初始按钮隐藏，确认的模式仅用于准备下次唤起的内容。
     pub(crate) fn new(mode: PlayMode, anim: &AnimationConfig) -> Self {
         Self {
+            title: crate::runtime::marquee::Marquee::default(),
             volume_until: None,
             mode_until: None,
             controls_until: None,

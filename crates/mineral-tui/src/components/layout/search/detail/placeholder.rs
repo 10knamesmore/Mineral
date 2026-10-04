@@ -7,12 +7,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use crate::components::layout::shared::spinner;
 use crate::render::theme::Theme;
-use crate::runtime::state::AppState;
 
 /// 数据未到货:旋转 spinner + `loading` 文案(逐帧旋转,与「到货为空」的静态空态区分开——
-/// 旋转即「在飞」)。`glyph` 由调用方按配置帧 + 帧计数取(见 [`loading_glyph`])。
+/// 旋转即「在飞」)。`glyph` 由调用方按配置帧 + 帧计数取。
 pub(super) fn draw_loading(buf: &mut Buffer, area: Rect, glyph: &str, theme: &Theme) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -59,12 +57,4 @@ pub(super) fn draw_delimiter(buf: &mut Buffer, area: Rect, theme: &Theme) {
         Rect::new(x, area.y, len, 1),
         buf,
     );
-}
-
-/// 当前 loading spinner 字形(配置 `animation.spinner_frames` + `SearchPage` 帧计数)。
-pub(super) fn loading_glyph(state: &AppState) -> &str {
-    spinner::glyph(
-        state.cfg.tui().animation().spinner_frames(),
-        state.channel_search.spinner_counter(),
-    )
 }

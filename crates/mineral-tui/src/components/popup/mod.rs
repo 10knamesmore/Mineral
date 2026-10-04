@@ -17,11 +17,19 @@ mod placement;
 mod queue;
 mod stack;
 
-pub(crate) use component::{OverlayAction, OverlayResponse, render_overlay};
+pub(crate) use audio_settings::AudioSettingsOverlay;
+pub(crate) use component::{
+    Chrome, Overlay, OverlayAction, OverlayEnv, OverlayResponse, dock_full_rect, render_overlay,
+};
+pub(crate) use confirm::ConfirmOverlay;
+pub(crate) use disconnect::DisconnectOverlay;
+pub(crate) use download::{DownloadInput, DownloadOverlay};
+pub(crate) use help::HelpOverlay;
 pub(crate) use help::chip_text;
 pub(crate) use menu::{ContainerRef, MenuAction, MenuItem, PopMenu};
 pub(crate) use placement::Placement;
-pub(crate) use stack::{OverlayKind, OverlayStack};
+pub(crate) use queue::{QueueInput, QueueOverlay};
+pub(crate) use stack::OverlayStack;
 
 mod text_prompt;
 pub(crate) use text_prompt::TextPrompt;

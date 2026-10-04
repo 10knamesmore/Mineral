@@ -22,7 +22,7 @@ use crate::components::popup::placement::Placement;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
-use crate::runtime::state::{AppState, OverlayReveal};
+use crate::runtime::state::OverlayReveal;
 
 /// 菜单确认后产出、由 App 执行的动作。
 #[derive(Clone, Debug, PartialEq)]
@@ -278,12 +278,13 @@ impl PopMenu {
 }
 
 impl Overlay for PopMenu {
+    type Input<'a> = ();
+
     fn prepare(
         &mut self,
         _inner: Rect,
-        _ctx: &mut AppState,
-        _theme: &Theme,
-        _advance: bool,
+        _ctx: &(),
+        _cx: &mut crate::components::frame::PrepareCx<'_>,
         reveal: OverlayReveal,
     ) {
         self.reveal = reveal;
@@ -310,14 +311,14 @@ impl Overlay for PopMenu {
         }
     }
 
-    fn block(&self, _ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+    fn block(&self, _ctx: &(), theme: &Theme, focused: bool) -> Block<'static> {
         let border = if focused { theme.accent } else { theme.overlay };
         base_block(theme)
             .border_style(Style::new().fg(border))
             .title(Line::from(format!(" {} ", self.title)).style(Style::new().fg(theme.subtext)))
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, _ctx: &(), theme: &Theme) {
         let list_h = inner.height;
         // 选中高亮随本层揭开进度淡入,与被压住那层的淡出严格同拍(读同一个进度)。
         let own = self.reveal.own.min(OverlayReveal::FULL);
@@ -361,7 +362,7 @@ impl Overlay for PopMenu {
     }
 
     /// Esc 关 / Enter 确认 / Tab·↓ 走查 / Shift+Tab·↑ 反向 / 字符命中 hotkey 直达。
-    fn on_key(&mut self, key: &KeyEvent, _ctx: &AppState) -> OverlayResponse {
+    fn on_key(&mut self, key: &KeyEvent, _ctx: &()) -> OverlayResponse {
         match key.code {
             KeyCode::Esc => OverlayResponse::Do(OverlayAction::CloseTop),
             KeyCode::Enter => self.confirm(),
@@ -393,7 +394,7 @@ impl Overlay for PopMenu {
         }
     }
 
-    fn on_action(&mut self, action: Action, _ctx: &AppState) -> Option<OverlayResponse> {
+    fn on_action(&mut self, action: Action, _ctx: &()) -> Option<OverlayResponse> {
         let max = self.items.len().saturating_sub(1);
         match action {
             // 导航族经 keymap(跟随 j/k 重映射),钳制不循环(与 queue 浮层同手感)。
@@ -428,7 +429,6 @@ mod tests {
     use crate::components::popup::component::{Overlay, OverlayAction, OverlayResponse};
     use crate::components::popup::placement::Placement;
     use crate::runtime::action::{Action, SelectionMove};
-    use crate::runtime::state::AppState;
 
     /// 极简测试歌(只有 id / 名字有意义)。
     fn song(name: &str) -> Box<Song> {
@@ -471,7 +471,7 @@ mod tests {
     /// 导航(经全局 Action)钳制移动 + Enter 确认产出选中项动作。
     #[test]
     fn navigate_and_confirm() -> color_eyre::Result<()> {
-        let ctx = AppState::test_default()?;
+        let ctx = ();
         let mut menu = PopMenu::new("Actions", action_items(), anchor(), Placement::Below);
         let resp = menu.on_action(Action::MoveSelection(SelectionMove::Down(1)), &ctx);
         assert!(matches!(resp, Some(OverlayResponse::Consumed)));
@@ -502,7 +502,7 @@ mod tests {
     /// `activate`(l/<CR>)经 on_action 确认当前项,与 Enter 兜底同效。
     #[test]
     fn activate_action_confirms_selection() -> color_eyre::Result<()> {
-        let ctx = AppState::test_default()?;
+        let ctx = ();
         let mut menu = PopMenu::new("Actions", action_items(), anchor(), Placement::Below);
         menu.on_action(Action::MoveSelection(SelectionMove::Down(1)), &ctx);
         let Some(OverlayResponse::Do(OverlayAction::Menu(action))) =
@@ -524,7 +524,7 @@ mod tests {
     /// 快捷字母直达执行;未注册字母吞键不动作。
     #[test]
     fn hotkey_jumps_and_unknown_swallowed() -> color_eyre::Result<()> {
-        let ctx = AppState::test_default()?;
+        let ctx = ();
         let mut menu = PopMenu::new("Actions", action_items(), anchor(), Placement::Below);
         let OverlayResponse::Do(OverlayAction::Menu(action)) =
             menu.on_key(&KeyEvent::from(KeyCode::Char('d')), &ctx)
@@ -545,7 +545,7 @@ mod tests {
     /// back / quit 动作在菜单内收敛为关闭;Esc 裸键同。
     #[test]
     fn close_paths() -> color_eyre::Result<()> {
-        let ctx = AppState::test_default()?;
+        let ctx = ();
         let mut menu = PopMenu::new("Actions", action_items(), anchor(), Placement::Below);
         assert!(matches!(
             menu.on_action(Action::BackOrClearSearch, &ctx),

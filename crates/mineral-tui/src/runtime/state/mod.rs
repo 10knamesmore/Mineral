@@ -20,11 +20,12 @@ mod search_updates;
 pub(crate) mod search_whitelist;
 mod task_event;
 mod track_filter;
+pub(crate) use track_filter::{FilteredTracks, TrackFilterCache};
 mod view_context;
 mod view_switch;
 
 #[cfg(test)]
-pub use crate::image::CoverTransition;
+pub(crate) use crate::image::CoverTransition;
 pub use crate::image::ImageEngine;
 pub use application_state::AppState;
 pub(crate) use application_state::spectrum_params;
@@ -34,12 +35,14 @@ pub(crate) use browse::{BrowseModel, LibraryQueueProjection};
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
-pub(crate) use list_expansion::{
-    FilteredListFrame, ListExpansion, ListExpansionScope, ListExpansionState, ListRowIdentity,
-};
+pub(crate) use list_expansion::{FilteredListFrame, ListExpansion, ListExpansionState};
 pub use lyric::LyricExtra;
 pub use overlay_reveal::OverlayReveal;
 pub use player::PlayerMirror;
 pub use playlist_tracks::PlaylistTracks;
 pub use search::SearchState;
 pub use view_context::{ActiveLayer, PageKind, View};
+
+pub(crate) use view_switch::ViewSwitch;
+
+pub(crate) use detail::DetailStack;

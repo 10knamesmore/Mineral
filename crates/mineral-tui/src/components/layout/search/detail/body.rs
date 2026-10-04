@@ -1,6 +1,7 @@
 //! Detail 面板栈顶帧的主体列表区:非 artist 帧曲目表、artist 帧热门曲/专辑双区(Tab + 切区
 //! 离屏合成),及两张表(曲目/专辑)的渲染。数据未到画骨架,选中行高亮随面板焦点度渐变。
 
+use super::DetailPaint;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
@@ -15,15 +16,12 @@ use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::text::display_width;
 use crate::components::layout::shared::thumbnails::{THUMBNAIL_COLUMNS, render_table_thumbnails};
 use crate::render::theme::Theme;
-use crate::runtime::marquee::Slot;
 use crate::runtime::scroll::list::ScrollList;
-use crate::runtime::state::{
-    AppState, ArtistSection, DetailData, DetailFrame, EntityRef, SearchFocus,
-};
+use crate::runtime::state::{ArtistSection, DetailData, DetailFrame, EntityRef};
 
 use super::geometry::split_artist_body;
 use super::meta::{publish_year, with_commas};
-use super::placeholder::{draw_empty, draw_loading, loading_glyph};
+use super::placeholder::{draw_empty, draw_loading};
 use super::sweep::{FULL, SweepLayer, copy_col, sweep_column};
 use super::track_table::{self, TrackColumns, highlight_style};
 
@@ -33,6 +31,9 @@ use super::track_table::{self, TrackColumns, highlight_style};
 struct ListPaint<'a> {
     /// 该列表的光标 + 视口滚动态(取自栈顶帧)。
     list: &'a ScrollList,
+
+    /// 同一详情帧的选中标题滚动状态。
+    title: &'a crate::runtime::marquee::Marquee,
 
     /// 面板焦点度(千分比):选中行高亮 subtext→accent 的插值参数,随焦点环滑动渐变,
     /// 与 results 列对称。
@@ -44,7 +45,7 @@ pub(super) fn draw_body(
     buf: &mut Buffer,
     body: Rect,
     dframe: &DetailFrame,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
 ) {
     match &dframe.entity {
@@ -59,15 +60,13 @@ fn draw_track_body(
     buf: &mut Buffer,
     body: Rect,
     dframe: &DetailFrame,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
 ) {
     let paint = ListPaint {
         list: dframe.list(),
-        focus_permille: state.channel_search.focus_permille(
-            *state.cfg.tui().animation().search_focus_transition(),
-            SearchFocus::Detail,
-        ),
+        title: &dframe.title,
+        focus_permille: state.focus,
     };
     match &dframe.data {
         Some(DetailData::Album(a)) => draw_track_list(
@@ -89,7 +88,7 @@ fn draw_track_body(
             theme,
         ),
         // 数据未到货 → 旋转 loading(非空态)。
-        _ => draw_loading(buf, body, loading_glyph(state), theme),
+        _ => draw_loading(buf, body, state.loading, theme),
     }
 }
 
@@ -99,7 +98,7 @@ fn draw_artist_body(
     buf: &mut Buffer,
     body: Rect,
     dframe: &DetailFrame,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
 ) {
     if body.height < 2 {
@@ -138,7 +137,7 @@ fn draw_artist_body(
                 &hot_buf,
                 &alb_buf,
                 eased,
-                *state.cfg.tui().animation().view_sweep(),
+                *state.frame.config.tui().animation().view_sweep(),
             );
         }
         None => draw_artist_section(buf, list, dframe.section, dframe, state, theme),
@@ -152,15 +151,13 @@ fn draw_artist_section(
     list: Rect,
     section: ArtistSection,
     dframe: &DetailFrame,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
 ) {
     let paint = ListPaint {
         list: dframe.list(),
-        focus_permille: state.channel_search.focus_permille(
-            *state.cfg.tui().animation().search_focus_transition(),
-            SearchFocus::Detail,
-        ),
+        title: &dframe.title,
+        focus_permille: state.focus,
     };
     match (section, &dframe.data) {
         (
@@ -185,7 +182,7 @@ fn draw_artist_section(
         ) => {
             if albs.items().is_empty() && albs.has_more() {
                 if albs.is_loading() {
-                    draw_loading(buf, list, loading_glyph(state), theme);
+                    draw_loading(buf, list, state.loading, theme);
                 } else {
                     draw_empty(buf, list, "more albums available", theme);
                 }
@@ -194,7 +191,7 @@ fn draw_artist_section(
             }
         }
         // 该区数据未到货 → 旋转 loading。
-        _ => draw_loading(buf, list, loading_glyph(state), theme),
+        _ => draw_loading(buf, list, state.loading, theme),
     }
 }
 
@@ -255,7 +252,7 @@ fn draw_track_list(
     tracks: TrackList<'_>,
     paint: ListPaint<'_>,
     cols: TrackColumns,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
 ) {
     if tracks.is_empty() {
@@ -268,7 +265,13 @@ fn draw_track_list(
     let widths = cols.widths();
     // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
     // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
-    let marquee_ctx = MarqueeCtx::new(state, theme, /*fade_to*/ theme.surface0);
+    let marquee_ctx = MarqueeCtx::new(
+        paint.title,
+        state.frame.config.tui().animation(),
+        state.frame.now,
+        theme,
+        /*fade_to*/ theme.surface0,
+    );
     let columns = resolve_column_rects(area, &widths, display_width(track_table::HIGHLIGHT_SYMBOL));
     let title_w = columns.get(cols.title_index()).map_or(0, |r| r.width);
     let sel = paint.list.sel();
@@ -276,12 +279,7 @@ fn draw_track_list(
         let rows = visible.filter_map(|view_index| {
             let song = tracks.song(view_index)?;
             let loved = state.is_liked(song);
-            let marquee = row_marquee(
-                view_index == sel,
-                &marquee_ctx,
-                Slot::SearchDetailSelected,
-                title_w,
-            );
+            let marquee = row_marquee(view_index == sel, &marquee_ctx, title_w);
             Some(track_table::track_row(song, loved, cols, theme, marquee))
         });
         Table::new(rows, widths)
@@ -295,7 +293,7 @@ fn draw_track_list(
     if show_cover && let Some(column) = columns.get(1) {
         render_table_thumbnails(
             buf,
-            &state.images,
+            state.images,
             *column,
             visible.map(|index| tracks.song(index).and_then(|song| song.cover_url.as_ref())),
         );
@@ -346,7 +344,7 @@ fn draw_album_list(
     area: Rect,
     albums: &[Album],
     paint: ListPaint<'_>,
-    state: &AppState,
+    state: &DetailPaint<'_>,
     theme: &Theme,
 ) {
     if albums.is_empty() {
@@ -404,7 +402,7 @@ fn draw_album_list(
     if show_cover && let Some(column) = columns.first() {
         render_table_thumbnails(
             buf,
-            &state.images,
+            state.images,
             *column,
             visible.map(|index| albums.get(index).and_then(|album| album.cover_url.as_ref())),
         );
@@ -465,15 +463,18 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let list = ScrollList::new();
+        let title = crate::runtime::marquee::Marquee::default();
         let area = Rect::new(7, 4, 60, 5);
+        let input = crate::view::search::detail_view(&state, &theme);
         for is_album in [false, true] {
             let render = |buf: &mut Buffer| {
                 let paint = ListPaint {
                     list: &list,
+                    title: &title,
                     focus_permille: 1000,
                 };
                 if is_album {
-                    draw_album_list(buf, area, &albums, paint, &state, &theme);
+                    draw_album_list(buf, area, &albums, paint, &input.paint, &theme);
                 } else {
                     draw_track_list(
                         buf,
@@ -481,7 +482,7 @@ mod tests {
                         TrackList::Songs(&songs),
                         paint,
                         super::TrackColumns::new(false, true),
-                        &state,
+                        &input.paint,
                         &theme,
                     );
                 }

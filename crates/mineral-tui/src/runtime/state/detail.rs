@@ -200,6 +200,9 @@ pub struct DetailFrame {
     /// artist 帧 Hot/Albums 双区共用此一份(切区时 [`Self::cycle_section`] 瞬时归位)。
     list: ScrollList,
 
+    /// 本列表选中标题的滚动状态。
+    pub(crate) title: crate::runtime::marquee::Marquee,
+
     /// 头部简介的滚动 offset（可视行）。render 端折行后把它钳进内容边界并写回（渲染走
     /// `&self`，故内部可变）；C-d/u/b/f 经 [`Self::nudge_description`] 平移。
     desc_scroll: u16,
@@ -218,6 +221,7 @@ impl DetailFrame {
             artist_sections: None,
             section_anim: None,
             list: ScrollList::new(),
+            title: crate::runtime::marquee::Marquee::default(),
             desc_scroll: 0,
             requested: false,
         }

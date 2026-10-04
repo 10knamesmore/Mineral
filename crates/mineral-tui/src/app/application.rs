@@ -6,6 +6,7 @@ use std::time::Instant;
 use ratatui::layout::Position;
 use rustc_hash::FxHashMap;
 
+use crate::app::AppOverlay;
 use crate::components::popup::OverlayStack;
 use crate::components::toast::download_toast::DownloadNotifier;
 use crate::components::toast::notifications::Notifications;
@@ -55,7 +56,7 @@ pub struct App {
     pub(crate) notice_hint: String,
 
     /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
-    pub(crate) overlays: OverlayStack,
+    pub(crate) overlays: OverlayStack<AppOverlay>,
 
     /// queue 浮层上次离开时的光标位置,下次打开落回原处;越界(队列已换短)时作废。
     pub(crate) queue_cursor_memo: Option<usize>,
@@ -162,7 +163,7 @@ impl App {
         // 各源能力声明:连接后自举一次进镜像,UI 据此画入口。
         state.caps = bootstrap.channel_caps.into_iter().collect();
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
-        state.browse.lyric_view.extra = ui_prefs.initial_lyric_extra();
+        state.browse.lyrics.extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
         // 不在这里判档——热重载切到 persist 后历史记忆立即可用。
         state.browse.nav.track_pos = ui_prefs.initial_track_pos().clone();

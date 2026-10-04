@@ -166,10 +166,7 @@ pub fn track_row(
     let mut title_spans = vec![Span::styled(song.name.clone(), Style::new().fg(theme.text))];
     title_spans.extend(alias_span(song.alias.as_deref(), theme.overlay));
     let title_cell = match marquee {
-        Some(m) => Cell::from(
-            m.ctx
-                .line(title_spans, m.slot, &song.id.qualified(), m.title_w),
-        ),
+        Some(m) => Cell::from(m.ctx.line(title_spans, &song.id.qualified(), m.title_w)),
         None => Cell::from(Line::from(title_spans)),
     };
     let mut cells = vec![love_cell(loved, theme)];

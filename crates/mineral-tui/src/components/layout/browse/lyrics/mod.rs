@@ -2,9 +2,15 @@
 
 mod morph;
 mod panel;
+mod state;
 mod sweep;
+mod view;
+pub use state::LyricsPanel;
+pub(crate) use view::{LyricsInput, LyricsView};
 
 pub(crate) use morph::draw_transition;
-pub(crate) use panel::prepare;
-pub use panel::{LyricMode, draw};
+pub use panel::LyricMode;
+pub(crate) use panel::draw;
 pub(crate) use sweep::LyricColors;
+
+mod glide;

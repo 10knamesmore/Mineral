@@ -1,6 +1,6 @@
 //! 五行 Transport 面板:上边框状态 / 曲名 / 元数据 / 进度 / 下边框时间与控件。
 
-use super::feedback::{ButtonAppearance, ControlButton, Heading, TransportFeedback};
+use super::feedback::{ButtonAppearance, ControlButton, Heading, TransportBar};
 
 use mineral_audio::Bps;
 use mineral_model::AudioFormat;
@@ -17,21 +17,23 @@ use crate::render::color::lerp_color;
 use crate::render::control_press::background as button_background;
 use crate::render::theme::{Ink, Theme};
 use crate::runtime::format::{format_ms, format_ms_opt};
-use crate::runtime::marquee::Slot;
 use crate::runtime::playback::{Playback, PlaybackOrigin, PrefetchStage};
 
 /// 标题窗口在绘制前确定，重复绘制不会重置跑马灯。
-pub(crate) fn prepare(area: Rect, state: &mut crate::runtime::state::AppState) {
-    let inner = Block::new().borders(Borders::ALL).inner(area);
-    if !inner.is_empty()
-        && let Some(song) = state.playback.track.as_ref()
-    {
-        crate::components::layout::shared::marquee::prepare_song(
-            &mut state.marquees,
-            Slot::Transport,
-            song,
-            inner.width,
-        );
+impl TransportBar {
+    /// 根据当前播放标题与布局更新自己的滚动起点。
+    pub(crate) fn prepare(&mut self, area: Rect, playback: &Playback, now: std::time::Instant) {
+        let inner = Block::new().borders(Borders::ALL).inner(area);
+        if !inner.is_empty()
+            && let Some(song) = playback.track.as_ref()
+        {
+            crate::components::layout::shared::marquee::prepare_song(
+                &mut self.title,
+                song,
+                inner.width,
+                now,
+            );
+        }
     }
 }
 
@@ -40,7 +42,7 @@ pub(crate) fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
     pb: &Playback,
-    feedback: &TransportFeedback,
+    feedback: &TransportBar,
     marquee: &MarqueeCtx<'_>,
     wave: &WaveformCtx<'_>,
     theme: &Theme,
@@ -107,7 +109,7 @@ fn paint_heading(
     frame: &mut Frame<'_>,
     area: Rect,
     pb: &Playback,
-    feedback: &TransportFeedback,
+    feedback: &TransportBar,
     theme: &Theme,
     ink: Ink,
 ) {
@@ -185,7 +187,7 @@ fn paint_now(
         Some(t) => {
             let mut spans = vec![Span::styled(t.name.clone(), name_style)];
             spans.extend(alias_span(t.alias.as_deref(), ink.muted));
-            marquee.line(spans, Slot::Transport, &t.id.qualified(), area.width)
+            marquee.line(spans, &t.id.qualified(), area.width)
         }
     };
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
@@ -277,7 +279,7 @@ fn paint_footer(
     frame: &mut Frame<'_>,
     area: Rect,
     pb: &Playback,
-    feedback: &TransportFeedback,
+    feedback: &TransportBar,
     theme: &Theme,
     ink: Ink,
 ) -> Option<(u16, u16)> {
@@ -350,7 +352,7 @@ fn paint_controls(
     frame: &mut Frame<'_>,
     area: Rect,
     pb: &Playback,
-    feedback: &TransportFeedback,
+    feedback: &TransportBar,
     control_bounds: Option<(u16, u16)>,
     theme: &Theme,
     ink: Ink,

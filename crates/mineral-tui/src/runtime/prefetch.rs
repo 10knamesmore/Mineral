@@ -63,7 +63,7 @@ fn collect_cover_candidates(
         View::Playlists => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
             let filtered = state.filtered_playlists();
-            let sel = state.browse.nav.playlist.sel();
+            let sel = state.browse.playlists.scroll.sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|p| {
                     p.data
@@ -93,7 +93,7 @@ fn collect_cover_candidates(
         View::Library => {
             // sel 与邻居均按过滤视图下标读取；视图借用曲目，不复制整个歌单。
             let filtered = state.filtered_tracks();
-            let sel = state.browse.nav.track.sel();
+            let sel = state.browse.tracks.scroll.sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 filtered.get(i).and_then(|entry| {
                     entry
@@ -188,7 +188,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             let rows_to_bottom = visible
                 .len()
                 .saturating_sub(1)
-                .saturating_sub(state.browse.nav.track.sel());
+                .saturating_sub(state.browse.tracks.scroll.sel());
             if visible.is_empty()
                 || rows_to_bottom > usize::from(*state.cfg.tui().behavior().search_prefetch_rows())
             {
@@ -404,7 +404,7 @@ pub(crate) fn submit_detail_tasks(
 fn selected_track_id(state: &AppState) -> Option<SongId> {
     state
         .filtered_tracks()
-        .get(state.browse.nav.track.sel())
+        .get(state.browse.tracks.scroll.sel())
         .map(|entry| entry.data.song.id.clone())
 }
 
@@ -412,7 +412,7 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
 fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
     let radius = *state.cfg.tui().prefetch().radius();
     let filtered = state.filtered_playlists();
-    let sel = state.browse.nav.playlist.sel();
+    let sel = state.browse.playlists.scroll.sel();
     let mut out = Vec::new();
     let mut consider = |idx: usize| {
         if let Some(p) = filtered.get(idx) {
@@ -488,7 +488,7 @@ mod tests {
         deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 19, Some(20));
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "刚进入首行不续页");
-        state.browse.nav.track.set_sel(10);
+        state.browse.tracks.scroll.set_sel(10);
         super::request_playlist_tracks(&mut state, &client);
         let page_tasks = tasks()?;
         assert_eq!(page_tasks.len(), 4);
@@ -508,10 +508,10 @@ mod tests {
             39,
             Some(40),
         );
-        assert_eq!(state.browse.nav.track.sel(), 10, "追加曲目保留当前光标");
+        assert_eq!(state.browse.tracks.scroll.sel(), 10, "追加曲目保留当前光标");
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, page_tasks, "新一批到达后不自动继续拉满");
-        state.browse.nav.track.set_sel(38);
+        state.browse.tracks.scroll.set_sel(38);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?.len(), 5);
         assert!(matches!(
@@ -522,7 +522,7 @@ mod tests {
             }))
         ));
         deliver_playlist_page(&mut state, &id, PlaylistLoad::More { offset: 40 }, 45, None);
-        state.browse.nav.track.set_sel(44);
+        state.browse.tracks.scroll.set_sel(44);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?.len(), 5, "完整结果停止续页");
         assert_eq!(
@@ -543,7 +543,7 @@ mod tests {
         state.browse.nav.opened_playlist = Some(id.clone());
         state.browse.view.switch_to(View::Library);
         deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 20, Some(20));
-        state.browse.nav.track.set_sel(19);
+        state.browse.tracks.scroll.set_sel(19);
         super::request_playlist_tracks(&mut state, &client);
         state.apply(&TaskEvent::PlaylistDetailFailed {
             id: id.clone(),
@@ -616,7 +616,7 @@ mod tests {
     /// Queue 过滤后的光标与在播位置共用候选集合,热改列表半径且跨路径按 URL 去重。
     #[test]
     fn queue_selection_joins_existing_cover_prefetch() -> color_eyre::Result<()> {
-        use crate::components::popup::{OverlayKind, OverlayStack};
+        use crate::components::popup::OverlayStack;
         use crate::image::ImageEngine;
         use crate::runtime::action::{Action, SelectionMove};
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -636,7 +636,7 @@ mod tests {
         state.playback.track = state.player.queue.first().cloned();
         state.player.cursor = mineral_protocol::PlayCursor::InQueue(0);
         let mut overlays = OverlayStack::new(1);
-        overlays.push(OverlayKind::queue(0));
+        overlays.push(crate::app::AppOverlay::queue(0));
         overlays.dispatch_key(
             &KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
             Some(Action::EnterSearch),
@@ -704,7 +704,7 @@ mod tests {
     /// 造一个 Library 刚选中 Bilibili 曲目的状态。
     fn selected_bilibili_state() -> color_eyre::Result<AppState> {
         let mut state = state_with_mixed_tracks()?;
-        state.browse.nav.track.set_sel(1);
+        state.browse.tracks.scroll.set_sel(1);
         state.browse.nav.last_sel_change = Instant::now();
         Ok(state)
     }
@@ -769,13 +769,13 @@ mod tests {
         state.apply_track_finished(&bilibili, FinishReason::Eof);
         request_play_count(&mut state, &client);
 
-        state.browse.nav.track.set_sel(0);
+        state.browse.tracks.scroll.set_sel(0);
         request_play_count(&mut state, &client);
 
-        state.browse.nav.track.set_sel(1);
+        state.browse.tracks.scroll.set_sel(1);
         request_play_count(&mut state, &client);
 
-        state.browse.nav.track.set_sel(0);
+        state.browse.tracks.scroll.set_sel(0);
         request_play_count(&mut state, &client);
         state.apply(&TaskEvent::LocalPlayCountFetched {
             song_id: netease.clone(),
@@ -783,10 +783,10 @@ mod tests {
         });
         request_play_count(&mut state, &client);
 
-        state.browse.nav.track.set_sel(1);
+        state.browse.tracks.scroll.set_sel(1);
         request_play_count(&mut state, &client);
 
-        state.browse.nav.track.set_sel(0);
+        state.browse.tracks.scroll.set_sel(0);
         request_play_count(&mut state, &client);
 
         assert_eq!(
@@ -1003,7 +1003,7 @@ mod tests {
                 next_offset: None,
             },
         );
-        state.browse.nav.playlist.set_sel(0);
+        state.browse.playlists.scroll.set_sel(0);
 
         assert!(
             collected_has(&state, 0)?,

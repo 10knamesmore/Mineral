@@ -18,7 +18,10 @@ mod track_table;
 mod transition;
 
 pub(crate) use geometry::{detail_list_area, header_cover_area};
-pub use panel::draw;
+pub(crate) use panel::draw;
 pub(super) use track_table::highlight_style;
 
 pub(crate) use preparation::prepare;
+
+mod view;
+pub(crate) use view::{DetailPaint, DetailView};

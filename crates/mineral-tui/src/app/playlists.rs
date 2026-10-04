@@ -1,7 +1,9 @@
 //! 歌单菜单调用通用输入框，并将结果交给后端。
 
+use crate::app::AppOverlay;
+
 use super::App;
-use crate::components::popup::{OverlayAction, OverlayKind, OverlayResponse, TextPrompt};
+use crate::components::popup::{OverlayAction, OverlayResponse, TextPrompt};
 use mineral_model::PlaylistId;
 use mineral_protocol::PlaylistOp;
 
@@ -14,7 +16,7 @@ impl App {
         let prompt = TextPrompt::new("Save queue as playlist", |text| {
             submit_playlist_name(text, |name| PlaylistOp::SaveQueue { name })
         });
-        self.overlays.push(OverlayKind::TextPrompt(prompt));
+        self.overlays.push(AppOverlay::TextPrompt(prompt));
     }
 
     /// 打开预填名称的改名输入框。
@@ -26,7 +28,7 @@ impl App {
             })
         });
         prompt.set_text(name);
-        self.overlays.push(OverlayKind::TextPrompt(prompt));
+        self.overlays.push(AppOverlay::TextPrompt(prompt));
     }
 }
 

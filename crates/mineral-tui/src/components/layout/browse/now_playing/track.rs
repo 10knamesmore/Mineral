@@ -7,12 +7,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use super::NowPlayingView;
 use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::image::ImageContent;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
-use crate::runtime::marquee::Slot;
-use crate::runtime::state::AppState;
 use crate::runtime::view_model::PlaylistEntryView;
 
 /// 渲染曲目详情(right pane)到 `area`。
@@ -20,12 +19,12 @@ use crate::runtime::view_model::PlaylistEntryView;
 /// # Params:
 ///   - `cover_in_flight`: page morph 封面飞行层已接管主封面时置真——跳过自画封面防双画
 #[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
-pub fn draw(
+pub(crate) fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
     entry: &PlaylistEntryView,
     current_id: Option<&SongId>,
-    state: &AppState,
+    state: &NowPlayingView<'_>,
     theme: &Theme,
     cover_in_flight: bool,
 ) {
@@ -47,7 +46,7 @@ pub fn draw(
             },
             cover_area,
             frame.buffer_mut(),
-            state.image_render_phase(),
+            state.phase,
         );
     }
 
@@ -67,9 +66,15 @@ pub fn draw(
         .as_deref()
         .map(|a| format!(" ({a})"))
         .unwrap_or_default();
-    let title_line = MarqueeCtx::new(state, theme, /*fade_to*/ theme.base).line(
+    let title_line = MarqueeCtx::new(
+        &state.panel.title,
+        state.frame.config.tui().animation(),
+        state.frame.now,
+        theme,
+        /*fade_to*/ theme.base,
+    )
+    .line(
         vec![Span::styled(format!("{}{alias}", song.name), title_style)],
-        Slot::NowPlaying,
         &song.id.qualified(),
         kv_area.width,
     );

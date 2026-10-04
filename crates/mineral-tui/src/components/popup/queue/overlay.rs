@@ -1,5 +1,6 @@
 //! 浮动 queue 面板:展示当前播放队列,vim 风格导航 + Enter 播放。
 
+use super::QueueInput;
 use std::time::Instant;
 
 use crossterm::event::KeyEvent;
@@ -17,18 +18,15 @@ use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_rect
 use crate::components::layout::shared::scroll_table::render_scroll_table;
 use crate::components::layout::shared::thumbnails::{render_table_thumbnails, thumbnail_phase};
 use crate::components::popup::component::{
-    Chrome, Overlay, OverlayAction, OverlayResponse, base_block, dock_full_rect,
+    Chrome, Overlay, OverlayAction, OverlayResponse, base_block,
 };
 use crate::image::ImageRenderPhase;
 use crate::render::color::lerp_color;
 use crate::render::theme::Theme;
 use crate::runtime::action::{Action, SelectionMove};
-use crate::runtime::marquee::Slot;
 use crate::runtime::scroll;
 use crate::runtime::scroll::list::{ScrollList, ScrollMotion};
-use crate::runtime::state::{
-    AppState, ListExpansionScope, ListExpansionState, ListRowIdentity, OverlayReveal,
-};
+use crate::runtime::state::{ListExpansionState, OverlayReveal};
 
 /// 浮动 queue 浮层。
 ///
@@ -41,13 +39,16 @@ pub(crate) struct QueueOverlay {
     /// 光标 + 视口滚动态(UI-local;走通用 [`ScrollList`])。**索引过滤视图**,非队列 raw 下标。
     pub(super) list: ScrollList,
 
+    /// 本列表选中标题的滚动状态。
+    pub(crate) title: crate::runtime::marquee::Marquee,
+
     /// 本地 `/` 模糊过滤态(查询串 + 输入态 + matcher);复用通用「本地模糊过滤域」。
     /// `deep_cache` 对队列恒空、不触碰。装箱是因 [`SearchState`](crate::runtime::state::SearchState)
-    /// 内含 nucleo matcher + 多份缓存体量大,直接嵌入会让 `OverlayKind` 各变体尺寸悬殊。
+    /// 内含 nucleo matcher + 多份缓存体量大,直接嵌入会让 `AppOverlay` 各变体尺寸悬殊。
     pub(super) search: Box<crate::runtime::state::SearchState>,
 
     /// 清除过滤的可见帧与展开进度；装箱避免增大整个浮层枚举。
-    pub(super) expansion: Box<ListExpansionState>,
+    pub(super) expansion: Box<ListExpansionState<usize>>,
 
     /// 最近的光标或过滤变化,用于缩略图编码防抖;时长从当前配置读取。
     pub(super) last_sel_change: Instant,
@@ -61,6 +62,7 @@ impl QueueOverlay {
     pub(crate) fn new(sel: usize) -> Self {
         Self {
             list: ScrollList::at(sel),
+            title: crate::runtime::marquee::Marquee::default(),
             search: Box::new(crate::runtime::state::SearchState::new()),
             expansion: Box::default(),
             last_sel_change: Instant::now(),
@@ -98,8 +100,8 @@ impl QueueOverlay {
     /// 选中行在屏幕上的矩形(供其上叠 `y` 复制菜单贴行下方弹)。停靠几何与渲染同源
     /// ([`dock_full_rect`]),内区去边框后:表头占 1 行,选中行 = 内区 y + 1 + (光标 − 视口
     /// offset)。`offset` 走只读 `Frozen` 快照,平移途中 `pin_cursor` 钳边与渲染端一致。
-    pub(crate) fn row_anchor(&self, ctx: &AppState) -> Rect {
-        let full = dock_full_rect(ctx.frame_area, ctx);
+    pub(crate) fn row_anchor(&self, ctx: &QueueInput<'_>) -> Rect {
+        let full = ctx.panel_area;
         // base_block 是 Borders::ALL,内区四周各去 1。
         let inner = Rect::new(
             full.x.saturating_add(1),
@@ -107,7 +109,7 @@ impl QueueOverlay {
             full.width.saturating_sub(2),
             full.height.saturating_sub(2),
         );
-        let len = ctx.player.queue.len();
+        let len = ctx.queue.len();
         let viewport = usize::from(inner.height.saturating_sub(1));
         let offset = self.list.offset(len, viewport);
         let pinned = scroll::viewport::pin_cursor(self.list.sel(), offset, viewport);
@@ -144,12 +146,12 @@ impl QueueOverlay {
     fn table(
         &self,
         inner: Rect,
-        ctx: &AppState,
+        ctx: &QueueInput<'_>,
         theme: &Theme,
         window: std::ops::Range<usize>,
     ) -> (Table<'static>, Vec<Rect>, QueueColumns) {
         // 在播样式按 server 的队列位置锚点定位;按歌曲身份匹配会点亮重复曲的所有副本。
-        let current_idx = ctx.queue_current_index();
+        let current_idx = ctx.current;
         let cols =
             QueueColumns::for_width(inner.width).with_thumbnails(ctx.images.supports_thumbnails());
         let header = Row::new(cols.header_cells())
@@ -158,7 +160,13 @@ impl QueueOverlay {
         let widths = cols.widths();
         // 表格选中行的 fade 实际会被 row_highlight_style 整行 fg 盖掉(刻意保留整行
         // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
-        let marquee_ctx = MarqueeCtx::new(ctx, theme, /*fade_to*/ theme.surface0);
+        let marquee_ctx = MarqueeCtx::new(
+            &self.title,
+            ctx.cfg.tui().animation(),
+            ctx.frame_now,
+            theme,
+            /*fade_to*/ theme.surface0,
+        );
         // highlight_symbol "▌ " 占 2 格;标题与封面共用 Table 的实际列边界。
         let columns = resolve_column_rects(inner, &widths, 2);
         let title_w = columns
@@ -171,17 +179,12 @@ impl QueueOverlay {
             let rows: Vec<Row<'_>> = window
                 .filter_map(|view_i| visible.get(view_i).map(|raw_i| (view_i, raw_i)))
                 .filter_map(|(view_i, &raw_i)| {
-                    let s = ctx.player.queue.get(raw_i)?;
+                    let s = ctx.queue.get(raw_i)?;
                     let decor = RowDecor {
                         // 在播样式按队列真实下标定位,不随过滤重排漂移。
                         is_current: current_idx == Some(raw_i),
                         loved: ctx.is_liked(s),
-                        marquee: row_marquee(
-                            view_i == sel,
-                            &marquee_ctx,
-                            Slot::QueueSelected,
-                            title_w,
-                        ),
+                        marquee: row_marquee(view_i == sel, &marquee_ctx, title_w),
                         hits: self.row_hits(s),
                     };
                     Some(build_row(s, theme, cols, decor))
@@ -210,6 +213,8 @@ impl QueueOverlay {
 }
 
 impl Overlay for QueueOverlay {
+    type Input<'a> = QueueInput<'a>;
+
     fn chrome(&self) -> Chrome {
         Chrome {
             pct_w: 60,
@@ -225,13 +230,13 @@ impl Overlay for QueueOverlay {
         }
     }
 
-    fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static> {
+    fn block(&self, ctx: &QueueInput<'_>, theme: &Theme, focused: bool) -> Block<'static> {
         let border_color = if focused {
             theme.accent
         } else {
             theme.surface1
         };
-        let inner_w = dock_full_rect(ctx.frame_area, ctx).width;
+        let inner_w = ctx.panel_area.width;
         // 顶栏:` queue ` + `/query` 输入片段(与浏览页同位,输入框在上不在底栏)。
         let mut title = vec![Span::styled(" queue ", Style::new().fg(theme.subtext))];
         title.extend(self.search_input(theme));
@@ -252,11 +257,12 @@ impl Overlay for QueueOverlay {
     fn prepare(
         &mut self,
         inner: Rect,
-        ctx: &mut AppState,
-        theme: &Theme,
-        advance: bool,
+        ctx: &QueueInput<'_>,
+        cx: &mut crate::components::frame::PrepareCx<'_>,
         reveal: OverlayReveal,
     ) {
+        let theme = cx.frame.theme;
+        let advance = cx.advance;
         self.reveal = reveal;
         let visible = self.visible(ctx);
         let motion = ScrollMotion::Advancing {
@@ -267,7 +273,7 @@ impl Overlay for QueueOverlay {
         let viewport = usize::from(inner.height.saturating_sub(1));
         self.list
             .prepare(visible.len(), viewport, motion, ticks, advance);
-        let current = ctx.queue_current_index();
+        let current = ctx.current;
         let playing = visible
             .iter()
             .enumerate()
@@ -292,16 +298,16 @@ impl Overlay for QueueOverlay {
         if window.contains(&selected)
             && let Some(song) = visible
                 .get(selected)
-                .and_then(|index| ctx.player.queue.get(*index))
+                .and_then(|index| ctx.queue.get(*index))
         {
             let width = columns
                 .get(cols.title_index())
                 .map_or(0, |column| column.width);
             crate::components::layout::shared::marquee::prepare_song(
-                &mut ctx.marquees,
-                Slot::QueueSelected,
+                &mut self.title,
                 song,
                 width,
+                ctx.frame_now,
             );
         }
         if cols.thumbnails
@@ -310,16 +316,22 @@ impl Overlay for QueueOverlay {
             let phase = if reveal.own < OverlayReveal::FULL {
                 ImageRenderPhase::Offscreen
             } else {
-                thumbnail_phase(ctx, motion, self.last_sel_change)
+                thumbnail_phase(
+                    cx.image_phase,
+                    motion,
+                    ctx.frame_now,
+                    self.last_sel_change,
+                    std::time::Duration::from_millis(*ctx.cfg.tui().cover().debounce_ms()),
+                )
             };
             let covers = window.map(|index| {
                 visible
                     .get(index)
-                    .and_then(|index| ctx.player.queue.get(*index))
+                    .and_then(|index| ctx.queue.get(*index))
                     .and_then(|song| song.cover_url.as_ref())
             });
-            crate::components::layout::shared::thumbnails::prepare_table_thumbnails(
-                &mut ctx.images,
+            crate::components::layout::shared::thumbnails::declare_table_thumbnails(
+                &mut cx.images,
                 *column,
                 covers,
                 phase,
@@ -351,25 +363,24 @@ impl Overlay for QueueOverlay {
                         .filter(|_| cols.thumbnails)
                         .map_or_else(Vec::new, |column| {
                             crate::components::layout::shared::thumbnails::snapshot_thumbnails(
-                                &ctx.images,
+                                ctx.images,
                                 *column,
                                 range.clone().map(|index| {
                                     visible
                                         .get(index)
-                                        .and_then(|raw| ctx.player.queue.get(*raw))
+                                        .and_then(|raw| ctx.queue.get(*raw))
                                         .and_then(|song| song.cover_url.as_ref())
                                 }),
                             )
                         });
                 let rows = range
                     .filter_map(|index| visible.get(index).copied())
-                    .map(ListRowIdentity::Queue)
                     .collect();
                 let entries = visible
                     .iter()
                     .enumerate()
                     .filter_map(|(index, &raw)| {
-                        let song = ctx.player.queue.get(raw)?;
+                        let song = ctx.queue.get(raw)?;
                         let loved = ctx.is_liked(song);
                         let playing = current == Some(raw);
                         (loved || playing).then_some(MinimapEntry {
@@ -401,7 +412,6 @@ impl Overlay for QueueOverlay {
                     }),
                 };
                 crate::runtime::state::FilteredListFrame {
-                    scope: ListExpansionScope::Queue,
                     area,
                     body,
                     content,
@@ -409,11 +419,11 @@ impl Overlay for QueueOverlay {
                 }
             });
             self.expansion.prepare(area, body, filtered);
-            self.expansion.retain_images(&mut ctx.images);
+            self.expansion.declare_images(&mut cx.images);
         }
     }
 
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme) {
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &QueueInput<'_>, theme: &Theme) {
         let reveal = self.reveal;
         let surface = if reveal.own == OverlayReveal::FULL && reveal.yielded() == 0 {
             let area = Rect::new(
@@ -432,8 +442,7 @@ impl Overlay for QueueOverlay {
                 buf,
                 area,
                 body,
-                &self.expansion,
-                ListExpansionScope::Queue,
+                self.expansion.active.as_ref(),
             ))
         } else {
             None
@@ -456,18 +465,24 @@ impl Overlay for QueueOverlay {
         {
             render_table_thumbnails(
                 buf,
-                &ctx.images,
+                ctx.images,
                 *column,
                 window.clone().map(|view_index| {
                     visible
                         .get(view_index)
-                        .and_then(|&raw_index| ctx.player.queue.get(raw_index))
+                        .and_then(|&raw_index| ctx.queue.get(raw_index))
                         .and_then(|song| song.cover_url.as_ref())
                 }),
             );
         }
         if let Some(surface) = surface {
-            list_expansion::finish_list(buf, &self.expansion, theme, surface, window.clone());
+            list_expansion::finish_list(
+                buf,
+                self.expansion.active.as_ref(),
+                theme,
+                surface,
+                window.clone(),
+            );
         }
     }
 
@@ -476,13 +491,13 @@ impl Overlay for QueueOverlay {
         buf: &mut Buffer,
         area: Rect,
         inner: Rect,
-        ctx: &AppState,
+        ctx: &QueueInput<'_>,
         theme: &Theme,
     ) {
         self.render_minimap(buf, area, inner, ctx, theme);
     }
 
-    fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
+    fn on_key(&mut self, key: &KeyEvent, ctx: &QueueInput<'_>) -> OverlayResponse {
         self.expansion.interrupt();
         // `/` 输入态:吞键进过滤词(文本编辑),优先于一切动作与半穿透。
         if self.is_typing() {
@@ -493,7 +508,7 @@ impl Overlay for QueueOverlay {
         OverlayResponse::Pass
     }
 
-    fn on_action(&mut self, action: Action, ctx: &AppState) -> Option<OverlayResponse> {
+    fn on_action(&mut self, action: Action, ctx: &QueueInput<'_>) -> Option<OverlayResponse> {
         self.expansion.interrupt();
         // `/` 输入态:所有键让给 on_key 做文本编辑(裸 KeyCode 分派),动作层一律不认。
         if self.is_typing() {
@@ -584,7 +599,7 @@ impl Overlay for QueueOverlay {
             // 跳回在播条目:找到在播歌在过滤视图中的位置移光标(被过滤掉则不动)。只移光标
             // 不碰视口——视口交给渲染端 Advancing 缓动滚过去,故是「滚动到那里」而非瞬移。
             Action::JumpToCurrent => {
-                if let Some(cur) = ctx.queue_current_index()
+                if let Some(cur) = ctx.current
                     && let Some(view_i) = visible.iter().position(|&r| r == cur)
                 {
                     self.list.set_sel(view_i);
@@ -669,7 +684,7 @@ mod tests {
             let viewport = usize::from(area.height - 1);
             let mut overlay = QueueOverlay::new(0);
             overlay.search.set_query("keep");
-            let visible = overlay.visible(&ctx);
+            let visible = overlay.visible(&crate::app::overlays::input::queue(&ctx));
             assert_eq!(visible, vec![0, 2, 4, 6, 8, 10]);
 
             // 当前窗口每行:标题完整、封面身份对应过滤后的队列真实下标、缺图行留空。
@@ -722,7 +737,12 @@ mod tests {
             // 抽屉半开(own < FULL):封面按 Offscreen 阶段出,窗口在过滤视图首段(含缺图行)。
             overlay.reveal = OverlayReveal { own: 500, above: 0 };
             let mut buffer = Buffer::empty(area);
-            overlay.render_content(&mut buffer, area, &ctx, &theme);
+            overlay.render_content(
+                &mut buffer,
+                area,
+                &crate::app::overlays::input::queue(&ctx),
+                &theme,
+            );
             let offset = overlay.list.offset(visible.len(), viewport);
             assert_eq!(offset, 0);
             assert_window(offset, &buffer)?;
@@ -732,10 +752,18 @@ mod tests {
                 own: OverlayReveal::FULL,
                 above: 0,
             };
-            overlay.on_action(Action::MoveSelection(SelectionMove::Last), &ctx);
+            overlay.on_action(
+                Action::MoveSelection(SelectionMove::Last),
+                &crate::app::overlays::input::queue(&ctx),
+            );
             overlay.list.place(overlay.cursor(), viewport - 1);
             let mut buffer = Buffer::empty(area);
-            overlay.render_content(&mut buffer, area, &ctx, &theme);
+            overlay.render_content(
+                &mut buffer,
+                area,
+                &crate::app::overlays::input::queue(&ctx),
+                &theme,
+            );
             let offset = overlay.list.offset(visible.len(), viewport);
             assert_eq!(offset, visible.len() - viewport);
             assert_window(offset, &buffer)?;
@@ -757,14 +785,26 @@ mod tests {
         let line = *ctx.cfg.tui().behavior().line_scroll_rows();
         let mut o = QueueOverlay::new(0);
         assert!(matches!(
-            o.on_action(Action::Scroll(ScrollStep::PageDown), &ctx),
+            o.on_action(
+                Action::Scroll(ScrollStep::PageDown),
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Consumed)
         ));
         assert_eq!(o.cursor(), page, "翻页档下移 page_scroll_rows");
-        o.on_action(Action::Scroll(ScrollStep::LineDown), &ctx);
+        o.on_action(
+            Action::Scroll(ScrollStep::LineDown),
+            &crate::app::overlays::input::queue(&ctx),
+        );
         assert_eq!(o.cursor(), page + line, "单行档下移 line_scroll_rows");
-        o.on_action(Action::Scroll(ScrollStep::PageUp), &ctx);
-        o.on_action(Action::Scroll(ScrollStep::PageUp), &ctx);
+        o.on_action(
+            Action::Scroll(ScrollStep::PageUp),
+            &crate::app::overlays::input::queue(&ctx),
+        );
+        o.on_action(
+            Action::Scroll(ScrollStep::PageUp),
+            &crate::app::overlays::input::queue(&ctx),
+        );
         assert_eq!(o.cursor(), 0, "上滚越界钳到首行");
         Ok(())
     }
@@ -775,12 +815,18 @@ mod tests {
     fn copy_menu_action_and_action_menu_swallowed() -> color_eyre::Result<()> {
         let ctx = ctx_with_queue(4, None)?;
         let mut o = QueueOverlay::new(2);
-        let resp = o.on_action(Action::OpenCopyMenu, &ctx);
+        let resp = o.on_action(
+            Action::OpenCopyMenu,
+            &crate::app::overlays::input::queue(&ctx),
+        );
         let Some(OverlayResponse::Do(OverlayAction::CopyQueueIndex { idx, .. })) = resp else {
             color_eyre::eyre::bail!("y 应产出 CopyQueueIndex");
         };
         assert_eq!(idx, 2, "复制作用于当前光标行");
-        let resp = o.on_action(Action::OpenActionMenu, &ctx);
+        let resp = o.on_action(
+            Action::OpenActionMenu,
+            &crate::app::overlays::input::queue(&ctx),
+        );
         let Some(OverlayResponse::Do(OverlayAction::QueueActionMenu { idx, .. })) = resp else {
             color_eyre::eyre::bail!("o 应产出 QueueActionMenu");
         };
@@ -794,15 +840,24 @@ mod tests {
         let ctx = ctx_with_queue(6, /*current*/ Some(4))?;
         let mut o = QueueOverlay::new(1);
         assert!(matches!(
-            o.on_action(Action::ToggleLoveSelection, &ctx),
+            o.on_action(
+                Action::ToggleLoveSelection,
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Do(OverlayAction::ToggleLoveQueueIndex(1)))
         ));
         assert!(matches!(
-            o.on_action(Action::DownloadSelection, &ctx),
+            o.on_action(
+                Action::DownloadSelection,
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Do(OverlayAction::DownloadQueueIndex(1)))
         ));
         assert!(matches!(
-            o.on_action(Action::JumpToCurrent, &ctx),
+            o.on_action(
+                Action::JumpToCurrent,
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Consumed)
         ));
         assert_eq!(o.cursor(), 4, "跳回在播条目");
@@ -816,12 +871,18 @@ mod tests {
         let mut o = QueueOverlay::new(0);
         // 首项上移 = 端点,不动也不发请求。
         assert!(matches!(
-            o.on_action(Action::ReorderSelection(SelectionMove::Up(1)), &ctx),
+            o.on_action(
+                Action::ReorderSelection(SelectionMove::Up(1)),
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Consumed)
         ));
         assert_eq!(o.cursor(), 0, "端点不环绕");
 
-        let resp = o.on_action(Action::ReorderSelection(SelectionMove::Down(1)), &ctx);
+        let resp = o.on_action(
+            Action::ReorderSelection(SelectionMove::Down(1)),
+            &crate::app::overlays::input::queue(&ctx),
+        );
         let Some(OverlayResponse::Do(OverlayAction::ReorderQueueIndex { idx, down })) = resp else {
             color_eyre::eyre::bail!("下移应产出 ReorderQueueIndex");
         };
@@ -850,38 +911,62 @@ mod tests {
 
         // 导航/激活/关闭走 on_action(语义动作,跟随键位重映射与 behavior 步长)。
         assert!(matches!(
-            o.on_action(Action::MoveSelection(SelectionMove::Last), &ctx),
+            o.on_action(
+                Action::MoveSelection(SelectionMove::Last),
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Consumed)
         ));
         assert_eq!(o.cursor(), 5, "Last 跳末行");
         assert!(matches!(
-            o.on_action(Action::MoveSelection(SelectionMove::Up(1)), &ctx),
+            o.on_action(
+                Action::MoveSelection(SelectionMove::Up(1)),
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Consumed)
         ));
         assert_eq!(o.cursor(), 4);
         assert!(matches!(
-            o.on_action(Action::MoveSelection(SelectionMove::Down(3)), &ctx),
+            o.on_action(
+                Action::MoveSelection(SelectionMove::Down(3)),
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Consumed)
         ));
         assert_eq!(o.cursor(), 5, "大步下移越界钳到末行(步长来自注入配置)");
 
         assert!(matches!(
-            o.on_action(Action::ActivateSelection, &ctx),
+            o.on_action(
+                Action::ActivateSelection,
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(5)))
         ));
         // 开关键族(open_queue/quit/back)收敛为关闭本浮层。
         assert!(matches!(
-            o.on_action(Action::BackOrClearSearch, &ctx),
+            o.on_action(
+                Action::BackOrClearSearch,
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Do(OverlayAction::CloseTop))
         ));
         assert!(matches!(
-            o.on_action(Action::OpenQueue, &ctx),
+            o.on_action(Action::OpenQueue, &crate::app::overlays::input::queue(&ctx)),
             Some(OverlayResponse::Do(OverlayAction::CloseTop))
         ));
         // 播放控制族不认 → None(回落裸键 Pass 半穿透)。
-        assert!(o.on_action(Action::TogglePlayPause, &ctx).is_none());
+        assert!(
+            o.on_action(
+                Action::TogglePlayPause,
+                &crate::app::overlays::input::queue(&ctx)
+            )
+            .is_none()
+        );
         let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty());
-        assert!(matches!(o.on_key(&space, &ctx), OverlayResponse::Pass));
+        assert!(matches!(
+            o.on_key(&space, &crate::app::overlays::input::queue(&ctx)),
+            OverlayResponse::Pass
+        ));
         Ok(())
     }
 
@@ -897,7 +982,7 @@ mod tests {
         ctx.player.queue = named(&["alpha", "beta", "gamma", "alba"]);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("al");
-        let visible = o.visible(&ctx);
+        let visible = o.visible(&crate::app::overlays::input::queue(&ctx));
         assert_eq!(visible.len(), 2, "只 alpha/alba 命中");
         assert!(
             visible.contains(&0) && visible.contains(&3),
@@ -918,10 +1003,17 @@ mod tests {
         ctx.player.queue = named(&["one", "two", "three", "zephyr"]);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("zephyr");
-        assert_eq!(o.raw_cursor(&ctx), Some(3), "视图位 0 映射回真实下标 3");
+        assert_eq!(
+            o.raw_cursor(&crate::app::overlays::input::queue(&ctx)),
+            Some(3),
+            "视图位 0 映射回真实下标 3"
+        );
         assert!(
             matches!(
-                o.on_action(Action::ActivateSelection, &ctx),
+                o.on_action(
+                    Action::ActivateSelection,
+                    &crate::app::overlays::input::queue(&ctx)
+                ),
                 Some(OverlayResponse::Do(OverlayAction::PlayQueueIndex(3)))
             ),
             "播真实下标 3"
@@ -938,7 +1030,10 @@ mod tests {
         o.search.set_query("al");
         assert!(
             matches!(
-                o.on_action(Action::ReorderSelection(SelectionMove::Down(1)), &ctx),
+                o.on_action(
+                    Action::ReorderSelection(SelectionMove::Down(1)),
+                    &crate::app::overlays::input::queue(&ctx)
+                ),
                 Some(OverlayResponse::Consumed)
             ),
             "过滤态吞掉 reorder、不发编辑"
@@ -953,27 +1048,45 @@ mod tests {
         let mut ctx = AppState::test_default()?;
         ctx.player.queue = named(&["alpha", "beta"]);
         let mut o = QueueOverlay::new(0);
-        assert!(o.on_action(Action::EnterSearch, &ctx).is_some());
+        assert!(
+            o.on_action(
+                Action::EnterSearch,
+                &crate::app::overlays::input::queue(&ctx)
+            )
+            .is_some()
+        );
         assert!(o.is_typing(), "`/` 进输入态");
         // 输入态下动作层一律不认(让裸键落 on_key 做文本编辑)。
         assert!(
-            o.on_action(Action::MoveSelection(SelectionMove::Down(1)), &ctx)
-                .is_none(),
+            o.on_action(
+                Action::MoveSelection(SelectionMove::Down(1)),
+                &crate::app::overlays::input::queue(&ctx)
+            )
+            .is_none(),
             "输入态 on_action 不认"
         );
         for c in "al".chars() {
             let k = KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty());
-            assert!(matches!(o.on_key(&k, &ctx), OverlayResponse::Consumed));
+            assert!(matches!(
+                o.on_key(&k, &crate::app::overlays::input::queue(&ctx)),
+                OverlayResponse::Consumed
+            ));
         }
         assert_eq!(o.search.query(), "al");
-        o.on_key(&KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()), &ctx);
+        o.on_key(
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+            &crate::app::overlays::input::queue(&ctx),
+        );
         assert!(
             !o.is_typing() && o.is_filtering(),
             "Enter 退输入、词保留过滤"
         );
         assert!(
             matches!(
-                o.on_action(Action::BackOrClearSearch, &ctx),
+                o.on_action(
+                    Action::BackOrClearSearch,
+                    &crate::app::overlays::input::queue(&ctx)
+                ),
                 Some(OverlayResponse::Consumed)
             ),
             "过滤态 back 清词(不关浮层)"
@@ -988,7 +1101,10 @@ mod tests {
         let ctx = ctx_with_queue(3, None)?;
         let mut o = QueueOverlay::new(0);
         assert!(matches!(
-            o.on_action(Action::BackOrClearSearch, &ctx),
+            o.on_action(
+                Action::BackOrClearSearch,
+                &crate::app::overlays::input::queue(&ctx)
+            ),
             Some(OverlayResponse::Do(OverlayAction::CloseTop))
         ));
         Ok(())
@@ -1001,7 +1117,11 @@ mod tests {
         ctx.player.queue = named(&["春日影", "MyGO"]);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("cry");
-        assert_eq!(o.visible(&ctx), vec![0], "cry 命中春日影(首字母),MyGO 落选");
+        assert_eq!(
+            o.visible(&crate::app::overlays::input::queue(&ctx)),
+            vec![0],
+            "cry 命中春日影(首字母),MyGO 落选"
+        );
         Ok(())
     }
 
@@ -1014,7 +1134,11 @@ mod tests {
         ctx.player.queue = vec![mineral_test::aliased_song(), mineral_test::song("other")];
         let mut o = QueueOverlay::new(0);
         o.search.set_query("mayo");
-        assert_eq!(o.visible(&ctx), vec![0], "按别名命中,该曲进视图");
+        assert_eq!(
+            o.visible(&crate::app::overlays::input::queue(&ctx)),
+            vec![0],
+            "按别名命中,该曲进视图"
+        );
         let s = ctx
             .player
             .queue
@@ -1036,12 +1160,15 @@ mod tests {
         ctx.player.cursor = mineral_protocol::PlayCursor::InQueue(3);
         let mut o = QueueOverlay::new(0);
         o.search.set_query("al");
-        let visible = o.visible(&ctx);
+        let visible = o.visible(&crate::app::overlays::input::queue(&ctx));
         let want = visible
             .iter()
             .position(|&r| r == 3)
             .ok_or_else(|| color_eyre::eyre::eyre!("alba 应在过滤视图内"))?;
-        o.on_action(Action::JumpToCurrent, &ctx);
+        o.on_action(
+            Action::JumpToCurrent,
+            &crate::app::overlays::input::queue(&ctx),
+        );
         assert_eq!(o.cursor(), want, "光标落到在播歌在过滤视图中的位置");
         Ok(())
     }

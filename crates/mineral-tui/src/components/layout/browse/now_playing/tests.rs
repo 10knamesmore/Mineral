@@ -14,7 +14,7 @@ use crate::test_support::{
     default_theme, entry_views, solid_cover, song, state_with_playlists, with_name,
 };
 
-use super::{draw, main_cover};
+use crate::view::now_playing::{draw, url_for_view};
 
 /// 面板尺寸用于驱动真实编码请求。
 const PANEL: Rect = Rect::new(4, 3, 40, 20);
@@ -43,7 +43,7 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
             next_offset: None,
         },
     );
-    state.browse.nav.track.set_sel(1);
+    state.browse.tracks.scroll.set_sel(1);
     state.browse.view.retempo(4);
     if cache_playlist {
         state
@@ -62,7 +62,7 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
 
 /// 通过生产入口绘制右栏以触发封面编码请求。
 fn render(state: &mut AppState, theme: &Theme, cover_in_flight: bool) -> color_eyre::Result<()> {
-    super::panel::prepare(PANEL, state, cover_in_flight);
+    crate::view::now_playing::prepare(PANEL, state, cover_in_flight);
     let mut terminal = Terminal::new(TestBackend::new(52, 28))?;
     terminal.draw(|frame| draw(frame, PANEL, state, theme, cover_in_flight))?;
     Ok(())
@@ -70,7 +70,7 @@ fn render(state: &mut AppState, theme: &Theme, cover_in_flight: bool) -> color_e
 
 /// 读取指定端点的真实封面身份。
 fn cover_url(state: &AppState, view: View) -> color_eyre::Result<MediaUrl> {
-    main_cover::url_for_view(state, view).ok_or_else(|| eyre!("测试选中项应有封面"))
+    url_for_view(state, view).ok_or_else(|| eyre!("测试选中项应有封面"))
 }
 
 /// 两端图片只预热一次，后续过渡帧不重复提交编码。

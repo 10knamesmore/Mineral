@@ -8,3 +8,17 @@ pub(crate) use frame::draw;
 
 #[cfg(test)]
 mod page_morph_tests;
+
+pub(crate) mod browse;
+
+mod transport;
+
+pub(crate) mod lyrics;
+
+pub(crate) mod now_playing;
+
+pub(crate) mod flight;
+
+mod status;
+
+pub(crate) mod search;

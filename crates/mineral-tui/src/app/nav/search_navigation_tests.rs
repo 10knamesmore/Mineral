@@ -10,7 +10,6 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use crate::app::App;
-use crate::components::layout::browse::sidebar;
 use crate::runtime::state::{PlaylistTracks, View};
 use crate::test_support::{TestClient, entry_views, playlist_view, song, with_name};
 
@@ -58,7 +57,7 @@ fn long_playlists() -> color_eyre::Result<(App, Arc<TestClient>)> {
         },
     );
     search(&mut app, "Set");
-    app.state.browse.nav.playlist.place(12, 4);
+    app.state.browse.playlists.scroll.place(12, 4);
     Ok((app, client))
 }
 
@@ -66,7 +65,7 @@ fn long_playlists() -> color_eyre::Result<(App, Arc<TestClient>)> {
 fn frame(app: &App) -> color_eyre::Result<()> {
     let theme = crate::test_support::default_theme()?;
     let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
-    terminal.draw(|f| sidebar::draw(f, f.area(), &app.state, &theme))?;
+    terminal.draw(|f| crate::view::browse::view(&app.state, &theme).paint(f, f.area()))?;
     Ok(())
 }
 
@@ -78,8 +77,8 @@ fn filtered_playlist_round_trip_preserves_parent_search() -> color_eyre::Result<
         frame(&app)?;
     }
     let position = (
-        app.state.browse.nav.playlist.sel(),
-        app.state.browse.nav.playlist.scroll_target(),
+        app.state.browse.playlists.scroll.sel(),
+        app.state.browse.playlists.scroll.scroll_target(),
     );
     press(&mut app, KeyCode::Char('l'));
     assert_eq!(
@@ -91,12 +90,12 @@ fn filtered_playlist_round_trip_preserves_parent_search() -> color_eyre::Result<
         app.state.browse.view.tick();
     }
     search(&mut app, "Track");
-    assert_eq!(app.state.browse.search.playlists.query(), "Set");
-    assert_eq!(app.state.browse.search.tracks.query(), "Track");
+    assert_eq!(app.state.browse.playlists.search.query(), "Set");
+    assert_eq!(app.state.browse.tracks.search.query(), "Track");
     press(&mut app, KeyCode::Char('h'));
     assert_eq!(app.state.browse.view, View::Library);
-    assert!(app.state.browse.search.tracks.query().is_empty());
-    assert_eq!(app.state.browse.search.playlists.query(), "Set");
+    assert!(app.state.browse.tracks.search.query().is_empty());
+    assert_eq!(app.state.browse.playlists.search.query(), "Set");
     press(&mut app, KeyCode::Char('h'));
     while !app.state.browse.view.at_min() {
         app.state.browse.view.tick();
@@ -105,8 +104,8 @@ fn filtered_playlist_round_trip_preserves_parent_search() -> color_eyre::Result<
     assert_eq!(app.state.browse.view, View::Playlists);
     assert_eq!(
         (
-            app.state.browse.nav.playlist.sel(),
-            app.state.browse.nav.playlist.scroll_target()
+            app.state.browse.playlists.scroll.sel(),
+            app.state.browse.playlists.scroll.scroll_target()
         ),
         position
     );
@@ -124,16 +123,16 @@ fn clearing_playlist_filter_preserves_identity_and_screen_row() -> color_eyre::R
     ] {
         let (mut app, _) = long_playlists()?;
         if key == KeyCode::Backspace {
-            app.state.browse.search.playlists.set_query("S");
+            app.state.browse.playlists.search.set_query("S");
         }
         for _ in 0..40 {
             frame(&app)?;
         }
-        app.state.browse.search.playlists.typing = typing;
+        app.state.browse.playlists.search.typing = typing;
         press(&mut app, key);
-        assert!(app.state.browse.search.playlists.query().is_empty());
+        assert!(app.state.browse.playlists.search.query().is_empty());
         assert_eq!(
-            app.state.browse.search.playlists.typing,
+            app.state.browse.playlists.search.typing,
             key == KeyCode::Backspace,
             "删到空仍留在输入态，其余清除动作退出输入"
         );
@@ -143,8 +142,8 @@ fn clearing_playlist_filter_preserves_identity_and_screen_row() -> color_eyre::R
         );
         for _ in 0..40 {
             frame(&app)?;
-            assert_eq!(app.state.browse.nav.playlist.sel(), 24);
-            assert_eq!(app.state.browse.nav.playlist.scroll_target(), 20);
+            assert_eq!(app.state.browse.playlists.scroll.sel(), 24);
+            assert_eq!(app.state.browse.playlists.scroll.scroll_target(), 20);
         }
     }
     Ok(())
@@ -183,11 +182,11 @@ fn clearing_track_filter_preserves_exact_occurrence() -> color_eyre::Result<()> 
     assert_eq!(app.state.filtered_tracks().len(), 2);
     press(&mut app, KeyCode::Esc);
     assert_eq!(
-        app.state.browse.nav.track.sel(),
+        app.state.browse.tracks.scroll.sel(),
         22,
         "不能跳到同曲的第一个 occurrence"
     );
-    assert_eq!(app.state.browse.search.playlists.query(), "Set");
+    assert_eq!(app.state.browse.playlists.search.query(), "Set");
     assert_eq!(app.state.browse.view, View::Library);
     Ok(())
 }
@@ -227,11 +226,11 @@ fn opened_playlist_identity_survives_parent_reordering() -> color_eyre::Result<(
         Some("p24")
     );
     assert_eq!(
-        app.state.browse.nav.playlist.sel(),
+        app.state.browse.playlists.scroll.sel(),
         7,
         "返回在新排序中按身份定位"
     );
-    assert_eq!(app.state.browse.search.playlists.query(), "Set");
+    assert_eq!(app.state.browse.playlists.search.query(), "Set");
     assert_eq!(
         app.state.opened_playlist().map(|p| p.data.id.value()),
         Some("p24"),
@@ -314,7 +313,7 @@ fn deep_search_updates_keep_selection_during_navigation() -> color_eyre::Result<
             app.state.selected_playlist().map(|p| &p.data.id),
             Some(&target)
         );
-        assert_eq!(app.state.browse.search.playlists.query(), "abc");
+        assert_eq!(app.state.browse.playlists.search.query(), "abc");
     }
     Ok(())
 }

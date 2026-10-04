@@ -10,9 +10,8 @@ use ratatui::layout::Rect;
 use rustc_hash::FxHashMap;
 
 use crate::components::layout::browse::spectrum::SpectrumState;
-use crate::components::layout::shared::transport::TransportFeedback;
+use crate::components::layout::shared::transport::TransportBar;
 use crate::render::anim::{Toggle, ticks16_from_ms};
-use crate::runtime::marquee::Marquees;
 use crate::runtime::playback::Playback;
 
 use super::{BrowsePage, ImageEngine, LibraryData, PlayerMirror, SearchPage, search_whitelist};
@@ -46,7 +45,7 @@ pub struct AppState {
     pub playback: Playback,
 
     /// 播放栏本地反馈；动作唤起，显式 tick 推进，绘制只读。
-    pub(crate) transport: TransportFeedback,
+    pub(crate) transport: TransportBar,
 
     /// 频谱状态(条高 + 平滑)。
     pub spectrum: SpectrumState,
@@ -87,9 +86,6 @@ pub struct AppState {
     /// (搜索类型 / 歌单写操作键 / 网页链接复制项);缺项 = 该源未注册,入口不画。
     pub caps: FxHashMap<SourceKind, mineral_channel_core::ChannelCaps>,
 
-    /// 溢出标题滚动(marquee)的槽相位状态(节奏来自配置 `animation.marquee_*`)。
-    pub(crate) marquees: Marquees,
-
     /// not playing 待机唱片纹的旋转状态(相位每 tick 推进,节奏来自配置
     /// `animation.vinyl_rev_ms`)。
     pub(crate) vinyl: crate::components::layout::shared::vinyl::VinylSpin,
@@ -106,7 +102,7 @@ impl AppState {
         let anim = cfg.tui().animation();
         let tick_ms = *anim.frame_tick_ms();
         let playback = Playback::new();
-        let transport = TransportFeedback::new(playback.mode, anim);
+        let transport = TransportBar::new(playback.mode, anim);
         Self {
             browse: BrowsePage::new(anim),
             channel_search: SearchPage::new(
@@ -131,7 +127,6 @@ impl AppState {
             },
             downloads_summary: mineral_protocol::DownloadSummary::default(),
             downloads: Vec::new(),
-            marquees: Marquees::from_config(anim.marquee(), tick_ms),
             vinyl: crate::components::layout::shared::vinyl::VinylSpin::from_config(
                 *anim.vinyl_rev_ms(),
                 tick_ms,
@@ -162,12 +157,12 @@ impl AppState {
     /// 氛围背景滞后跟随、搜索布局、marquee 相位、失焦渐变、歌词滚动。
     pub fn tick_frame(&mut self) {
         self.browse.view.tick();
-        self.browse.list_expansion.tick();
+        self.browse.playlists.expansion.tick();
+        self.browse.tracks.expansion.tick();
         self.browse.fullscreen.tick();
-        self.browse.lyric_view.extra_press.tick();
+        self.browse.lyrics.extra_press.tick();
         self.browse.tick_ambient_reveal();
         self.channel_search.tick();
-        self.marquees.tick();
         self.vinyl.tick();
         self.dim.tick();
         self.playback.tick_envelope_reveal();
@@ -193,12 +188,6 @@ impl AppState {
     /// 光标与列表视口上下边缘的最小行距(配置 `behavior.scrolloff`)。
     pub(crate) fn scrolloff(&self) -> usize {
         usize::from(*self.cfg.tui().behavior().scrolloff())
-    }
-
-    /// 现读 minimap 光标移动时长与帧间隔；在途动画每帧使用该值重设速度。
-    pub(crate) fn minimap_cursor_ticks(&self) -> u16 {
-        let anim = self.cfg.tui().animation();
-        ticks16_from_ms(*anim.minimap_cursor_ms(), *anim.frame_tick_ms())
     }
 
     /// 列表视口滚动平移的缓动拍数(配置 `animation.list_scroll_ms` 折算)。

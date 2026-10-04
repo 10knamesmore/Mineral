@@ -6,9 +6,8 @@ use mineral_model::MediaUrl;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 
-use crate::image::{ImageEngine, ImageRenderPhase};
+use crate::image::{ImageNeeds, ImageRenderPhase, ReadyImages};
 use crate::runtime::scroll::list::ScrollMotion;
-use crate::runtime::state::AppState;
 
 /// 封面列占两格字符宽,让等比方图接近文字高度;列间距仍由 Table 提供。
 pub(crate) const THUMBNAIL_COLUMNS: u16 = 2;
@@ -22,7 +21,7 @@ pub(crate) const THUMBNAIL_COLUMNS: u16 = 2;
 ///   - `covers`: 与本帧可见范围顺序一致的封面；缺图项仍须传 `None`，避免后续行错位
 pub(crate) fn render_table_thumbnails<'a>(
     buf: &mut Buffer,
-    images: &ImageEngine,
+    images: ReadyImages<'_>,
     column: Rect,
     covers: impl IntoIterator<Item = Option<&'a MediaUrl>>,
 ) {
@@ -37,9 +36,9 @@ pub(crate) fn render_table_thumbnails<'a>(
     }
 }
 
-/// 准备与绘制使用同一封面列几何和可见行顺序。
-pub(crate) fn prepare_table_thumbnails<'a>(
-    images: &mut ImageEngine,
+/// 根据表格列几何声明图片需求，不直接启动编码。
+pub(crate) fn declare_table_thumbnails<'a>(
+    images: &mut ImageNeeds<'_>,
     column: Rect,
     covers: impl IntoIterator<Item = Option<&'a MediaUrl>>,
     phase: ImageRenderPhase,
@@ -50,13 +49,13 @@ pub(crate) fn prepare_table_thumbnails<'a>(
     let [_header, rows] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(column);
     for (y, cover) in (rows.top()..rows.bottom()).zip(covers) {
-        images.prepare_thumbnail(cover, Rect::new(rows.x, y, rows.width, 1), phase);
+        images.thumbnail(cover, Rect::new(rows.x, y, rows.width, 1), phase);
     }
 }
 
 /// 保留可见行当前已就绪的图片身份，供转场旧端重绘。
 pub(crate) fn snapshot_thumbnails<'a>(
-    images: &ImageEngine,
+    images: ReadyImages<'_>,
     column: Rect,
     covers: impl IntoIterator<Item = Option<&'a MediaUrl>>,
 ) -> Vec<crate::image::InlineImage> {
@@ -78,17 +77,17 @@ pub(crate) fn snapshot_thumbnails<'a>(
 ///   - `motion`: 本帧列表是否在离屏合成或瞬态布局中冻结
 ///   - `last_sel_change`: 当前列表所属页面的选中变化时间，browse 与 detail 各自提供
 pub(crate) fn thumbnail_phase(
-    state: &AppState,
+    phase: ImageRenderPhase,
     motion: ScrollMotion,
+    now: Instant,
     last_sel_change: Instant,
+    debounce: Duration,
 ) -> ImageRenderPhase {
     if matches!(motion, ScrollMotion::Frozen) {
         ImageRenderPhase::Offscreen
-    } else if !state.browse.fullscreen.settled() || !state.channel_search.active.settled() {
+    } else if phase == ImageRenderPhase::Resizing {
         ImageRenderPhase::Resizing
-    } else if state.frame_now.saturating_duration_since(last_sel_change)
-        < Duration::from_millis(*state.cfg.tui().cover().debounce_ms())
-    {
+    } else if now.saturating_duration_since(last_sel_change) < debounce {
         ImageRenderPhase::Scrolling
     } else {
         ImageRenderPhase::Stable
@@ -138,7 +137,7 @@ mod tests {
                 .copied()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少图片列"))?;
             let before = buf.clone();
-            render_table_thumbnails(&mut buf, &images, column, [Some(&url)]);
+            render_table_thumbnails(&mut buf, images.ready(), column, [Some(&url)]);
             for y in area.top()..area.bottom() {
                 for x in area.left()..area.right() {
                     if column.width == THUMBNAIL_COLUMNS

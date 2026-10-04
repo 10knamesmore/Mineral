@@ -78,7 +78,7 @@ fn search_round_trip_preserves_the_browse_scroll_position() -> color_eyre::Resul
     for _ in 0..40 {
         render(&mut app, area)?;
     }
-    let scroll_before = app.state.browse.nav.track.scroll_target();
+    let scroll_before = app.state.browse.tracks.scroll.scroll_target();
     assert!(scroll_before > 0, "前置：列表已滚到深处");
 
     app.state.channel_search.active = Toggle::new(8);
@@ -89,7 +89,7 @@ fn search_round_trip_preserves_the_browse_scroll_position() -> color_eyre::Resul
             app.state.channel_search.active.tick();
             render(&mut app, area)?;
             assert_eq!(
-                app.state.browse.nav.track.scroll_target(),
+                app.state.browse.tracks.scroll.scroll_target(),
                 scroll_before,
                 "搜索进入={entering} 第 {tick} 拍不能改写浏览滚动目标"
             );
@@ -100,6 +100,9 @@ fn search_round_trip_preserves_the_browse_scroll_position() -> color_eyre::Resul
         "前置：已回到浏览端点"
     );
     render(&mut app, area)?;
-    assert_eq!(app.state.browse.nav.track.scroll_target(), scroll_before);
+    assert_eq!(
+        app.state.browse.tracks.scroll.scroll_target(),
+        scroll_before
+    );
     Ok(())
 }

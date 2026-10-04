@@ -11,6 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
+use crate::components::frame::{FrameEnv, PrepareCx};
 use crate::components::popup::placement::{Placement, place};
 use crate::render::blit::{self, EdgeColors, HAnchor};
 use crate::render::cells::left_eighth;
@@ -18,7 +19,6 @@ use crate::render::cells::lower_eighth;
 use crate::render::clear::Clear;
 use crate::render::theme::Theme;
 use crate::runtime::action::Action;
-use crate::runtime::state::AppState;
 
 /// 缩放进度满值(千分比)。到此即完全展开、渲染内容;不足只画外框空壳。
 pub(crate) const FULL_SCALE: u16 = 1000;
@@ -156,6 +156,16 @@ pub(crate) enum OverlayAction {
     Menu(super::menu::MenuAction),
 }
 
+/// 通用浮层容器的显示环境，不包含任何业务模型。
+#[derive(Clone, Copy)]
+pub(crate) struct OverlayEnv<'a> {
+    /// 本次配置、主题和时间。
+    pub(crate) frame: FrameEnv<'a>,
+
+    /// 停靠浮层当前是否位于右侧。
+    pub(crate) dock_right: bool,
+}
+
 /// 浮层的布局、绘制与按键接口；chrome 统一提供居中布局和弹出动画。
 ///
 /// 浮层开合的 [`Transition`] 由 stack 托管；内容可持有自己的 UI 状态。
@@ -163,6 +173,9 @@ pub(crate) enum OverlayAction {
 ///
 /// [`Transition`]: crate::render::anim::Transition
 pub(crate) trait Overlay {
+    /// 调用者为这一类内容提供的只读输入。
+    type Input<'a>;
+
     /// 外框尺寸约束 + 是否动画。每帧调用,可据自身状态返回不同尺寸。
     fn chrome(&self) -> Chrome;
 
@@ -171,15 +184,14 @@ pub(crate) trait Overlay {
     /// # Params:
     ///   - `ctx`: 只读后端态(如队列长度,用于底部 `n / total`)
     ///   - `focused`: 是否持有键盘焦点(栈顶且未在退场),影响边框色
-    fn block(&self, ctx: &AppState, theme: &Theme, focused: bool) -> Block<'static>;
+    fn block(&self, ctx: &Self::Input<'_>, theme: &Theme, focused: bool) -> Block<'static>;
 
     /// 在完整布局确定后更新显示状态和资源需求，动画裁剪不改变此区域。
     fn prepare(
         &mut self,
         _inner: Rect,
-        _ctx: &mut AppState,
-        _theme: &Theme,
-        _advance: bool,
+        _ctx: &Self::Input<'_>,
+        _cx: &mut PrepareCx<'_>,
         _reveal: crate::runtime::state::OverlayReveal,
     ) {
     }
@@ -187,7 +199,7 @@ pub(crate) trait Overlay {
     /// 把内容画进 `buf` 的外框内部 `inner`。`inner` 恒为**完全展开**尺寸 —— 动画途中
     /// 内容先按满尺寸渲染到离屏缓冲再按进度搬运可见窗口(不随动画逐帧 reflow),
     /// 实现方不必关心进度。面向 [`Buffer`] 而非 `Frame`,离屏与上屏共用一个入口。
-    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &AppState, theme: &Theme);
+    fn render_content(&self, buf: &mut Buffer, inner: Rect, ctx: &Self::Input<'_>, theme: &Theme);
 
     /// 在完整面板的内容绘制后装饰边框；直绘与离屏合成共用，随浮层一起裁剪和平移。
     ///
@@ -200,21 +212,21 @@ pub(crate) trait Overlay {
         _buf: &mut Buffer,
         _area: Rect,
         _inner: Rect,
-        _ctx: &AppState,
+        _ctx: &Self::Input<'_>,
         _theme: &Theme,
     ) {
     }
 
     /// 处理一个按键,返回 [`OverlayResponse`]。`ctx` 只读后端态(如队列长度,用于
     /// 钳制光标);浮层与 `AppState` 是 App 的平级字段,可同时借用。
-    fn on_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse;
+    fn on_key(&mut self, key: &KeyEvent, ctx: &Self::Input<'_>) -> OverlayResponse;
 
     /// 处理一个已查表命中的全局 [`Action`]。返回 `None` 表示本浮层不认这个动作,
     /// 分发器回落到 [`Self::on_key`](裸键路径,浮层私有键)。默认全部不认。
     ///
     /// 与主 keymap 统一的是 dispatch 入口与动作概念(导航族经此跟随键位重映射与
     /// behavior 步长);浮层私有意图仍走 [`OverlayAction`],不并入全局枚举。
-    fn on_action(&mut self, _action: Action, _ctx: &AppState) -> Option<OverlayResponse> {
+    fn on_action(&mut self, _action: Action, _ctx: &Self::Input<'_>) -> Option<OverlayResponse> {
         None
     }
 }
@@ -268,11 +280,12 @@ pub(crate) fn render_overlay<O: Overlay>(
     overlay: &O,
     scale: u16,
     focused: bool,
-    ctx: &AppState,
-    theme: &Theme,
+    ctx: &O::Input<'_>,
+    env: OverlayEnv<'_>,
 ) {
+    let theme = env.frame.theme;
     let c = overlay.chrome();
-    let (base, dock) = full_rect(&c, area, ctx);
+    let (base, dock) = full_rect(&c, area, env.frame.config.tui().layout(), env.dock_right);
     if base.width < 4 || base.height < 3 {
         return;
     }
@@ -290,7 +303,7 @@ pub(crate) fn render_overlay<O: Overlay>(
         // 离屏渲染在此统一做(动画头几帧被几何 guard 跳过时白渲一次,面积小、可忽略)。
         let off = render_offscreen(base, overlay, focused, ctx, theme);
         match (c.anchor, dock) {
-            (Some((anchor, _)), _) => match ctx.cfg.tui().animation().menu_reveal() {
+            (Some((anchor, _)), _) => match env.frame.config.tui().animation().menu_reveal() {
                 // 形变盒用与终态同款的 block(accent 边框 + 标题),避免落定瞬间边框/标题跳变。
                 MenuReveal::Morph => {
                     let block = overlay.block(ctx, theme, focused);
@@ -308,24 +321,26 @@ pub(crate) fn render_overlay<O: Overlay>(
 }
 
 /// 准备和绘制共用完整浮层几何，不受当前揭开进度影响。
-pub(super) fn full_rect(c: &Chrome, area: Rect, ctx: &AppState) -> (Rect, Option<Dock>) {
+pub(super) fn full_rect(
+    c: &Chrome,
+    area: Rect,
+    config: &mineral_config::LayoutConfig,
+    dock_right: bool,
+) -> (Rect, Option<Dock>) {
     // anchor 模式(PopMenu)优先:不停靠、不居中,贴锚点放置。
     // 停靠浮层:按当前布局选侧(全屏贴右 / 否则贴左),避开封面;否则居中。
-    let dock = (c.anchor.is_none() && c.dock).then_some(if ctx.browse.fullscreen.on() {
-        Dock::Right
-    } else {
-        Dock::Left
-    });
+    let dock =
+        (c.anchor.is_none() && c.dock).then_some(if dock_right { Dock::Right } else { Dock::Left });
     let base = match (c.anchor, dock) {
         (Some((anchor, placement)), _) => place(
             anchor,
             placement,
-            c.align.unwrap_or(*ctx.cfg.tui().layout().menu_align()),
+            c.align.unwrap_or(*config.menu_align()),
             c.max_w,
             c.max_h,
             area,
         ),
-        (None, Some(d)) => dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct()),
+        (None, Some(d)) => dock_rect(area, d, *config.dock_w_pct()),
         (None, None) => centered_rect(area, c.pct_w, c.pct_h, c.min_w, c.min_h, c.max_w, c.max_h),
     };
     (base, dock)
@@ -337,7 +352,7 @@ fn render_offscreen<O: Overlay>(
     full: Rect,
     overlay: &O,
     focused: bool,
-    ctx: &AppState,
+    ctx: &O::Input<'_>,
     theme: &Theme,
 ) -> Buffer {
     let mut buf = Buffer::empty(full);
@@ -370,13 +385,13 @@ fn dock_rect(area: Rect, dock: Dock, dock_w_pct: u16) -> Rect {
 /// # Params:
 ///   - `area`: 主帧区域(= `frame_area`,与渲染入口同一 Rect)
 ///   - `ctx`: 只读后端态(全屏标志 + 停靠宽度配置)
-pub(crate) fn dock_full_rect(area: Rect, ctx: &AppState) -> Rect {
-    let d = if ctx.browse.fullscreen.on() {
-        Dock::Right
-    } else {
-        Dock::Left
-    };
-    dock_rect(area, d, *ctx.cfg.tui().layout().dock_w_pct())
+pub(crate) fn dock_full_rect(
+    area: Rect,
+    config: &mineral_config::LayoutConfig,
+    dock_right: bool,
+) -> Rect {
+    let d = if dock_right { Dock::Right } else { Dock::Left };
+    dock_rect(area, d, *config.dock_w_pct())
 }
 
 /// 按百分比取尺寸,钳到 `[0, total]`(不碰 `as` 强转)。

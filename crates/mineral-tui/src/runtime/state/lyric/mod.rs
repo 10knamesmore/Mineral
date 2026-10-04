@@ -2,6 +2,5 @@
 
 mod content;
 pub mod glide;
-pub mod view;
 
 pub use content::LyricExtra;

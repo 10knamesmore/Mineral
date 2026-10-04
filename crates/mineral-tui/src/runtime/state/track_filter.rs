@@ -10,7 +10,7 @@ use super::search::SearchState;
 
 /// 当前歌单与查询对应的行顺序；只存下标，歌曲与装饰始终从原始列表现读。
 #[derive(Default)]
-pub(super) struct TrackFilterCache {
+pub(crate) struct TrackFilterCache {
     /// 尚未读过曲目时为空；切换歌单、查询或曲目版本时替换。
     cached: Option<CachedTracks>,
 }
@@ -47,7 +47,7 @@ pub(crate) struct FilteredTracks<'a> {
 
 impl<'a> FilteredTracks<'a> {
     /// 尚无当前歌单时的空视图。
-    pub(super) fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             entries: &[],
             order: None,
@@ -104,7 +104,7 @@ impl TrackFilterCache {
     ///
     /// # Return:
     ///   借用当前曲目的视图，不持有缓存的可变借用。
-    pub(super) fn view<'a>(
+    pub(crate) fn view<'a>(
         &mut self,
         playlist: &PlaylistId,
         generation: u64,
@@ -246,7 +246,7 @@ mod tests {
                     .build(),
             ],
         );
-        state.browse.search.tracks.set_query("cry");
+        state.browse.tracks.search.set_query("cry");
         let indexes = || {
             state
                 .filtered_tracks()
@@ -282,7 +282,7 @@ mod tests {
             vec!["other"]
         );
         assert_eq!(state.filtered_tracks().total_duration_ms(), 120_000);
-        state.browse.search.tracks.set_query("冬天");
+        state.browse.tracks.search.set_query("冬天");
         assert_eq!(
             state
                 .filtered_tracks()
@@ -291,7 +291,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["same"]
         );
-        state.browse.search.tracks.clear();
+        state.browse.tracks.search.clear();
         assert_eq!(state.filtered_tracks().len(), 2);
         assert_eq!(state.filtered_tracks().total_duration_ms(), 180_000);
         Ok(())

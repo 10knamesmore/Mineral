@@ -7,17 +7,10 @@ use std::time::Instant;
 
 use mineral_model::PlaylistId;
 
-use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 
 /// 列表浏览态([`AppState`](crate::runtime::state::AppState) 的导航域)。
 pub struct NavState {
-    /// Playlists 列表的光标 + 视口滚动(nvim 手感:offset 跨帧持久 + scrolloff + 缓动平移)。
-    pub playlist: ScrollList,
-
-    /// Library 列表的光标 + 视口滚动。
-    pub track: ScrollList,
-
     /// 已打开歌单的身份；进入时设置，返回期间保留供离场曲目面板绘制。
     pub opened_playlist: Option<PlaylistId>,
 
@@ -38,8 +31,6 @@ impl NavState {
     /// 构造初始浏览态(光标在首行、视口未滚、无位置记忆)。
     pub(crate) fn new() -> Self {
         Self {
-            playlist: ScrollList::new(),
-            track: ScrollList::new(),
             opened_playlist: None,
             track_pos: TrackPosMap::default(),
             pending_track_restore: None,

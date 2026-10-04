@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyEventKind};
 
-use crate::components::popup::OverlayKind;
+use crate::app::AppOverlay;
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::runtime::window_title::TitleContext;
 use crate::tui::Tui;
@@ -58,7 +58,7 @@ impl App {
             // 状态:压入断连提示浮层(记一条 error),进入下面的「显示话术 + 等按键退出」分支。
             if !self.overlays.is_disconnected() && !self.client.connected() {
                 mineral_log::error!(target: "tui", "daemon connection lost, awaiting key to exit");
-                self.overlays.push(OverlayKind::disconnect());
+                self.overlays.push(AppOverlay::disconnect());
             }
             if self.overlays.is_disconnected() {
                 self.transition = None;
@@ -292,7 +292,7 @@ mod tests {
         );
 
         // 开一个居中浮层并推满进场动画；浮层尚未出栈时终端图片缓存不应被清空。
-        app.overlays.push(super::OverlayKind::confirm());
+        app.overlays.push(super::AppOverlay::confirm());
         for _ in 0..40 {
             app.tick_overlays();
         }
@@ -327,7 +327,7 @@ mod tests {
         app.state.images.insert_test_terminal_image(&url, (10, 10));
 
         // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
-        app.overlays.push(super::OverlayKind::queue(/*sel*/ 0));
+        app.overlays.push(super::AppOverlay::queue(/*sel*/ 0));
         for _ in 0..40 {
             app.tick_overlays();
         }

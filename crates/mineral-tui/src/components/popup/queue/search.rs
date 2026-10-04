@@ -4,6 +4,7 @@
 //! 底层播放队列不发任何编辑。输入态键处理与浏览页 `/` 同构:Enter 保留词退输入、
 //! Esc 清词退出、改词定位最相关行，清空时保留选中位置并展开完整队列。
 
+use super::QueueInput;
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -18,7 +19,7 @@ use crate::components::popup::component::OverlayResponse;
 use crate::render::cursor::cursor_spans;
 use crate::render::theme::Theme;
 use crate::runtime::line_input::InputRequest;
-use crate::runtime::state::{AppState, ListExpansionScope, ListRowIdentity, SearchState};
+use crate::runtime::state::SearchState;
 
 impl QueueOverlay {
     /// 当前过滤词是否非空(过滤生效中)。
@@ -36,8 +37,8 @@ impl QueueOverlay {
     /// 无过滤词 → 恒等 `0..len`(保持播放顺序)。有词 → 命中歌名 / 别名 / 任一艺人 /
     /// 专辑名取最高分,按分降序(等分保持队列原序,`sort_by_key` 稳定排序)。
     /// 「最接近输入」在顶,与浏览页曲目过滤同序。
-    pub(super) fn visible(&self, ctx: &AppState) -> Vec<usize> {
-        let queue = &ctx.player.queue;
+    pub(super) fn visible(&self, ctx: &QueueInput<'_>) -> Vec<usize> {
+        let queue = &ctx.queue;
         if !self.is_filtering() {
             return (0..queue.len()).collect();
         }
@@ -53,19 +54,19 @@ impl QueueOverlay {
     /// 过滤视图当前光标对应的**队列真实下标**;空视图 → `None`。
     ///
     /// 脚本 ctx / cursor 记忆据此取选中歌——不能用过滤视图位(重排后会错指)。
-    pub(crate) fn raw_cursor(&self, ctx: &AppState) -> Option<usize> {
+    pub(crate) fn raw_cursor(&self, ctx: &QueueInput<'_>) -> Option<usize> {
         self.visible(ctx).get(self.list.sel()).copied()
     }
 
     /// 进入 `/` 输入态；已有过滤先展开回完整队列，第一处改词再定位到首个命中。
-    pub(super) fn begin_search(&mut self, ctx: &AppState) {
+    pub(super) fn begin_search(&mut self, ctx: &QueueInput<'_>) {
         self.clear_filter(ctx);
         self.search.typing = true;
         self.last_sel_change = Instant::now();
     }
 
     /// 清除过滤时保留具体队列位置与屏幕行，并展开回完整队列。
-    pub(super) fn clear_filter(&mut self, ctx: &AppState) {
+    pub(super) fn clear_filter(&mut self, ctx: &QueueInput<'_>) {
         self.search.typing = false;
         if !self.is_filtering() {
             return;
@@ -77,8 +78,7 @@ impl QueueOverlay {
         if let Some(raw) = selected {
             self.list.place(raw, screen_row);
             self.expansion.start(
-                ListExpansionScope::Queue,
-                (0..ctx.player.queue.len()).map(|index| (ListRowIdentity::Queue(index), index)),
+                (0..ctx.queue.len()).map(|index| (index, index)),
                 raw,
                 ctx.list_glide_ticks(),
             );
@@ -93,7 +93,11 @@ impl QueueOverlay {
     /// 输入态吞掉一切键(含空格),不半穿透给全局播放控制。
     ///
     /// 带 CONTROL 的字符键一律吞掉——否则 `<C-d>` 族滚动键会把裸字符塞进 query。
-    pub(super) fn on_search_key(&mut self, key: &KeyEvent, ctx: &AppState) -> OverlayResponse {
+    pub(super) fn on_search_key(
+        &mut self,
+        key: &KeyEvent,
+        ctx: &QueueInput<'_>,
+    ) -> OverlayResponse {
         let previous_query = self.search.query().to_owned();
         match key.code {
             KeyCode::Esc => self.clear_filter(ctx),
@@ -152,7 +156,7 @@ impl QueueOverlay {
 
     /// 底栏左下位置标签:过滤态给 `命中位 / 命中数`(告诉你在第几个命中、共几个),
     /// 否则 `n / total`。
-    pub(super) fn position_bottom(&self, ctx: &AppState) -> String {
+    pub(super) fn position_bottom(&self, ctx: &QueueInput<'_>) -> String {
         if !self.is_filtering() {
             return position_label(self.list.sel(), ctx);
         }

@@ -1,43 +1,6 @@
-//! 溢出标题的显示身份与滚动起点。
-//!
-//! [`Marquees::prepare`] 根据当前内容和布局绑定身份，变化时重置起点；
-//! [`Marquees::tick`] 推进时钟，绘制仅经 [`Marquees::phase`] 读取相位。
+//! 单个组件的标题滚动状态；身份绑定由准备入口更新，绘制只读采样。
 
-use rustc_hash::FxHashMap;
-
-/// marquee 槽:每个「同一时刻至多滚一行」的渲染位一个槽。
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum Slot {
-    /// browse 曲目表选中行。
-    BrowseSelected,
-
-    /// search 结果列选中行。
-    SearchResults,
-
-    /// search detail 曲目表选中行。
-    SearchDetailSelected,
-
-    /// 队列浮层选中行。
-    QueueSelected,
-
-    /// 下载浮层选中行。
-    DownloadSelected,
-
-    /// transport 面板顶行(当前曲)。
-    Transport,
-
-    /// now_playing 面板标题行(选中曲)。
-    NowPlaying,
-}
-
-/// 一个槽的滚动相位:显示身份 + 起始拍。
-struct SlotPhase {
-    /// 槽当前显示对象的稳定 ID；变化即重置相位。
-    identity: String,
-
-    /// 相位起点(全局帧计数值)。
-    start: u32,
-}
+use std::time::Instant;
 
 /// 一次相位查询的结果。
 pub(crate) struct Phase {
@@ -51,7 +14,7 @@ pub(crate) struct Phase {
 
 /// 滚动方式(配置 `animation.marquee.mode` 的映射,各方式独有节奏已折算成拍)。
 #[derive(Clone, Copy)]
-pub(crate) enum Mode {
+enum Mode {
     /// 循环:文本首尾相接(中间夹 gap)向左匀速循环。
     Loop,
 
@@ -86,7 +49,7 @@ fn marquee_mode(cfg: &mineral_config::MarqueeConfig, tick_ms: u64) -> Mode {
 
 /// 折算好的滚动节奏(配置 `animation.marquee` 按帧率折算成拍)。
 #[derive(Clone, Copy)]
-pub(crate) struct Tempo {
+struct Tempo {
     /// 滚动方式(含各方式独有节奏)。
     pub(crate) mode: Mode,
 
@@ -100,40 +63,10 @@ pub(crate) struct Tempo {
     pub(crate) fade_in_ticks: u32,
 }
 
-/// 全部 marquee 槽的相位状态(挂在 `AppState`)。
-pub(crate) struct Marquees {
-    /// 全局帧计数(App tick 每帧 +1;wrapping,配合 `wrapping_sub` 求 elapsed)。
-    now: u32,
-
-    /// 滚动节奏(方式 + 各拍数)。
-    tempo: Tempo,
-
-    /// 准备阶段更新的显示身份与起始拍。
-    slots: FxHashMap<Slot, SlotPhase>,
-}
-
-impl Marquees {
-    /// 构造:注入已按帧率折算好的节奏。
-    pub(crate) fn new(tempo: Tempo) -> Self {
-        Self {
-            now: 0,
-            tempo: Tempo {
-                step_ticks: tempo.step_ticks.max(1),
-                ..tempo
-            },
-            slots: FxHashMap::default(),
-        }
-    }
-
-    /// 从配置段折算节奏并构造(启动与配置热重载共用;重载 = 整体重建,槽相位
-    /// 清零从头带停顿起步)。
-    ///
-    /// # Params:
-    ///   - `cfg`: 配置 `animation.marquee` 段
-    ///   - `tick_ms`: 主循环帧间隔(拍数折算分母,`animation.frame_tick_ms`)
-    pub(crate) fn from_config(cfg: &mineral_config::MarqueeConfig, tick_ms: u64) -> Self {
+impl Tempo {
+    fn from_config(cfg: &mineral_config::MarqueeConfig, tick_ms: u64) -> Self {
         use crate::render::anim::ticks16_from_ms;
-        Self::new(Tempo {
+        Self {
             mode: marquee_mode(cfg, tick_ms),
             step_ticks: u32::from(ticks16_from_ms(*cfg.step_ms(), tick_ms)),
             pause_ticks: u32::from(ticks16_from_ms(*cfg.pause_ms(), tick_ms)),
@@ -143,92 +76,97 @@ impl Marquees {
             } else {
                 u32::from(ticks16_from_ms(*cfg.fade_ms(), tick_ms))
             },
-        })
+        }
     }
+}
 
-    /// 推进一帧(App tick 路径,`&mut`)。
-    pub(crate) fn tick(&mut self) {
-        self.now = self.now.wrapping_add(1);
-    }
+/// 一个组件当前显示的标题；没有绑定时保持静止。
+#[derive(Default, Clone, Debug)]
+pub(crate) struct Marquee {
+    /// 显示身份和本次起步时间，组件销毁时一起释放。
+    binding: Option<Binding>,
+}
 
-    /// 准备阶段绑定显示身份和宽度；绘制查询不重置槽位起点。
-    pub(crate) fn prepare(&mut self, slot: Slot, identity: &str, content_w: u16, window_w: u16) {
-        let phase = self.slots.entry(slot).or_insert_with(|| SlotPhase {
+/// 一次标题显示的起点。
+#[derive(Clone, Debug)]
+struct Binding {
+    /// 调用方提供的稳定身份。
+    identity: String,
+
+    /// 由主循环明确采样的起步时间。
+    start: Instant,
+}
+
+impl Marquee {
+    /// 身份改变或内容完整可见时重置起点；不自行读取时钟。
+    pub(crate) fn prepare(&mut self, identity: &str, content_w: u16, window_w: u16, now: Instant) {
+        let phase = self.binding.get_or_insert_with(|| Binding {
             identity: identity.to_owned(),
-            start: self.now,
+            start: now,
         });
         if phase.identity != identity {
             phase.identity = identity.to_owned();
-            phase.start = self.now;
+            phase.start = now;
         }
         if content_w <= window_w {
-            phase.start = self.now;
+            phase.start = now;
         }
     }
 
-    /// 渲染路径:查询 `slot` 当前的滚动相位与边缘 fade 强度。
-    ///
-    /// 未准备、身份不符或标题不溢出时返回静止相位；不会改变起点。
-    ///
-    /// # Params:
-    ///   - `slot`: 渲染位
-    ///   - `identity`: 当前显示对象的稳定 ID
-    ///   - `content_w`: 标题内容显示宽(列)
-    ///   - `window_w`: 可用窗口宽(列)
-    ///   - `gap_w`: 循环间隔串显示宽(列)
-    ///
-    /// # Return:
-    ///   [`Phase`]:滚动列(已模周期 `content_w + gap_w`,停顿期为 0)+ fade 渐入强度。
+    /// 按本帧时钟和当前配置采样相位，不缓存配置也不改变显示身份。
     pub(crate) fn phase(
         &self,
-        slot: Slot,
         identity: &str,
         content_w: u16,
         window_w: u16,
         gap_w: u16,
+        anim: &mineral_config::AnimationConfig,
+        now: Instant,
     ) -> Phase {
+        let tick_ms = *anim.frame_tick_ms();
+        let tempo = Tempo::from_config(anim.marquee(), tick_ms);
         const STILL: Phase = Phase {
             offset: 0,
             fade_permille: 0,
         };
-        if matches!(self.tempo.mode, Mode::Off) {
+        if matches!(tempo.mode, Mode::Off) {
             return STILL;
         }
-        let Some(phase) = self.slots.get(&slot) else {
+        let Some(phase) = self.binding.as_ref() else {
             return STILL;
         };
         if phase.identity != identity || content_w <= window_w {
             return STILL;
         }
-        let elapsed = self.now.wrapping_sub(phase.start);
-        let fade_permille = if self.tempo.fade_in_ticks == 0 {
+        let elapsed = u64::try_from(
+            now.saturating_duration_since(phase.start).as_millis() / u128::from(tick_ms.max(1)),
+        )
+        .unwrap_or(u64::MAX);
+
+        let fade_permille = if tempo.fade_in_ticks == 0 {
             0
         } else {
-            u16::try_from(
-                (u64::from(elapsed) * 1000 / u64::from(self.tempo.fade_in_ticks)).min(1000),
-            )
-            .unwrap_or(1000)
+            u16::try_from((elapsed.saturating_mul(1000) / u64::from(tempo.fade_in_ticks)).min(1000))
+                .unwrap_or(1000)
         };
-        let Some(scrolled) = elapsed.checked_sub(self.tempo.pause_ticks) else {
+        let Some(scrolled) = elapsed.checked_sub(u64::from(tempo.pause_ticks)) else {
             return Phase {
                 offset: 0,
                 fade_permille,
             };
         };
-        let step = u64::from(self.tempo.step_ticks);
-        let offset = match self.tempo.mode {
+        let step = u64::from(tempo.step_ticks);
+        let offset = match tempo.mode {
             Mode::Off => 0,
             // 循环:模「内容 + gap」周期,窗口滚过末尾经 gap 回绕到开头。
-            Mode::Loop => {
-                u64::from(scrolled) / step % u64::from(u32::from(content_w) + u32::from(gap_w))
-            }
+            Mode::Loop => scrolled / step % u64::from(u32::from(content_w) + u32::from(gap_w)),
             // 往返:三角波 0→max→0(max = 溢出列数 ≥ 1,不经过 gap),两端各停
             // `edge_hold_ticks` 拍再折返。tick 域分段:正向 → 右停 → 反向 → 左停。
             Mode::Bounce { edge_hold_ticks } => {
                 let max_off = u64::from(content_w - window_w);
                 let leg = max_off * step;
                 let hold = u64::from(edge_hold_ticks);
-                let pos = u64::from(scrolled) % (2 * (leg + hold));
+                let pos = scrolled % (2 * (leg + hold));
                 if pos < leg {
                     pos / step
                 } else if pos < leg + hold {
