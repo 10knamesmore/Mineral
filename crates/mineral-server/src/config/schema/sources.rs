@@ -4,7 +4,10 @@
 //! 不用 `#[serde(untagged)]`(避免其错误路径含糊)。
 
 use mineral_config_macros::{config_section, source_section};
-use std::{num::NonZeroUsize, path::PathBuf};
+use std::{
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::PathBuf,
+};
 
 /// 音乐来源
 #[config_section]
@@ -68,6 +71,36 @@ pub struct BilibiliSection {}
 pub struct NeteaseSection {
     /// 歌单曲目加载
     playlist_fetch: PlaylistFetchSection,
+
+    /// 专辑详情发送速率与专辑、歌词读取的限流退避
+    requests: NeteaseRequestsSection,
+
+    /// 专辑详情缓存期限
+    album_cache: NeteaseAlbumCacheSection,
+}
+
+/// 网易专辑详情持久缓存；每次成功抓取后确定过期时间，读取不续期
+#[config_section]
+pub struct NeteaseAlbumCacheSection {
+    /// 基础有效天数，可为 0
+    #[lua_type("integer")]
+    ttl_days: u32,
+
+    /// 有效天数的随机增减上限，可为 0；结果已过期时下次读取重新抓取
+    #[lua_type("integer")]
+    ttl_jitter_days: u32,
+}
+
+/// 网易端点请求控制
+#[config_section]
+pub struct NeteaseRequestsSection {
+    /// 所有专辑详情调用共享的每秒请求数，须大于 0，突发容量为一
+    #[lua_type("integer")]
+    album_detail_requests_per_second: NonZeroU32,
+
+    /// 每次额外尝试前等待的毫秒数，每项须大于 0；专辑和歌词调用各自推进序列
+    #[lua_type("integer[]")]
+    retry_delays_ms: Vec<NonZeroU64>,
 }
 
 /// 歌单曲目加载
@@ -149,7 +182,9 @@ mod tests {
     #[test]
     fn proxy_false_is_none() -> color_eyre::Result<()> {
         let s: NeteaseSection = serde_json::from_value(serde_json::json!({
+            "album_cache": {"ttl_days": 30, "ttl_jitter_days": 7},
             "playlist_fetch": {"batch_size": 500, "max_concurrent": 3},
+            "requests": {"album_detail_requests_per_second": 1, "retry_delays_ms": [500, 1000, 1500]},
             "timeout_secs": 100_u64, "proxy": false, "max_connections": 0_u64,
         }))?;
         assert_eq!(*s.proxy(), None);
@@ -159,7 +194,9 @@ mod tests {
     #[test]
     fn proxy_string_is_some() -> color_eyre::Result<()> {
         let s: NeteaseSection = serde_json::from_value(serde_json::json!({
+            "album_cache": {"ttl_days": 30, "ttl_jitter_days": 7},
             "playlist_fetch": {"batch_size": 500, "max_concurrent": 3},
+            "requests": {"album_detail_requests_per_second": 1, "retry_delays_ms": [500, 1000, 1500]},
             "timeout_secs": 100_u64, "proxy": "socks5://127.0.0.1:1080", "max_connections": 0_u64,
         }))?;
         assert_eq!(s.proxy().as_deref(), Some("socks5://127.0.0.1:1080"));
@@ -170,7 +207,9 @@ mod tests {
     fn proxy_true_errors() {
         assert!(
             serde_json::from_value::<NeteaseSection>(serde_json::json!({
-                "playlist_fetch": {"batch_size": 500, "max_concurrent": 3},
+                "album_cache": {"ttl_days": 30, "ttl_jitter_days": 7},
+            "playlist_fetch": {"batch_size": 500, "max_concurrent": 3},
+            "requests": {"album_detail_requests_per_second": 1, "retry_delays_ms": [500, 1000, 1500]},
             "timeout_secs": 100_u64, "proxy": true, "max_connections": 0_u64,
             }))
             .is_err(),

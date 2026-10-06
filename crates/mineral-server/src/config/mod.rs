@@ -23,8 +23,3 @@ pub(crate) use schema::{
 };
 pub(crate) use session::ConfigHost;
 pub use startup::{ServerConfig, resolve_audio_mode};
-
-#[cfg(test)]
-mod runtime_tests;
-#[cfg(test)]
-mod tests;

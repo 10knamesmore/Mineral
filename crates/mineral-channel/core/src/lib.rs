@@ -176,6 +176,11 @@ pub trait MusicChannel: Send + Sync {
         Err(Error::NotSupported)
     }
 
+    /// 拉取该 channel 当前账号收藏的全部专辑，保留来源返回的顺序。
+    async fn my_albums(&self) -> Result<Vec<Album>> {
+        Err(Error::NotSupported)
+    }
+
     // ---------- 用户数据 / 装饰(可选) ----------
     // 这一组方法都是「同一登录用户视角下,跨歌曲的元信息」,bulk 一次拉满,
     // 上层用来 decorate Song 或 collection entry view。沿用 default `NotSupported` 模式。

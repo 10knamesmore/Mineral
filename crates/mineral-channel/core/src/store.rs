@@ -1,9 +1,10 @@
 //! Scoped and cross-source storage interfaces supplied by the daemon.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use mineral_model::{
-    AlbumId, ArtistId, CollectionIndex, Envelope, Playlist, PlaylistId, Song, SongId, SourceKind,
-    StoreValue,
+    Album, AlbumId, ArtistId, CollectionIndex, Envelope, Playlist, PlaylistId, Song, SongId,
+    SourceKind, StoreValue,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -60,6 +61,16 @@ pub struct PlaylistCacheEntry {
     pub entries: Vec<CachedPlaylistEntry>,
 }
 
+/// A complete album detail snapshot; its owner decides when it expires.
+#[derive(Debug, Clone)]
+pub struct AlbumCacheEntry {
+    /// Album metadata and ordered tracks from the same successful fetch.
+    pub album: Album,
+
+    /// Expiration time chosen by the channel in UTC; reads do not extend it.
+    pub expired_at: DateTime<Utc>,
+}
+
 /// Reads and writes one fixed source; implementations reject mismatched owner IDs even when disabled.
 ///
 /// Song projections also require matching album and artist sources. Playlist members may reference
@@ -72,6 +83,12 @@ pub trait NamespaceStore: Send + Sync {
 
     /// Reads an album name from this source.
     async fn album_name(&self, id: &AlbumId) -> StoreResult<Option<String>>;
+
+    /// Reads a complete album snapshot and the expiration time chosen by its channel.
+    async fn get_album_cache(&self, id: &AlbumId) -> StoreResult<Option<AlbumCacheEntry>>;
+
+    /// Atomically replaces this source's complete album snapshot and expiration time.
+    async fn put_album_cache(&self, entry: &AlbumCacheEntry) -> StoreResult<()>;
 
     /// Reads an artist name from this source.
     async fn artist_name(&self, id: &ArtistId) -> StoreResult<Option<String>>;

@@ -2,9 +2,10 @@
 
 use super::schema::{
     AudioConfig, BackendKind, BackfillSection, BilibiliSection, CacheConfig, DaemonConfig,
-    DownloadConfig, EnvelopeConfig, HighpassConfig, LocalSection, MineralSection, NeteaseSection,
-    PlaylistFetchSection, QueueConfig, QueueTransform, ReportConfig, ScriptConfig, SearchQueryMode,
-    ShelfConfig, SourcesConfig, StatsConfig, StatsLevel,
+    DownloadConfig, EnvelopeConfig, HighpassConfig, LocalSection, MineralSection,
+    NeteaseAlbumCacheSection, NeteaseRequestsSection, NeteaseSection, PlaylistFetchSection,
+    QueueConfig, QueueTransform, ReportConfig, ScriptConfig, SearchQueryMode, ShelfConfig,
+    SourcesConfig, StatsConfig, StatsLevel,
 };
 
 /// LuaLS 文件头与使用说明。
@@ -34,6 +35,8 @@ pub(super) fn meta_config_lua() -> String {
         QueueConfig::LUA_STUB,
         QueueTransform::LUA_STUB,
         NeteaseSection::LUA_STUB,
+        NeteaseAlbumCacheSection::LUA_STUB,
+        NeteaseRequestsSection::LUA_STUB,
         PlaylistFetchSection::LUA_STUB,
         BilibiliSection::LUA_STUB,
         MineralSection::LUA_STUB,

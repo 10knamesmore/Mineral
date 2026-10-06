@@ -5,6 +5,7 @@ use mineral_model::{LyricLine, Lyrics, SongId, parse_lrc};
 use serde_json::{Value, json};
 
 use crate::api::yrc;
+use crate::request::RequestPolicy;
 use crate::transport::client::{RequestSpec, Transport};
 use crate::transport::headers::UaKind;
 use crate::transport::url::Crypto;
@@ -25,11 +26,16 @@ fn lyric_text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 ///
 /// # Params:
 ///   - `transport`: 已配置加密的传输层
+///   - `policy`: 两条读取端点分别执行的限流退避
 ///   - `id`: 歌曲 ID
 ///
 /// # Return:
 ///   装配好的 [`Lyrics`];任一路失败按缺省(空)处理。
-pub async fn lyrics(transport: &Transport, id: &SongId) -> crate::Result<Lyrics> {
+pub(crate) async fn lyrics(
+    transport: &Transport,
+    policy: &RequestPolicy,
+    id: &SongId,
+) -> crate::Result<Lyrics> {
     let mut translation = Vec::<LyricLine>::new();
     let mut romanization = Vec::<LyricLine>::new();
     let mut lrc_linux = Vec::<LyricLine>::new();
@@ -43,12 +49,15 @@ pub async fn lyrics(transport: &Transport, id: &SongId) -> crate::Result<Lyrics>
     p.insert("kv".into(), json!("-1"));
     p.insert("tv".into(), json!("-1"));
     if let Ok(v) = transport
-        .request(RequestSpec {
-            path: "/api/song/lyric",
-            crypto: Crypto::Linuxapi,
-            params: p,
-            ua: UaKind::Linux,
-        })
+        .request_with_policy(
+            RequestSpec {
+                path: "/api/song/lyric",
+                crypto: Crypto::Linuxapi,
+                params: p,
+                ua: UaKind::Linux,
+            },
+            policy,
+        )
         .await
     {
         if let Some(s) = lyric_text(&v, "lrc") {
@@ -67,12 +76,15 @@ pub async fn lyrics(transport: &Transport, id: &SongId) -> crate::Result<Lyrics>
         p.insert(k.into(), json!("0"));
     }
     if let Ok(v) = transport
-        .request(RequestSpec {
-            path: "/api/song/lyric/v1",
-            crypto: Crypto::Eapi,
-            params: p,
-            ua: UaKind::Mobile,
-        })
+        .request_with_policy(
+            RequestSpec {
+                path: "/api/song/lyric/v1",
+                crypto: Crypto::Eapi,
+                params: p,
+                ua: UaKind::Mobile,
+            },
+            policy,
+        )
         .await
     {
         if let Some(s) = lyric_text(&v, "yrc") {

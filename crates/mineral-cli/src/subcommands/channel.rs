@@ -1,10 +1,13 @@
 //! `mineral channel ...` 子命令分发。
 
+use std::time::Duration;
+
 use clap::{Args as ClapArgs, Subcommand};
 use mineral_channel_bilibili::BilibiliConfig;
 use mineral_channel_bilibili::cli::BilibiliCli;
 use mineral_channel_netease::NeteaseConfig;
 use mineral_channel_netease::cli::NeteaseCli;
+use mineral_channel_netease::config::{AlbumCacheConfig, PlaylistFetchConfig, RequestsConfig};
 
 /// Arguments for the `channel` subcommand.
 #[derive(Debug, ClapArgs)]
@@ -61,10 +64,31 @@ pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
 ///   网易云构造参数。
 pub fn netease_config_from(section: &mineral_server::config::NeteaseSection) -> NeteaseConfig {
     NeteaseConfig::builder()
+        .album_cache(
+            AlbumCacheConfig::builder()
+                .ttl_days(*section.album_cache().ttl_days())
+                .ttl_jitter_days(*section.album_cache().ttl_jitter_days())
+                .build(),
+        )
         .playlist_fetch(
-            mineral_channel_netease::config::PlaylistFetchConfig::builder()
+            PlaylistFetchConfig::builder()
                 .batch_size(*section.playlist_fetch().batch_size())
                 .max_concurrent(*section.playlist_fetch().max_concurrent())
+                .build(),
+        )
+        .requests(
+            RequestsConfig::builder()
+                .album_detail_requests_per_second(
+                    *section.requests().album_detail_requests_per_second(),
+                )
+                .retry_delays(
+                    section
+                        .requests()
+                        .retry_delays_ms()
+                        .iter()
+                        .map(|delay| Duration::from_millis(delay.get()))
+                        .collect(),
+                )
                 .build(),
         )
         .max_connections(*section.max_connections())

@@ -10,6 +10,7 @@ use crate::{Error, Result};
 use crate::config::NeteaseConfig;
 use crate::crypto::{eapi, linuxapi, weapi};
 use crate::error::ApiCodeError;
+use crate::request::RequestPolicy;
 use crate::transport::body::{decode_response, parse_code};
 use crate::transport::headers::{UA_LINUX, UaKind, pick_user_agent};
 use crate::transport::url::{Crypto, rewrite};
@@ -118,8 +119,31 @@ impl Transport {
 
     /// 发请求并返回解析后的 JSON Value;`code != 200` 时返回 `Err`。
     pub async fn request(&self, spec: RequestSpec<'_>) -> Result<serde_json::Value> {
+        self.request_once(&spec, None, 1).await
+    }
+
+    /// 对调用方指定的读取端点执行限流退避；每次尝试都申请同一策略的发送额度。
+    pub(crate) async fn request_with_policy(
+        &self,
+        spec: RequestSpec<'_>,
+        policy: &RequestPolicy,
+    ) -> Result<serde_json::Value> {
+        policy
+            .retry(spec.path, |attempt| {
+                self.request_once(&spec, Some(policy), attempt)
+            })
+            .await
+    }
+
+    /// 检查单次请求的业务码；重试时保留网易原始结构化错误。
+    async fn request_once(
+        &self,
+        spec: &RequestSpec<'_>,
+        policy: Option<&RequestPolicy>,
+        attempt: usize,
+    ) -> Result<serde_json::Value> {
         let endpoint = spec.path;
-        let value = self.request_lax(spec).await?;
+        let value = self.request_lax_once(spec, policy, attempt).await?;
         let code = parse_code(&value)?;
         if code != 200 {
             let message = value
@@ -139,11 +163,20 @@ impl Transport {
     /// 发请求并返回解析后的 JSON,**不**因为 `code != 200` 报错。
     /// 用于 `CheckQR` 等用 `code` 表达业务状态的端点。
     pub async fn request_lax(&self, spec: RequestSpec<'_>) -> Result<serde_json::Value> {
-        mineral_log::debug!(target: "channel_netease", path = spec.path, crypto = ?spec.crypto, "request");
+        self.request_lax_once(&spec, None, 1).await
+    }
+
+    /// 每次发送重新读取 csrf 并加密；仅在 HTTP 发送前消耗额度。
+    async fn request_lax_once(
+        &self,
+        spec: &RequestSpec<'_>,
+        policy: Option<&RequestPolicy>,
+        attempt: usize,
+    ) -> Result<serde_json::Value> {
         let csrf = self.csrf_token();
 
         // 注入 csrf_token 到 weapi/eapi 的 params(linuxapi 不注入)
-        let mut params = spec.params;
+        let mut params = spec.params.clone();
         if matches!(spec.crypto, Crypto::Weapi | Crypto::Eapi) {
             params.insert("csrf_token".into(), serde_json::Value::String(csrf.clone()));
         }
@@ -183,6 +216,10 @@ impl Transport {
                 source: Box::new(source),
             })?;
 
+        if let Some(policy) = policy {
+            policy.wait_until_ready(spec.path, attempt).await;
+        }
+        mineral_log::debug!(target: "channel_netease", path = spec.path, crypto = ?spec.crypto, attempt, "request");
         let mut resp = self
             .client
             .send_async(req)

@@ -48,6 +48,14 @@ return {
       },
     },
     netease = {
+      album_cache = {
+        ttl_days = 30,
+        ttl_jitter_days = 7,
+      },
+      requests = {
+        album_detail_requests_per_second = 1,
+        retry_delays_ms = { 500, 1000, 1500 },
+      },
       playlist_fetch = {
         batch_size = 500,
         max_concurrent = 3,

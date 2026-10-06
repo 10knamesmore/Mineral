@@ -35,6 +35,7 @@
 #![allow(clippy::option_option)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value, clippy::implicit_clone,))]
 
+mod album;
 pub mod api;
 pub mod channel;
 pub mod cli;
@@ -45,6 +46,7 @@ pub mod device;
 mod error;
 pub use error::{Error, Result};
 mod playlist;
+mod request;
 pub mod transport;
 pub mod wire;
 

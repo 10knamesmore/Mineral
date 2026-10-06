@@ -9,6 +9,7 @@ use mineral_model::{
 use mineral_playback::DirectMedia;
 use rustc_hash::FxHashMap;
 
+use crate::wire::album::SavedAlbum;
 use crate::wire::artist::{ArtistAlbum, ArtistAlbumsResult, ArtistDetailResult};
 use crate::wire::playlist::{PlaylistInfo, TrackId};
 use crate::wire::search::{AlbumDetailResult, SearchAlbum, SearchArtist, SearchPlaylist};
@@ -62,6 +63,17 @@ pub(crate) fn album_dto_to_model(a: SearchAlbum, tracks: Vec<AlbumTrack>) -> Alb
         .track_count(Some(a.size))
         .cover_url(a.pic_url.as_deref().and_then(parse_remote))
         .tracks(tracks)
+        .build()
+}
+
+/// 账号收藏列表保留全部艺人和未知曲目数，不推导曲目或收藏时间。
+pub(crate) fn saved_album_to_model(album: SavedAlbum) -> Album {
+    Album::builder()
+        .id(AlbumId::new(SourceKind::NETEASE, album.id.to_string()))
+        .name(album.name)
+        .artists(album_artist_refs(album.artists, None))
+        .track_count(album.size)
+        .cover_url(parse_remote_opt(album.pic_url.as_deref()))
         .build()
 }
 

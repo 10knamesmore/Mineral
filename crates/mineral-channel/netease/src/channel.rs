@@ -24,9 +24,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{ApiCodeError, Error as NeteaseError};
 
+use crate::album::AlbumLoader;
 use crate::api;
 use crate::config::NeteaseConfig;
 use crate::convert;
+use crate::request::RequestPolicies;
 use crate::transport::Transport;
 
 /// 网易云 channel 实例。
@@ -42,6 +44,12 @@ pub struct NeteaseChannel {
 
     /// 歌单曲目请求批次，在 channel 构造时由来源配置注入。
     playlist: crate::playlist::PlaylistLoader,
+
+    /// 随实例共享的端点发送额度与限流退避策略。
+    requests: RequestPolicies,
+
+    /// 专辑详情的持久缓存读取与到期刷新。
+    album: AlbumLoader,
 }
 
 impl NeteaseChannel {
@@ -59,6 +67,8 @@ impl NeteaseChannel {
             user_id: None,
             persist,
             playlist: crate::playlist::PlaylistLoader::new(config.playlist_fetch()),
+            requests: RequestPolicies::new(config.requests()),
+            album: AlbumLoader::new(config.album_cache()),
         })
     }
 
@@ -135,6 +145,8 @@ impl NeteaseChannel {
             user_id,
             persist,
             playlist: crate::playlist::PlaylistLoader::new(config.playlist_fetch()),
+            requests: RequestPolicies::new(config.requests()),
+            album: AlbumLoader::new(config.album_cache()),
         })
     }
 
@@ -149,9 +161,7 @@ impl NeteaseChannel {
 fn map_err(error: NeteaseError) -> Error {
     match error {
         NeteaseError::Api(ApiCodeError { code: 301, .. }) => Error::AuthRequired,
-        NeteaseError::Api(ApiCodeError {
-            code: 405 | 512, ..
-        }) => Error::RateLimited,
+        error if error.is_rate_limited() => Error::RateLimited,
         NeteaseError::Api(ApiCodeError { code, message }) => Error::Api { code, message },
         NeteaseError::Network { .. } => Error::Network {
             source: Box::new(error),
@@ -331,10 +341,15 @@ impl MusicChannel for NeteaseChannel {
     }
 
     async fn album_detail(&self, id: &AlbumId) -> Result<Album> {
-        let dto = api::album::detail(&self.transport, id)
+        self.album
+            .load(
+                &self.transport,
+                &self.requests.album_detail,
+                self.persist.as_deref(),
+                id,
+            )
             .await
-            .map_err(map_err)?;
-        Ok(convert::album_detail_to_model(dto))
+            .map_err(map_err)
     }
 
     /// 预览或完整加载由歌单模块执行，远端请求失败映射为公共 channel 错误。
@@ -350,7 +365,7 @@ impl MusicChannel for NeteaseChannel {
     }
 
     async fn lyrics(&self, id: &SongId) -> Result<Lyrics> {
-        api::lyric::lyrics(&self.transport, id)
+        api::lyric::lyrics(&self.transport, &self.requests.lyrics, id)
             .await
             .map_err(map_err)
     }
@@ -372,6 +387,30 @@ impl MusicChannel for NeteaseChannel {
             Some(uid) => self.user_playlists(uid).await,
             None => Err(Error::NotSupported),
         }
+    }
+
+    async fn my_albums(&self) -> Result<Vec<Album>> {
+        if self.user_id.is_none() {
+            return Err(Error::NotSupported);
+        }
+        const PAGE_SIZE: usize = 50;
+        let mut albums = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = api::album::saved(&self.transport, offset, PAGE_SIZE)
+                .await
+                .map_err(map_err)?;
+            let count = page.data.len();
+            mineral_log::debug!(target: "netease", offset, count, more = page.has_more,
+                "saved album page fetched");
+            albums.extend(page.data.into_iter().map(convert::saved_album_to_model));
+            if !page.has_more {
+                break;
+            }
+            offset += PAGE_SIZE;
+        }
+        mineral_log::info!(target: "netease", albums = albums.len(), "saved albums fetched");
+        Ok(albums)
     }
 
     /// 拉网易云账号远端红心的歌曲 ID 集合(纯远端)。
@@ -464,11 +503,13 @@ impl PlaybackProvider for NeteaseChannel {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use mineral_channel_core::{Error, MusicChannel};
     use mineral_model::{SongId, SourceKind};
 
     use crate::NeteaseChannel;
-    use crate::config::NeteaseConfig;
+    use crate::config::{AlbumCacheConfig, NeteaseConfig, RequestsConfig};
     use crate::error::ApiCodeError;
 
     /// 按 code 映射 API 错误，其余分类保留底层原因。
@@ -511,11 +552,32 @@ mod tests {
     /// 故匿名 channel 不读本地 loved_ids。
     #[tokio::test]
     async fn favorite_methods_not_supported_when_anonymous() -> color_eyre::Result<()> {
+        let defaults = mineral_server::config::DaemonConfig::defaults()?;
+        let source = defaults.sources().netease();
+        let requests = source.requests();
         let config = NeteaseConfig::builder()
+            .album_cache(
+                AlbumCacheConfig::builder()
+                    .ttl_days(*source.album_cache().ttl_days())
+                    .ttl_jitter_days(*source.album_cache().ttl_jitter_days())
+                    .build(),
+            )
             .playlist_fetch(
                 crate::config::PlaylistFetchConfig::builder()
                     .batch_size(std::num::NonZeroUsize::new(500).unwrap())
                     .max_concurrent(std::num::NonZeroUsize::new(3).unwrap())
+                    .build(),
+            )
+            .requests(
+                RequestsConfig::builder()
+                    .album_detail_requests_per_second(*requests.album_detail_requests_per_second())
+                    .retry_delays(
+                        requests
+                            .retry_delays_ms()
+                            .iter()
+                            .map(|delay| Duration::from_millis(delay.get()))
+                            .collect(),
+                    )
                     .build(),
             )
             .max_connections(0)
@@ -528,6 +590,10 @@ mod tests {
             matches!(channel.liked_song_ids().await, Err(Error::NotSupported)),
             "匿名 liked_song_ids 应 NotSupported(纯远端,不降级本地)"
         );
+        assert!(matches!(
+            channel.my_albums().await,
+            Err(Error::NotSupported)
+        ));
         let id = SongId::new(SourceKind::NETEASE, "10001");
         assert!(
             matches!(

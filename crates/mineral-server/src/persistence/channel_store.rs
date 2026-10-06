@@ -2,8 +2,8 @@
 
 use super::{Error, NamespaceStore, ServerStore};
 use mineral_channel_core::store::{
-    CachedPlaylistEntry, LibraryStore, NamespaceStore as ChannelStore, PlaylistCacheEntry,
-    StoreError, StoreResult,
+    AlbumCacheEntry, CachedPlaylistEntry, LibraryStore, NamespaceStore as ChannelStore,
+    PlaylistCacheEntry, StoreError, StoreResult,
 };
 use mineral_model::{
     AlbumId, ArtistId, Envelope, Playlist, PlaylistId, Song, SongId, SourceKind, StoreValue,
@@ -31,6 +31,14 @@ impl ChannelStore for NamespaceStore {
 
     async fn album_name(&self, id: &AlbumId) -> StoreResult<Option<String>> {
         Self::album_name(self, id).await.map_err(Into::into)
+    }
+
+    async fn get_album_cache(&self, id: &AlbumId) -> StoreResult<Option<AlbumCacheEntry>> {
+        Self::get_album_cache(self, id).await.map_err(Into::into)
+    }
+
+    async fn put_album_cache(&self, entry: &AlbumCacheEntry) -> StoreResult<()> {
+        Self::put_album_cache(self, entry).await.map_err(Into::into)
     }
 
     async fn artist_name(&self, id: &ArtistId) -> StoreResult<Option<String>> {

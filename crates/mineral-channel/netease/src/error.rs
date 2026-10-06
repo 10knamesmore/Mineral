@@ -81,10 +81,10 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// 歌单缓存持久化失败。
+    /// 来源缓存持久化失败。
     #[error(transparent)]
     Storage(
-        /// 歌单缓存存储错误。
+        /// 来源缓存存储错误。
         #[from]
         mineral_channel_core::store::StoreError,
     ),
@@ -127,6 +127,19 @@ pub enum Error {
         /// 接口返回的状态码。
         code: i64,
     },
+}
+
+impl Error {
+    /// 读取端点可以退避的限流业务码；写端点不启用自动重试。
+    pub(crate) fn is_rate_limited(&self) -> bool {
+        matches!(
+            self,
+            Self::Api(ApiCodeError {
+                code: 405 | 512,
+                ..
+            })
+        )
+    }
 }
 
 /// 网易云操作结果。

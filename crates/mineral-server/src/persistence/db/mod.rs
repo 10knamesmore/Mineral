@@ -2,6 +2,7 @@
 
 pub(crate) mod schema;
 
+mod album_cache;
 mod envelope;
 mod namespace;
 pub(crate) mod rows;

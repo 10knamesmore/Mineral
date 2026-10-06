@@ -25,7 +25,10 @@
 //!     raw /weapi/cloudsearch/get/web weapi '{"s":"晴天","type":1,"limit":5}'
 //! ```
 
+use std::time::Duration;
+
 use clap::{Parser, Subcommand, ValueEnum};
+use mineral_channel_netease::config::{AlbumCacheConfig, PlaylistFetchConfig, RequestsConfig};
 use mineral_channel_netease::transport::client::RequestSpec;
 use mineral_channel_netease::transport::headers::UaKind;
 use mineral_channel_netease::transport::url::Crypto;
@@ -146,16 +149,36 @@ async fn main() -> Result<()> {
 
 /// 用已存登录态构造 channel;未登录则匿名(仅公开端点可用)。
 fn build_channel() -> Result<NeteaseChannel> {
+    let defaults = mineral_server::config::DaemonConfig::defaults()?;
+    let source = defaults.sources().netease();
     let cfg = NeteaseConfig::builder()
-        .playlist_fetch({
-            let defaults =
-                mineral_server::config::DaemonConfig::defaults().expect("valid daemon defaults");
-            let fetch = defaults.sources().netease().playlist_fetch();
-            mineral_channel_netease::config::PlaylistFetchConfig::builder()
-                .batch_size(*fetch.batch_size())
-                .max_concurrent(*fetch.max_concurrent())
-                .build()
-        })
+        .album_cache(
+            AlbumCacheConfig::builder()
+                .ttl_days(*source.album_cache().ttl_days())
+                .ttl_jitter_days(*source.album_cache().ttl_jitter_days())
+                .build(),
+        )
+        .playlist_fetch(
+            PlaylistFetchConfig::builder()
+                .batch_size(*source.playlist_fetch().batch_size())
+                .max_concurrent(*source.playlist_fetch().max_concurrent())
+                .build(),
+        )
+        .requests(
+            RequestsConfig::builder()
+                .album_detail_requests_per_second(
+                    *source.requests().album_detail_requests_per_second(),
+                )
+                .retry_delays(
+                    source
+                        .requests()
+                        .retry_delays_ms()
+                        .iter()
+                        .map(|delay| Duration::from_millis(delay.get()))
+                        .collect(),
+                )
+                .build(),
+        )
         .max_connections(0)
         .proxy(None)
         .timeout_secs(100)

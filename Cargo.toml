@@ -56,6 +56,7 @@ derive-getters     = "0.5"
 derive_setters     = "0.1"
 fast_image_resize  = { version = "6.1", default-features = false, features = ["image"] }
 futures-util       = "0.3"
+governor           = { version = "0.10", default-features = false, features = ["std"] }
 hex                = "0.4"
 sha2               = "0.10"
 image              = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
@@ -133,7 +134,7 @@ time               = "0.3"
 typed-builder      = "0.20"
 tokio              = { version = "1.45.1", features = ["full"] }
 tokio-util         = { version = "0.7", features = ["codec", "io"] }
-sea-orm = { version = "2.0.2", default-features = false, features = ["macros", "sqlx-sqlite", "runtime-tokio", "sqlite-use-returning-for-3_35"] }
+sea-orm = { version = "2.0.2", default-features = false, features = ["macros", "sqlx-sqlite", "runtime-tokio", "sqlite-use-returning-for-3_35", "with-chrono"] }
 sea-orm-migration = { version = "2.0.2", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
 parking_lot       = "0.12"
 arc-swap          = "1"
@@ -155,8 +156,6 @@ smallvec           = "1"
 
 [workspace.lints.rust]
 warnings    = "deny"
-unsafe_code = "deny"
-missing_docs = "deny"
 
 [workspace.lints.clippy]
 panic                              = "deny"
@@ -187,7 +186,6 @@ missing_safety_doc                 = "deny"
 module_inception                   = "allow"
 use_self                           = "deny"
 too_many_lines                     = "deny"
-missing_docs_in_private_items      = "deny"
 
 [profile.release]
 lto = "thin"

@@ -78,7 +78,7 @@ pub(crate) async fn collect(
     tags
 }
 
-/// 拉取并缓存专辑字段;限流时退避重试,最终失败(含能力缺失)记警告并缓存为 `None`。
+/// 拉取并缓存专辑字段；请求策略由 channel 执行，失败记警告并缓存为 `None`。
 ///
 /// # Params:
 ///   - `channel`: 该歌来源的 channel
@@ -97,7 +97,7 @@ async fn fetch_album(
     if let Some(hit) = cache.lock().get(&key) {
         return hit.clone();
     }
-    let result = match with_backoff(|| channel.album_detail(&album_ref.id)).await {
+    let result = match channel.album_detail(&album_ref.id).await {
         Ok(album) => Some(AlbumTags {
             artists: album
                 .artists
@@ -116,65 +116,18 @@ async fn fetch_album(
     result
 }
 
-/// 拉歌词:结构化歌词 → lrc 文本(带限流退避)。源无歌词能力(NotSupported)是常态,
+/// 拉歌词:结构化歌词 → lrc 文本。请求策略由 channel 执行；源无歌词能力是常态,
 /// 不记日志。
 ///
 /// # Return:
 ///   lrc 文本;无歌词 / 拉取失败为 `None`。
 async fn fetch_lyrics(channel: &dyn MusicChannel, song: &Song) -> Option<String> {
-    match with_backoff(|| channel.lyrics(&song.id)).await {
+    match channel.lyrics(&song.id).await {
         Ok(lyrics) if !lyrics.lines.is_empty() => Some(mineral_model::to_lrc_string(&lyrics.lines)),
         Ok(_) | Err(ChannelError::NotSupported) => None,
         Err(e) => {
             mineral_log::warn!(target: "tagging", song_id = song.id.as_str(), error = mineral_log::chain(&e), "拉歌词失败,歌词字段缺省");
             None
-        }
-    }
-}
-
-/// 限流退避序列(2s / 5s / 15s;打标是后台任务,等得起)。
-const BACKOFFS: [Duration; 3] = [
-    Duration::from_secs(2),
-    Duration::from_secs(5),
-    Duration::from_secs(15),
-];
-
-/// 限流退避包装:channel 调用命中 `RateLimited` 时按 [`BACKOFFS`] 退避重试,其余结果
-/// (成功 / 其他错误)原样返回。限流是服务端临时状态,立刻当失败会让本文件本轮缺字段。
-///
-/// # Params:
-///   - `call`: channel 调用工厂(重试时重新调用)
-///
-/// # Return:
-///   最终一次调用的结果(退避耗尽仍限流 → `Err(RateLimited)`)。
-async fn with_backoff<T, Fut, F>(call: F) -> std::result::Result<T, mineral_channel_core::Error>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<T, mineral_channel_core::Error>>,
-{
-    with_backoff_in(call, BACKOFFS).await
-}
-
-/// [`with_backoff`] 的可注入退避序列版(测试用零时长)。
-async fn with_backoff_in<T, Fut, F>(
-    mut call: F,
-    backoffs: impl IntoIterator<Item = Duration>,
-) -> std::result::Result<T, mineral_channel_core::Error>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<T, mineral_channel_core::Error>>,
-{
-    let mut backoffs = backoffs.into_iter();
-    loop {
-        match call().await {
-            Err(e) if matches!(e, ChannelError::RateLimited) => {
-                let Some(delay) = backoffs.next() else {
-                    return Err(e);
-                };
-                mineral_log::warn!(target: "tagging", delay_ms = delay.as_millis(), "限流,退避重试");
-                tokio::time::sleep(delay).await;
-            }
-            result => return result,
         }
     }
 }
@@ -227,7 +180,7 @@ fn publish_year(ms: i64) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::Ordering;
 
     use mineral_model::{
         Album, AlbumId, AlbumRef, ArtistId, ArtistRef, LyricLine, Lyrics, SongId, SourceKind,
@@ -361,53 +314,6 @@ mod tests {
         assert_eq!(tags.label, None, "专辑详情失败 → 厂牌缺省");
         assert_eq!(tags.lyrics_lrc, None, "歌词不支持 → 歌词缺省");
         assert_eq!(tags.cover, None, "封面 GET 失败 → 封面缺省");
-        Ok(())
-    }
-
-    /// 限流退避:`RateLimited` 重试到成功;退避耗尽返回限流错误;其他错误不重试。
-    #[tokio::test]
-    async fn backoff_retries_rate_limited() -> color_eyre::Result<()> {
-        let zero = [Duration::ZERO; 3];
-        // 两次限流后成功:应重试并最终拿到值。
-        let calls = AtomicUsize::new(0);
-        let r: std::result::Result<u32, ChannelError> = with_backoff_in(
-            || {
-                calls.fetch_add(1, Ordering::AcqRel);
-                std::future::ready(if calls.load(Ordering::Acquire) < 3 {
-                    Err(ChannelError::RateLimited)
-                } else {
-                    Ok(7)
-                })
-            },
-            zero,
-        )
-        .await;
-        assert_eq!(r.ok(), Some(7));
-        assert_eq!(calls.load(Ordering::Acquire), 3);
-        // 持续限流:退避耗尽后返回 RateLimited(共 1 + 3 次调用)。
-        let calls2 = AtomicUsize::new(0);
-        let r2: std::result::Result<u32, ChannelError> = with_backoff_in(
-            || {
-                calls2.fetch_add(1, Ordering::AcqRel);
-                std::future::ready(Err(ChannelError::RateLimited))
-            },
-            zero,
-        )
-        .await;
-        assert!(matches!(r2, Err(ChannelError::RateLimited)));
-        assert_eq!(calls2.load(Ordering::Acquire), 4, "退避序列用完后放弃");
-        // 其他错误(非限流)不重试。
-        let calls3 = AtomicUsize::new(0);
-        let r3: std::result::Result<u32, ChannelError> = with_backoff_in(
-            || {
-                calls3.fetch_add(1, Ordering::AcqRel);
-                std::future::ready(Err(ChannelError::NotSupported))
-            },
-            zero,
-        )
-        .await;
-        assert!(matches!(r3, Err(ChannelError::NotSupported)));
-        assert_eq!(calls3.load(Ordering::Acquire), 1, "非限流错误不应重试");
         Ok(())
     }
 

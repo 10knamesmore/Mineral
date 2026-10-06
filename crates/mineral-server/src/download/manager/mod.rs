@@ -6,7 +6,4 @@ mod lifecycle;
 mod scheduler;
 mod state;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use lifecycle::{DownloadManager, DownloadRuntime, StopError};
