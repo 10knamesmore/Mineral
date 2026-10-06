@@ -72,6 +72,8 @@ jobs:
         run: cargo install --locked cargo-dylint dylint-link
 
       - name: 完整检查
+        env:
+          CHECK_TOOLING: "1"
         run: scripts/check.sh
 
       # —— 生成 CHANGELOG:只渲染上个 tag 之后的 feat/fix/perf,prepend,不动历史条目 ——

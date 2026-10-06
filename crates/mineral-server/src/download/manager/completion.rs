@@ -121,12 +121,7 @@ impl DownloadManager {
                 format,
                 hooked,
             } => {
-                self.inner.runtime.notify.download_completed(
-                    &attempt.song,
-                    &path,
-                    quality,
-                    format.as_ref(),
-                );
+                self.inner.runtime.notify.download_completed(&attempt.song);
                 self.inner
                     .runtime
                     .tagging

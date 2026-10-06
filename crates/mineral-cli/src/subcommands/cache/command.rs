@@ -55,16 +55,26 @@ pub async fn run(command: CacheCommand) -> Result<()> {
 /// # Return:
 ///   渲染并打印成功返回 `Ok(())`。
 async fn status(detail: bool) -> Result<()> {
-    // CLI 离线自 eval 配置取容量(与 daemon 同一真相源);用户配置坏已在 loader 降级默认。
-    let (config, _warnings) =
-        mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
+    // 音频容量归 daemon，封面容量归 TUI；两份加载都不执行 setup。
+    let dir = mineral_paths::config_dir()?;
+    let ((config, _warnings), (tui_config, _tui_warnings)) =
+        tokio::task::spawn_blocking(move || {
+            Ok::<_, mineral_config::Error>((
+                mineral_server::config::load_daemon(&dir.join("daemon.lua"))?,
+                mineral_tui::config::load_tui(&dir.join("tui.lua"))?,
+            ))
+        })
+        .await
+        .map_err(Error::ConfigTask)??;
     // sqlite `mode=rwc` 只建文件不建父目录,fresh env 下需先确保 data_dir 存在。
     let data_dir = mineral_paths::data_dir()?;
-    std::fs::create_dir_all(&data_dir).map_err(|source| Error::Io {
-        operation: "create data directory",
-        path: data_dir.clone(),
-        source,
-    })?;
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .map_err(|source| Error::Io {
+            operation: "create data directory",
+            path: data_dir.clone(),
+            source,
+        })?;
 
     let persist = ServerStore::open(&data_dir.join("mineral.db")).await?;
     let audio_stats = persist
@@ -80,7 +90,7 @@ async fn status(detail: bool) -> Result<()> {
     let cover_stats = mineral_tui::cache::snapshot(
         &mineral_paths::tui_db()?,
         mineral_paths::cover_cache_dir()?,
-        *config.tui().cover().cache().disk(),
+        *tui_config.cover().cache().disk(),
     )
     .await?;
     let cover = CoverInput {
@@ -103,11 +113,13 @@ async fn status(detail: bool) -> Result<()> {
 ///   全部清理成功返回 `Ok(())`。某子项不存在(目录 / 库未创建)视为已清空,不报错。
 async fn clean() -> Result<()> {
     let data_dir = mineral_paths::data_dir()?;
-    std::fs::create_dir_all(&data_dir).map_err(|source| Error::Io {
-        operation: "create data directory",
-        path: data_dir.clone(),
-        source,
-    })?;
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .map_err(|source| Error::Io {
+            operation: "create data directory",
+            path: data_dir.clone(),
+            source,
+        })?;
 
     let persist = ServerStore::open(&data_dir.join("mineral.db")).await?;
     let playlist = persist.clear_playlist_caches().await?;
@@ -136,10 +148,10 @@ async fn clean() -> Result<()> {
 ///   打印计划 / 回执后返回 `Ok(())`;删除失败(如 daemon 仍占用库文件)冒泡报错。
 fn reset(yes: bool) -> Result<()> {
     let server_db = mineral_paths::data_dir()?.join("mineral.db");
-    let client_db = mineral_paths::tui_db()?;
+    let tui_db = mineral_paths::tui_db()?;
     let mut rows = Vec::<render::ResetRow>::new();
 
-    for db in [server_db, client_db] {
+    for db in [server_db, tui_db] {
         // sqlite WAL 模式的 -wal / -shm 伴生文件必须与主库同删:半套残留会让重建的库
         // 在下次打开时读到旧页,比不删更糟。
         for suffix in ["", "-wal", "-shm"] {

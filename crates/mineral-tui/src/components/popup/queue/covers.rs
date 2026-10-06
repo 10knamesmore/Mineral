@@ -13,7 +13,7 @@ impl QueueOverlay {
         }
         let visible = self.visible(ctx);
         let selected = self.list.sel();
-        let radius = *ctx.cfg.tui().prefetch().radius();
+        let radius = *ctx.cfg.prefetch().radius();
         let mut covers = Vec::new();
         let mut consider = |index: usize| {
             if let Some(song) = visible.get(index).and_then(|&raw| ctx.queue.get(raw))

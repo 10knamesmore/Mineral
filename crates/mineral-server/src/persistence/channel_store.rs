@@ -101,10 +101,6 @@ impl ChannelStore for NamespaceStore {
         Self::kv_set(self, id, key, value).await.map_err(Into::into)
     }
 
-    async fn kv_inc(&self, id: &SongId, key: &str, delta: i64) -> StoreResult<StoreValue> {
-        Self::kv_inc(self, id, key, delta).await.map_err(Into::into)
-    }
-
     async fn set_rating(&self, id: &SongId, rating: Option<u8>) -> StoreResult<()> {
         Self::set_rating(self, id, rating).await.map_err(Into::into)
     }

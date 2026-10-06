@@ -1,46 +1,34 @@
-//! api 各模块单测的共享构造器(仅 `#[cfg(test)]` 编译)。
+//! daemon Lua API 单测共用的 VM、通道与看门狗构造器。
 
 use mlua::Lua;
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::host::{ScriptHost, install_api};
+use crate::host::{ScriptHost, install_daemon_api};
 use crate::message::ScriptCmd;
 
-/// 装好 API 的 VM + 宿主句柄(注册表断言用)。
+/// 装好 daemon 模块的 VM 与宿主，不创建全局 mineral。
 pub(crate) fn vm_with_host() -> color_eyre::Result<(Lua, ScriptHost)> {
     let (cmd_tx, _cmd_rx) = unbounded_channel();
     let (push_tx, _push_rx) = unbounded_channel();
     let host = ScriptHost::new(cmd_tx, push_tx);
     let lua = Lua::new();
-    install_api(&lua, &host)?;
+    install_daemon_api(&lua, &host)?;
     Ok((lua, host))
 }
 
-/// 装好 API 的 VM + 命令接收端(命令形状断言用)。
+/// 装好 daemon 模块的 VM 与命令接收端。
 pub(crate) fn vm_with_commands()
 -> color_eyre::Result<(Lua, tokio::sync::mpsc::UnboundedReceiver<ScriptCmd>)> {
     let (cmd_tx, cmd_rx) = unbounded_channel();
     let (push_tx, _push_rx) = unbounded_channel();
     let host = ScriptHost::new(cmd_tx, push_tx);
     let lua = Lua::new();
-    install_api(&lua, &host)?;
+    install_daemon_api(&lua, &host)?;
+    host.commands.activate();
     Ok((lua, cmd_rx))
 }
 
-/// 装好 API 的 VM + 推送接收端(toast / 推送形状断言用)。
-pub(crate) fn vm_with_push() -> color_eyre::Result<(
-    Lua,
-    tokio::sync::mpsc::UnboundedReceiver<mineral_protocol::Event>,
-)> {
-    let (cmd_tx, _cmd_rx) = unbounded_channel();
-    let (push_tx, push_rx) = unbounded_channel();
-    let host = ScriptHost::new(cmd_tx, push_tx);
-    let lua = Lua::new();
-    install_api(&lua, &host)?;
-    Ok((lua, push_rx))
-}
-
-/// 排干命令通道。
+/// 排干音乐命令通道。
 pub(crate) fn drain_cmds(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<ScriptCmd>,
 ) -> Vec<ScriptCmd> {

@@ -5,10 +5,10 @@ use color_eyre::eyre::eyre;
 
 use mineral_model::SongId;
 use mineral_protocol::{
-    BusValue, ClientInfo, CloseReason, CodecError, DownloadDetailDelta, DownloadDetailUpdate,
-    DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary, DownloadWave, FailureKind,
-    FailureNotice, MessageBatch, OperationFailure, OperationResult, PcmChunk, PlayerSync, Request,
-    RequestId, Response, ServerHello, SessionMessage, SessionRequest, SessionResult, SocketWire,
+    ClientInfo, CloseReason, CodecError, DownloadDetailDelta, DownloadDetailUpdate, DownloadId,
+    DownloadOrigin, DownloadStatus, DownloadSummary, DownloadWave, FailureKind, FailureNotice,
+    MessageBatch, OperationFailure, OperationResult, PcmChunk, PlayerSync, Request, RequestId,
+    Response, ServerHello, SessionMessage, SessionRequest, SessionResult, SocketWire,
     SongDownloadView, SubscribeRequest, Subscription, SubscriptionId, SubscriptionTopic,
     UpdateEnvelope, UpdatePayload, Wire, WireError, decode, encode, framed, recv, send,
 };
@@ -144,9 +144,17 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
                 version: 14,
                 parts: 1,
                 index: 0,
-                payload: UpdatePayload::Event(Box::new(mineral_protocol::Event::ConfigChanged {
-                    config: BusValue::Nil,
-                })),
+                payload: UpdatePayload::Event(Box::new(
+                    mineral_protocol::Event::ServiceInfoChanged {
+                        info: mineral_protocol::ServiceInfo {
+                            queue_transforms: vec!["dedupe".to_owned()],
+                            play_counts: mineral_protocol::PlayCountAvailability {
+                                enabled: true,
+                                excluded_sources: vec!["local".to_owned()],
+                            },
+                        },
+                    },
+                )),
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
@@ -155,7 +163,7 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
                 index: 0,
                 payload: UpdatePayload::Event(Box::new(mineral_protocol::Event::Failure(
                     FailureNotice::ConfigRejected {
-                        fields: vec!["tui.behavior.volume_step".to_owned()],
+                        fields: vec!["download.max_concurrent".to_owned()],
                     },
                 ))),
             }),

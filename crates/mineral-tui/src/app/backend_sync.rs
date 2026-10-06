@@ -6,7 +6,6 @@
 use std::time::Instant;
 
 use mineral_client::operation::Outcome;
-use mineral_client::state::WindowTitleOverride;
 use mineral_protocol::{PlayerSync, QueueEditOutcome, QueueSync, SubscriptionTopic};
 
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
@@ -57,10 +56,10 @@ impl App {
         if let Some(sync) = sync {
             self.apply_player_sync(sync);
         }
-        self.state.ui.transport.sync_mode(
-            self.state.models.playback.mode,
-            self.state.cfg.tui().animation(),
-        );
+        self.state
+            .ui
+            .transport
+            .sync_mode(self.state.models.playback.mode, self.state.cfg.animation());
 
         if let Some(tasks) = self.client.tasks() {
             self.state.models.tasks_snapshot = tasks;
@@ -70,12 +69,6 @@ impl App {
             .feed(&mut self.notifications, &summary);
         self.state.models.downloads_summary = summary;
         self.sync_downloads_subscription();
-
-        if self.state.models.window_title_override.is_none()
-            && let WindowTitleOverride::Set(text) = self.client.window_title_override()
-        {
-            self.state.models.window_title_override = text;
-        }
     }
 
     /// Downloads 浮层生命周期 ↔ 明细订阅生命周期。
@@ -179,36 +172,6 @@ impl App {
                 }
                 Outcome::Applied(_) | Outcome::Accepted(_) => {}
             },
-            Completion::ScriptAction { name, outcome } => {
-                if let Some(message) = completion_failure(&outcome, "Action failed") {
-                    self.notifications.flash(tinted_text_item(
-                        format!("{name}: {message}"),
-                        TextTint::Error,
-                    ));
-                }
-            }
-            Completion::CopyTemplate(outcome) => match outcome {
-                Outcome::Applied(Ok(text)) => self.copy_to_clipboard(&text),
-                Outcome::Applied(Err(error)) => {
-                    mineral_log::warn!(target: "tui", error = mineral_log::chain(&error), "copy template failed");
-                    let message = match error {
-                        mineral_protocol::CopyTextFailure::ScriptDisabled => "Scripts are disabled",
-                        mineral_protocol::CopyTextFailure::ScriptThreadExited
-                        | mineral_protocol::CopyTextFailure::CallbackFailed { .. } => "复制失败",
-                    };
-                    self.notifications
-                        .flash(tinted_text_item(message.to_owned(), TextTint::Error));
-                }
-                failure @ (Outcome::Failed { .. } | Outcome::Unknown { .. }) => {
-                    log_completion_failure(&failure, "copy template request failed");
-                    self.notifications
-                        .flash(tinted_text_item("复制失败".to_owned(), TextTint::Error));
-                }
-                Outcome::Accepted(_) => {
-                    self.notifications
-                        .flash(tinted_text_item("复制失败".to_owned(), TextTint::Error));
-                }
-            },
             Completion::Love { song_id, outcome } => {
                 // 服务端结论为准:失败提示;成功时订阅刷新会校正乐观值。
                 if let failure @ (Outcome::Failed { .. } | Outcome::Unknown { .. }) = outcome {
@@ -226,7 +189,6 @@ impl App {
                         .flash(tinted_text_item(message.to_owned(), TextTint::Error));
                 }
             }
-            Completion::ScriptBinds(binds) => self.apply_script_binds(&binds),
         }
     }
 }

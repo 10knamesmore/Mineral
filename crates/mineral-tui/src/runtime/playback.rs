@@ -84,7 +84,7 @@ impl EnvelopeState {
     /// # Params:
     ///   - `owner`: 包络归属的歌曲 id
     ///   - `envelope`: 包络数据
-    ///   - `ticks`: 入场动画全程拍数(由 `tui.waveform.reveal.duration_ms` 折算)
+    ///   - `ticks`: 入场动画全程拍数(由 `waveform.reveal.duration_ms` 折算)
     pub fn new(owner: SongId, envelope: Envelope, ticks: u16) -> Self {
         Self {
             owner,

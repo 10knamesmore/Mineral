@@ -20,5 +20,9 @@ filter = "binary(script_hooks)"
 test-group = "daemon-e2e"
 
 [[profile.default.overrides]]
+filter = "binary(session_e2e)"
+test-group = "daemon-e2e"
+
+[[profile.default.overrides]]
 filter = "binary(ctl_e2e)"
 test-group = "daemon-e2e"

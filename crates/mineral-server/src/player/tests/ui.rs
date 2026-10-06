@@ -1,4 +1,4 @@
-//! 配置宿主(覆盖合成 / 校验剔除 / 标题覆盖)· terminal 属性上报 · queue 插入编辑。
+//! 配置宿主(覆盖合成 / 校验剔除)· terminal 属性上报 · queue 插入编辑。
 
 use std::sync::Arc;
 
@@ -31,19 +31,14 @@ fn core_with_hub() -> color_eyre::Result<(
     Ok((core, events_rx))
 }
 
-/// 从 hub 收一帧 `ConfigChanged`,按 JSON pointer 取叶子值(断言辅助)。
-fn config_leaf(
+/// 接收服务能力变化；测试不读取 daemon 的私有配置树。
+fn service_update(
     events_rx: &mut tokio::sync::broadcast::Receiver<mineral_protocol::Event>,
-    pointer: &str,
-) -> color_eyre::Result<serde_json::Value> {
+) -> color_eyre::Result<mineral_protocol::ServiceInfo> {
     match events_rx.try_recv()? {
-        mineral_protocol::Event::ConfigChanged { config } => config
-            .into_json()
-            .pointer(pointer)
-            .cloned()
-            .ok_or_else(|| color_eyre::eyre::eyre!("有效树缺 {pointer}")),
+        mineral_protocol::Event::ServiceInfoChanged { info } => Ok(info),
         other => {
-            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
+            color_eyre::eyre::bail!("expected service capability update, received {other:?}");
         }
     }
 }
@@ -51,64 +46,10 @@ fn config_leaf(
 /// RPC failures preserve their business category without inspecting error text.
 #[tokio::test]
 async fn rpc_failure_categories_follow_operation_state() -> color_eyre::Result<()> {
-    use mineral_protocol::{
-        CopyTemplateCtx, CopyTextFailure, DownloadId, FailureKind, OperationResult, Request,
-        Response,
-    };
+    use mineral_protocol::{DownloadId, FailureKind, OperationResult, Request};
 
     let (core, _events_rx) = core_with_hub()?;
     let client = crate::ClientHandle::new(core);
-    let action = crate::ipc::dispatch::execute_async(
-        &client,
-        crate::ipc::dispatch::AsyncRequest::InvokeAction {
-            name: "missing".to_owned(),
-            ctx: None,
-            args: Vec::new(),
-        },
-    )
-    .await;
-    assert!(
-        matches!(action, OperationResult::Failed(failure) if failure.kind == FailureKind::Unavailable)
-    );
-
-    let disabled_copy = crate::ipc::dispatch::execute_async(
-        &client,
-        crate::ipc::dispatch::AsyncRequest::RenderCopyTemplate {
-            index: 0,
-            ctx: CopyTemplateCtx::Song(Box::new(song("copy"))),
-        },
-    )
-    .await;
-    assert!(
-        matches!(disabled_copy, OperationResult::Query(response) if matches!(*response, Response::CopyText(Err(CopyTextFailure::ScriptDisabled))))
-    );
-
-    let (script_core, _runtime) = super::fixtures::core_with_script("return {}")?;
-    let script_client = crate::ClientHandle::new(script_core);
-    let unregistered = crate::ipc::dispatch::execute_async(
-        &script_client,
-        crate::ipc::dispatch::AsyncRequest::InvokeAction {
-            name: "missing".to_owned(),
-            ctx: None,
-            args: Vec::new(),
-        },
-    )
-    .await;
-    assert!(
-        matches!(unregistered, OperationResult::Failed(failure) if failure.kind == FailureKind::NotFound)
-    );
-
-    let callback_copy = crate::ipc::dispatch::execute_async(
-        &script_client,
-        crate::ipc::dispatch::AsyncRequest::RenderCopyTemplate {
-            index: 0,
-            ctx: CopyTemplateCtx::Song(Box::new(song("copy"))),
-        },
-    )
-    .await;
-    assert!(
-        matches!(callback_copy, OperationResult::Query(response) if matches!(*response, Response::CopyText(Err(CopyTextFailure::CallbackFailed { .. }))))
-    );
 
     let stop = crate::ipc::dispatch::execute_sync(
         &client,
@@ -133,105 +74,67 @@ async fn rpc_failure_categories_follow_operation_state() -> color_eyre::Result<(
     Ok(())
 }
 
-/// 配置覆盖:合成 + 校验 + 推送;同值重写与撤销不存在的 path 都不发事件;
-/// 撤销回落底树值。
+/// 服务能力查询与订阅重放一致；无脚本或 stats.db 时不宣称能力可用。
 #[tokio::test]
-async fn config_override_merges_and_diffs() -> color_eyre::Result<()> {
-    use mineral_protocol::BusValue;
-    let (core, mut events_rx) = core_with_hub()?;
-    core.apply_config_overrides(vec![override_op(
-        "tui.lyrics.fullscreen_line_gap",
-        Some(BusValue::Int(2)),
-    )]);
+async fn service_info_request_matches_subscription_replay() -> color_eyre::Result<()> {
+    use mineral_protocol::{Event, OperationResult, Request, Response, Subscription};
+    let (core, _events_rx) = core_with_hub()?;
+    let client = crate::ClientHandle::new(core);
+    let OperationResult::Query(response) =
+        crate::ipc::dispatch::execute_sync(&client, Request::ServiceInfo)
+    else {
+        color_eyre::eyre::bail!("service query missing response");
+    };
+    let Response::ServiceInfo(info) = *response else {
+        color_eyre::eyre::bail!("service query returned wrong response");
+    };
+    assert!(info.queue_transforms.is_empty());
+    assert!(!info.play_counts.enabled);
     assert_eq!(
-        config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?,
-        serde_json::json!(2),
-        "覆盖合成进有效树"
-    );
-    // 同值重写:不发。
-    core.apply_config_overrides(vec![override_op(
-        "tui.lyrics.fullscreen_line_gap",
-        Some(BusValue::Int(2)),
-    )]);
-    assert!(events_rx.try_recv().is_err(), "同值重写不得重复下发");
-    // 撤销不存在的 path:不发。
-    core.apply_config_overrides(vec![override_op("tui.lyrics.compact_line_gap", None)]);
-    assert!(events_rx.try_recv().is_err(), "撤销不存在的 path 不得下发");
-    // 握手重放快照反映覆盖。
-    assert_eq!(
-        core.effective_config()
-            .into_json()
-            .pointer("/tui/lyrics/fullscreen_line_gap"),
-        Some(&serde_json::json!(2)),
-        "重放快照带覆盖"
-    );
-    // 真撤销:回落底树默认值(default.lua 的 1)。
-    core.apply_config_overrides(vec![override_op("tui.lyrics.fullscreen_line_gap", None)]);
-    assert_eq!(
-        config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?,
-        serde_json::json!(1),
-        "撤销回落底树值"
+        client.replay_frames(&[Subscription::ServiceInfo]).await,
+        vec![Event::ServiceInfoChanged { info }]
     );
     Ok(())
 }
 
-/// 坏覆盖(类型不符 / 未知路径)被剔除:发送结构化告警、不推 ConfigChanged、
-/// 有效配置保持校验通过的那份;好覆盖不被殃及。
+/// 非能力配置不下发；统计策略覆盖、撤销与重载只发布实际能力变化。
 #[tokio::test]
-async fn bad_config_override_evicted_with_warning() -> color_eyre::Result<()> {
-    use mineral_protocol::{BusValue, Event, FailureNotice};
+async fn daemon_policy_overrides_publish_only_capability_changes() -> color_eyre::Result<()> {
+    use mineral_protocol::BusValue;
     let (core, mut events_rx) = core_with_hub()?;
-    // 先落一条好覆盖。
+    core.apply_config_overrides(vec![
+        override_op("audio.volume", Some(BusValue::Int(42))),
+        override_op("heartbeat_secs", Some(BusValue::Int(7))),
+        override_op("prev_restart_threshold_ms", Some(BusValue::Int(1000))),
+    ]);
+    assert!(events_rx.try_recv().is_err());
+    let excluded = BusValue::Array(vec![BusValue::Str("netease".to_owned())]);
     core.apply_config_overrides(vec![override_op(
-        "tui.lyrics.fullscreen_line_gap",
-        Some(BusValue::Int(3)),
+        "stats.exclude_sources",
+        Some(excluded.clone()),
     )]);
-    let _ = config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?;
-    // 类型不符:剔除 + 警告,好覆盖仍在。
-    core.apply_config_overrides(vec![override_op(
-        "tui.lyrics.compact_line_gap",
-        Some(BusValue::Str("x".to_owned())),
-    )]);
-    match events_rx.try_recv()? {
-        Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
-            assert_eq!(path, "tui.lyrics.compact_line_gap");
-        }
-        other => {
-            color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}");
-        }
-    }
-    assert!(
-        events_rx.try_recv().is_err(),
-        "坏覆盖不得推 ConfigChanged(有效树没变)"
-    );
-    let effective = core.effective_config().into_json();
     assert_eq!(
-        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
-        Some(&serde_json::json!(3)),
-        "好覆盖不被殃及"
+        service_update(&mut events_rx)?.play_counts.excluded_sources,
+        vec!["netease"]
     );
+    core.apply_config_overrides(vec![override_op("stats.exclude_sources", Some(excluded))]);
+    core.apply_config_overrides(vec![override_op("stats.collect.searches", None)]);
+    assert!(events_rx.try_recv().is_err());
+    core.set_config_base(mineral_config::merge_tree(
+        crate::config::default_daemon_tree()?,
+        serde_json::json!({"stats": {"exclude_sources": ["qqmusic"]}}),
+    ));
     assert_eq!(
-        effective.pointer("/tui/lyrics/compact_line_gap"),
-        Some(&serde_json::json!(0)),
-        "坏覆盖不生效,保持底树值"
+        core.service_info().play_counts.excluded_sources,
+        vec!["netease"]
     );
-    // 未知路径:deny_unknown_fields 拒 → 剔除 + 警告。
-    core.apply_config_overrides(vec![override_op(
-        "tui.lyrics.bogus",
-        Some(BusValue::Int(1)),
-    )]);
-    match events_rx.try_recv()? {
-        Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
-            assert_eq!(path, "tui.lyrics.bogus");
-        }
-        other => {
-            color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}");
-        }
-    }
-    assert!(
-        events_rx.try_recv().is_err(),
-        "未知路径不得推 ConfigChanged"
+    assert!(events_rx.try_recv().is_err());
+    core.apply_config_overrides(vec![override_op("stats.exclude_sources", None)]);
+    assert_eq!(
+        service_update(&mut events_rx)?.play_counts.excluded_sources,
+        vec!["qqmusic"]
     );
+    assert!(events_rx.try_recv().is_err());
     Ok(())
 }
 
@@ -246,135 +149,41 @@ fn override_op(
     }
 }
 
-/// 一批叶子 op 原子应用:全部落进 overlay,一次重算、恰推一帧 ConfigChanged。
+/// 一批覆盖只发布最终服务能力；坏 daemon 叶子和 client 配置字段均被拒绝。
 #[tokio::test]
-async fn config_override_batch_single_broadcast() -> color_eyre::Result<()> {
-    use mineral_protocol::BusValue;
-    let (core, mut events_rx) = core_with_hub()?;
-    core.apply_config_overrides(vec![
-        override_op("tui.lyrics.fullscreen_line_gap", Some(BusValue::Int(2))),
-        override_op("tui.lyrics.compact_line_gap", Some(BusValue::Int(3))),
-    ]);
-    let effective = match events_rx.try_recv()? {
-        mineral_protocol::Event::ConfigChanged { config } => config.into_json(),
-        other => {
-            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
-        }
-    };
-    assert_eq!(
-        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
-        Some(&serde_json::json!(2)),
-        "第一条叶子生效"
-    );
-    assert_eq!(
-        effective.pointer("/tui/lyrics/compact_line_gap"),
-        Some(&serde_json::json!(3)),
-        "第二条叶子同帧生效"
-    );
-    assert!(events_rx.try_recv().is_err(), "一批 op 只得推一帧");
-    Ok(())
-}
-
-/// 一批里坏叶子按 path 精确剔除并发结构化告警,好叶子照常生效同帧下推。
-#[tokio::test]
-async fn config_override_batch_evicts_only_bad_leaf() -> color_eyre::Result<()> {
+async fn daemon_override_batch_rejects_invalid_and_client_fields() -> color_eyre::Result<()> {
     use mineral_protocol::{BusValue, Event, FailureNotice};
     let (core, mut events_rx) = core_with_hub()?;
     core.apply_config_overrides(vec![
-        override_op("tui.lyrics.fullscreen_line_gap", Some(BusValue::Int(2))),
         override_op(
-            "tui.lyrics.compact_line_gap",
-            Some(BusValue::Str("x".to_owned())),
+            "stats.exclude_sources",
+            Some(BusValue::Array(vec![BusValue::Str("netease".to_owned())])),
+        ),
+        override_op(
+            "download.max_concurrent",
+            Some(BusValue::Str("invalid".to_owned())),
         ),
     ]);
-    match events_rx.try_recv()? {
-        Event::Failure(FailureNotice::ConfigOverrideRejected { path }) => {
-            assert_eq!(path, "tui.lyrics.compact_line_gap");
-        }
-        other => {
-            color_eyre::eyre::bail!("应收配置覆盖失败类别,实得 {other:?}");
-        }
+    assert!(
+        matches!(events_rx.try_recv()?, Event::Failure(FailureNotice::ConfigOverrideRejected { path }) if path == "download.max_concurrent")
+    );
+    assert_eq!(
+        service_update(&mut events_rx)?.play_counts.excluded_sources,
+        vec!["netease"]
+    );
+    assert!(events_rx.try_recv().is_err());
+    let (core, mut events_rx) = core_with_hub()?;
+    for rejected in [
+        "behavior.volume_step",
+        "tui.behavior.volume_step",
+        "daemon.heartbeat_secs",
+    ] {
+        core.apply_config_overrides(vec![override_op(rejected, Some(BusValue::Int(5)))]);
+        assert!(
+            matches!(events_rx.try_recv()?, Event::Failure(FailureNotice::ConfigOverrideRejected { path }) if path == rejected)
+        );
+        assert!(events_rx.try_recv().is_err());
     }
-    let effective = match events_rx.try_recv()? {
-        Event::ConfigChanged { config } => config.into_json(),
-        other => {
-            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
-        }
-    };
-    assert_eq!(
-        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
-        Some(&serde_json::json!(2)),
-        "好叶子不被殃及"
-    );
-    assert_eq!(
-        effective.pointer("/tui/lyrics/compact_line_gap"),
-        Some(&serde_json::json!(0)),
-        "坏叶子剔除,保持底树值"
-    );
-    assert!(events_rx.try_recv().is_err(), "剔除后不得再有多余帧");
-    Ok(())
-}
-
-/// 换底树(配置文件重载)后 session 覆盖仍叠在新底树上。
-#[tokio::test]
-async fn set_config_base_reapplies_overlay() -> color_eyre::Result<()> {
-    use mineral_protocol::BusValue;
-    let (core, mut events_rx) = core_with_hub()?;
-    core.apply_config_overrides(vec![override_op(
-        "tui.lyrics.fullscreen_line_gap",
-        Some(BusValue::Int(4)),
-    )]);
-    let _ = config_leaf(&mut events_rx, "/tui/lyrics/fullscreen_line_gap")?;
-    // 新底树 = 默认树上改 audio.volume(模拟用户改文件)。
-    let new_base = mineral_config::merge_tree(
-        mineral_config::default_tree()?,
-        serde_json::json!({ "audio": { "volume": 55 } }),
-    );
-    core.set_config_base(new_base);
-    let effective = match events_rx.try_recv()? {
-        mineral_protocol::Event::ConfigChanged { config } => config.into_json(),
-        other => {
-            color_eyre::eyre::bail!("应收 ConfigChanged,实得 {other:?}");
-        }
-    };
-    assert_eq!(
-        effective.pointer("/audio/volume"),
-        Some(&serde_json::json!(55)),
-        "新底树生效"
-    );
-    assert_eq!(
-        effective.pointer("/tui/lyrics/fullscreen_line_gap"),
-        Some(&serde_json::json!(4)),
-        "session 覆盖在重载后仍生效"
-    );
-    Ok(())
-}
-
-/// 窗口标题覆盖:直通转发 + 同值 diff + 重放快照;撤销发 None。
-#[tokio::test]
-async fn window_title_override_forwards_and_diffs() -> color_eyre::Result<()> {
-    use mineral_protocol::Event;
-    let (core, mut events_rx) = core_with_hub()?;
-    core.apply_window_title_override(Some("⏸ 歌名".to_owned()));
-    assert_eq!(
-        events_rx.try_recv()?,
-        Event::WindowTitleOverride {
-            text: Some("⏸ 歌名".to_owned()),
-        }
-    );
-    core.apply_window_title_override(Some("⏸ 歌名".to_owned()));
-    assert!(events_rx.try_recv().is_err(), "同值重写不得重复下发");
-    assert_eq!(
-        core.window_title_override().as_deref(),
-        Some("⏸ 歌名"),
-        "握手重放快照"
-    );
-    core.apply_window_title_override(None);
-    assert_eq!(
-        events_rx.try_recv()?,
-        Event::WindowTitleOverride { text: None }
-    );
-    assert_eq!(core.window_title_override(), None, "撤销后无重放");
     Ok(())
 }
 
@@ -617,7 +426,7 @@ async fn queue_insert_next_and_append_keep_current() -> color_eyre::Result<()> {
 async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -633,11 +442,14 @@ async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
         /*script*/ None,
         recorder,
     )?;
+    assert!(core.service_info().play_counts.enabled);
+    let mut events_rx = core.notify().subscribe();
     // 覆盖 off → 播 A 被门掉。
     core.apply_config_overrides(vec![override_op(
         "stats.level",
         Some(mineral_protocol::BusValue::Str("off".to_owned())),
     )]);
+    assert!(!service_update(&mut events_rx)?.play_counts.enabled);
     let gated = song("gated");
     core.play_song(
         &gated,
@@ -647,6 +459,10 @@ async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
     core.spawn_on_played(gated.id.clone(), mineral_stats::FinishReason::Eof, 30_000);
     // 撤覆盖 → 回 base(full)→ 播 B 记。
     core.apply_config_overrides(vec![override_op("stats.level", None)]);
+    let enabled = events_rx.try_recv()?;
+    assert!(
+        matches!(enabled, mineral_protocol::Event::ServiceInfoChanged { info } if info.play_counts.enabled)
+    );
     let kept = song("kept");
     core.play_song(
         &kept,
@@ -688,7 +504,7 @@ async fn config_reapply_hot_swaps_stats_level() -> color_eyre::Result<()> {
 async fn config_reload_records_system_event() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -706,7 +522,7 @@ async fn config_reload_records_system_event() -> color_eyre::Result<()> {
     )?;
     // 模拟用户改文件后重载:默认树上改 audio.volume。
     let new_base = mineral_config::merge_tree(
-        mineral_config::default_tree()?,
+        crate::config::default_daemon_tree()?,
         serde_json::json!({ "audio": { "volume": 42 } }),
     );
     core.set_config_base(new_base);
@@ -733,7 +549,7 @@ async fn playlist_op_records_to_stats_db() -> color_eyre::Result<()> {
     use mineral_task::{PlaylistWriteOp, WriteError};
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -781,7 +597,7 @@ async fn search_result_records_songs_skips_user_kind() -> color_eyre::Result<()>
     use mineral_task::SearchPayload;
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),

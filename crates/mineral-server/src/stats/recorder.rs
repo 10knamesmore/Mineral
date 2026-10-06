@@ -274,6 +274,11 @@ impl StatsRecorder {
         params.records_plays() && !params.excludes_source(source.name())
     }
 
+    /// 数据库可用且当前档位启用播放采集；来源排除另由服务能力声明。
+    pub(crate) fn play_counts_enabled(&self) -> bool {
+        self.store.enabled() && self.params.load().records_plays()
+    }
+
     /// 通道满 / 已关累计丢弃的命令总数(埋点故障域可观测;测试与压测断言用)。
     pub fn dropped_count(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
@@ -380,7 +385,7 @@ impl StatsRecorder {
     /// Hashed 丢原文只留散列、Raw 原文 + 散列都留;散列恒算(去重 / 保次数用)。
     ///
     /// # Params:
-    ///   - `actor`: 发起方(user 界面搜索 / script 的 mineral.search)
+    ///   - `actor`: 发起方(user 界面搜索 / script 的 library.search)
     ///   - `raw_query`: 搜索词原文
     ///   - `kind`: 搜索目标类型
     ///   - `source`: 来源 name

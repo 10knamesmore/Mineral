@@ -1,13 +1,13 @@
 //! channel 搜索下拉的配置白名单:类型 + 过滤/定序规则。
 //!
-//! 白名单语义:列出即暴露、顺序即下拉顺序。默认名单只由 default.lua 提供；空列表走
+//! 白名单语义:列出即暴露、顺序即下拉顺序。默认名单只由 tui-default.lua 提供；空列表走
 //! 逐层防呆回退——配置滤空时宁可全暴露,不让搜索页变空壳。
 
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{SearchKind, SourceKind};
 use rustc_hash::FxHashMap;
 
-/// channel 搜索两个下拉的白名单(`tui.search.channel.sources` / `kinds` 的运行时快照)。
+/// channel 搜索两个下拉的白名单(`search.channel.sources` / `kinds` 的运行时快照)。
 /// 配置每次运行不可变,构造 SearchPage 时拷一份进来,下拉数据源每帧据此重算。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SearchWhitelist {
@@ -18,8 +18,8 @@ pub(crate) struct SearchWhitelist {
     pub(crate) kinds: Vec<SearchKind>,
 }
 
-impl From<&mineral_config::ChannelSearchConfig> for SearchWhitelist {
-    fn from(cfg: &mineral_config::ChannelSearchConfig) -> Self {
+impl From<&crate::config::ChannelSearchConfig> for SearchWhitelist {
+    fn from(cfg: &crate::config::ChannelSearchConfig) -> Self {
         Self {
             sources: cfg.sources().clone(),
             kinds: cfg.kinds().clone(),

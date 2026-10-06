@@ -73,10 +73,10 @@ pub enum QueueOp {
     /// 清空锚点**之下**的全部条目,锚点自身保留。
     ClearBelow(QueueAnchor),
 
-    /// 应用一个脚本注册的具名变换(下标对应配置里 `queue.transforms` 的声明顺序)。
+    /// 应用 daemon 服务能力中列出的具名队列变换。
     ApplyTransform {
-        /// 变换在配置数组中的下标。
-        index: usize,
+        /// 稳定的变换名称；重载后不会因数组重排而执行另一操作。
+        name: String,
 
         /// 发起时的光标位置(0-based)。变换函数要能表达「以我看着的这一行为界」这类
         /// 操作,而光标只有 client 知道,server 无从推断,故随请求带来。

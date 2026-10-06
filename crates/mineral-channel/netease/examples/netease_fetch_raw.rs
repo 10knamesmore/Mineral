@@ -148,7 +148,8 @@ async fn main() -> Result<()> {
 fn build_channel() -> Result<NeteaseChannel> {
     let cfg = NeteaseConfig::builder()
         .playlist_fetch({
-            let defaults = mineral_config::Config::defaults().expect("valid default config");
+            let defaults =
+                mineral_server::config::DaemonConfig::defaults().expect("valid daemon defaults");
             let fetch = defaults.sources().netease().playlist_fetch();
             mineral_channel_netease::config::PlaylistFetchConfig::builder()
                 .batch_size(*fetch.batch_size())

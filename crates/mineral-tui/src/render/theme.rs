@@ -4,7 +4,7 @@
 //! (`sources.<name>.color`),由 [`SourceColors`] 按 source 名解析(命中走配置色,未配置走中立
 //! 兜底)——不用一个闭合调色枚举强塞进开放的来源集合。
 
-use mineral_config::{AnsiSlot, ColorRef, ColorValue};
+use crate::config::{AnsiSlot, ColorRef, ColorValue};
 use mineral_model::SourceKind;
 use ratatui::style::{Color, Modifier, Style};
 
@@ -136,7 +136,7 @@ impl Theme {
     ///
     /// # Return:
     ///   落地后的 [`Theme`]。
-    pub fn from_config(cfg: &mineral_config::ThemeConfig) -> Self {
+    pub fn from_config(cfg: &crate::config::ThemeConfig) -> Self {
         let c = |v: &ColorValue| color_of_value(*v);
         let mut t = Self {
             base: c(cfg.base()),
@@ -254,7 +254,7 @@ pub(crate) fn permille_of(alpha: f32) -> u16 {
     (alpha.clamp(0.0, 1.0) * 1000.0).round() as u16
 }
 
-/// 解析某来源的徽标色:从 `sources.<name>.color` 取该源的 [`ColorRef`],经主题落地成具体色;
+/// 解析某来源的徽标色:从本地 `source_colors` 取该源的 [`ColorRef`],经主题落地成具体色;
 /// 未配色的源(local / 未知插件)走中立兜底(`subtext`)。
 ///
 /// 边渲染边解析(查一张两三项的小表 + resolve,开销可忽略),避免把颜色缓存塞进 `Theme`
@@ -262,33 +262,31 @@ pub(crate) fn permille_of(alpha: f32) -> u16 {
 ///
 /// # Params:
 ///   - `theme`: 已落地的主题(解析 token 名 / 兜底色用)
-///   - `sources`: 音乐源段配置(各源的 `color`)
+///   - `source_colors`: 当前客户端按来源名设置的徽标色
 ///   - `kind`: 目标来源
 ///
 /// # Return:
 ///   徽标色。
 pub fn resolve_source_color(
     theme: &Theme,
-    sources: &mineral_config::SourcesConfig,
+    source_colors: &std::collections::BTreeMap<String, crate::config::ColorRef>,
     kind: SourceKind,
 ) -> Color {
-    sources
-        .source_colors()
-        .into_iter()
-        .find(|(name, _)| *name == kind.name())
-        .map(|(_, cr)| theme.resolve(cr))
+    source_colors
+        .get(kind.name())
+        .map(|color| theme.resolve(color))
         .unwrap_or(theme.subtext)
 }
 
 /// 配置层字体效果 → ratatui [`Modifier`] 的接线映射。
-fn modifier_of(style: mineral_config::TextStyle) -> Modifier {
+fn modifier_of(style: crate::config::TextStyle) -> Modifier {
     match style {
-        mineral_config::TextStyle::Bold => Modifier::BOLD,
-        mineral_config::TextStyle::Italic => Modifier::ITALIC,
-        mineral_config::TextStyle::Underline => Modifier::UNDERLINED,
-        mineral_config::TextStyle::Dim => Modifier::DIM,
-        mineral_config::TextStyle::Reversed => Modifier::REVERSED,
-        mineral_config::TextStyle::CrossedOut => Modifier::CROSSED_OUT,
+        crate::config::TextStyle::Bold => Modifier::BOLD,
+        crate::config::TextStyle::Italic => Modifier::ITALIC,
+        crate::config::TextStyle::Underline => Modifier::UNDERLINED,
+        crate::config::TextStyle::Dim => Modifier::DIM,
+        crate::config::TextStyle::Reversed => Modifier::REVERSED,
+        crate::config::TextStyle::CrossedOut => Modifier::CROSSED_OUT,
     }
 }
 

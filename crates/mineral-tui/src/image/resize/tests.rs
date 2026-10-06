@@ -75,7 +75,7 @@ fn fitting_preserves_aspect_ratio_and_transparent_padding() {
         let canvas = scale_to_pixels(
             &source,
             PixelSize::new(bounds.0, bounds.1),
-            mineral_config::CoverCellFit::Contain,
+            crate::config::CoverCellFit::Contain,
         );
         assert_eq!(canvas.dimensions(), bounds);
         for (x, y, value) in canvas.enumerate_pixels() {

@@ -18,13 +18,13 @@ use super::App;
 impl App {
     /// 主循环帧间隔(现读配置 `animation.frame_tick_ms`,热更下一帧生效)。
     fn frame_tick(&self) -> Duration {
-        Duration::from_millis(*self.state.cfg.tui().animation().frame_tick_ms())
+        Duration::from_millis(*self.state.cfg.animation().frame_tick_ms())
     }
 
     /// 整屏转场拍数(现读配置 `animation.transition_ms` 按帧率折算;
     /// 只在启停时构造转场,现场折算即可)。
     pub(super) fn transition_ticks(&self) -> u16 {
-        let anim = self.state.cfg.tui().animation();
+        let anim = self.state.cfg.animation();
         ticks16_from_ms(*anim.transition_ms(), *anim.frame_tick_ms())
     }
 
@@ -33,11 +33,12 @@ impl App {
     pub fn run(&mut self, tui: &mut Tui) -> crate::Result<()> {
         // 启动时先灌一次镜像(订阅已在连接后建立,首帧通常已到达)。
         self.sync_from_backend();
+        self.drain_push_events();
 
         // 启动扩大转场:界面从中心小框向四周铺满,与退出收缩反向对称。推满后转入正常运行。
         self.transition = Some(Transition::expanding(self.transition_ticks()));
 
-        // client 侧心跳(间隔 = daemon.heartbeat_secs):报 server 看不到的 UI / 缓存状态(启动即首条)。
+        // TUI 侧心跳(间隔 = heartbeat_secs):报 server 看不到的 UI / 缓存状态(启动即首条)。
         let mut last_heartbeat = Instant::now();
         self.log_heartbeat();
 
@@ -63,6 +64,7 @@ impl App {
             if self.overlays.is_disconnected() {
                 self.transition = None;
             }
+            self.poll_tui_script(Instant::now());
             let area = tui.area()?;
             self.prepare_view(
                 area,
@@ -84,7 +86,7 @@ impl App {
                 position_ms: self.state.models.playback.position_ms,
                 duration_ms: self.state.models.playback.duration_ms(),
                 lyric: title_lyric.as_deref(),
-                override_text: self.state.models.window_title_override.as_deref(),
+                override_text: self.tui_script.title.as_deref(),
             };
             // 标题启用时确保标题栈已 push（幂等）——启动即启用由 lib.rs 兜住，热重载
             // 从禁用→启用则由此补上，保证退出能对称 pop 还原原标题。禁用时不 push。
@@ -149,8 +151,8 @@ impl App {
                 // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。
                 self.state.ui.now = chrono::Local::now();
                 self.last_tick = Instant::now();
-                // 心跳间隔现读配置(daemon.heartbeat_secs),热更下一轮生效。
-                let heartbeat = Duration::from_secs(*self.state.cfg.daemon().heartbeat_secs());
+                // 心跳间隔现读配置(heartbeat_secs),热更下一轮生效。
+                let heartbeat = Duration::from_secs(*self.state.cfg.heartbeat_secs());
                 if last_heartbeat.elapsed() >= heartbeat {
                     self.log_heartbeat();
                     last_heartbeat = Instant::now();
@@ -223,8 +225,8 @@ impl App {
         }
     }
 
-    /// client 侧心跳:把 server 看不到的 UI / 缓存状态打一条 info。大缓存
-    /// (tracks / cover / lyrics)都在 client 端,server 心跳报不了,这里补上。
+    /// TUI 侧心跳:把 server 看不到的 UI / 缓存状态打一条 info。大缓存
+    /// (tracks / cover / lyrics)都在 TUI 端,server 心跳报不了,这里补上。
     fn log_heartbeat(&self) {
         let s = &self.state;
         let liked = s
@@ -246,12 +248,12 @@ impl App {
             liked,
             queue_len = s.models.player.queue.len(),
             events_dropped = self.client.events_dropped(),
-            "client status"
+            "tui status"
         );
     }
 
-    /// 上报终端 UI 状态(尺寸 + 全屏态 + 焦点)给 daemon,灌属性树 `terminal` 供脚本
-    /// observe。值没变去抖不发;无 TTY(测试)拿不到尺寸静默跳过。
+    /// 上报终端 UI 状态(尺寸 + 全屏态 + 焦点)给 daemon。
+    /// 值没变去抖不发;无 TTY(测试)拿不到尺寸静默跳过。
     /// 调用点:启动 / Resize / 全屏切换 / focus 变化。
     pub(super) fn report_terminal_state(&mut self) {
         let Ok((cols, rows)) = crossterm::terminal::size() else {
@@ -281,7 +283,7 @@ mod tests {
     use super::Transition;
     use crate::test_support::app_with_queue;
 
-    /// 测试对照值 = default.lua 的 `animation.transition_ms`(288)÷ `frame_tick_ms`(16)。
+    /// 测试对照值 = tui-default.lua 的 `animation.transition_ms`(288)÷ `frame_tick_ms`(16)。
     const TRANSITION_TICKS: u16 = 18;
 
     /// 回归：全屏下关闭居中浮层(quit 确认)后，终端图片缓存被清空，据此下一帧重建并全量

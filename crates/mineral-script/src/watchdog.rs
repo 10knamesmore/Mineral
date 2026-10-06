@@ -3,14 +3,14 @@
 //! 每次调 Lua 回调前装 hook(每 N 条 VM 指令检查一次墙钟),超
 //! `soft_wall` 记一次 warn 日志继续跑,超 `hard_wall` 让本次调用以
 //! Lua 错误中断;调用结束(无论成败)摘 hook。**VM 本身保留**——
-//! 中断的只是这一次回调,后续事件照常分发。
+//! 中断的只是这一次调用，后续音乐查询与配置函数照常执行。
 
 use std::cell::Cell;
 use std::time::Instant;
 
 use mlua::{FromLuaMulti, HookTriggers, IntoLuaMulti, Lua, VmState};
 
-/// 看门狗参数。字段全必填；默认值只由 `default.lua` 提供。
+/// 看门狗参数。字段全必填；各宿主默认值来自各自的 Lua 默认配置。
 #[derive(Clone, Copy, Debug, derive_getters::Getters, typed_builder::TypedBuilder)]
 pub struct WatchdogConfig {
     /// 每多少条 VM 指令检查一次墙钟(越小越灵敏、开销越大)。
@@ -43,6 +43,15 @@ where
     A: IntoLuaMulti,
     R: FromLuaMulti,
 {
+    with_watchdog(lua, cfg, || func.call::<R>(args))
+}
+
+/// 为一次配置求值或回调安装看门狗，结束后移除；保留操作自己的错误类型。
+pub(crate) fn with_watchdog<T>(
+    lua: &Lua,
+    cfg: &WatchdogConfig,
+    operation: impl FnOnce() -> T,
+) -> T {
     let start = Instant::now();
     let soft_wall = *cfg.soft_wall();
     let hard_wall = *cfg.hard_wall();
@@ -68,7 +77,7 @@ where
             Ok(VmState::Continue)
         },
     );
-    let result = func.call::<R>(args);
+    let result = operation();
     lua.remove_hook();
     result
 }

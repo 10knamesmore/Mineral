@@ -6,9 +6,10 @@
 
 use crate::app::AppOverlay;
 
-use mineral_config::{CopyContext, CopyTemplate};
+use crate::config::{CopyContext, CopyTemplate};
 use mineral_model::{Album, Artist, ArtistRef, Song};
-use mineral_protocol::{CopyTemplateCtx, QueueAnchor, QueueOp, QueuePos};
+use mineral_protocol::{QueueAnchor, QueueOp, QueuePos};
+use mineral_script::CopyTemplateCtx;
 use mineral_task::SearchPayload;
 use ratatui::layout::Rect;
 
@@ -220,22 +221,20 @@ impl App {
         )));
     }
 
-    /// 脚本注册的具名队列变换项(config `queue.transforms` 的声明顺序即下标)。
+    /// Daemon operations are identified by name; local menus assign no daemon keys.
     fn queue_transform_items(&self, selected: usize) -> Vec<MenuItem> {
         self.state
-            .cfg
-            .queue()
-            .transforms()
+            .models
+            .service_info
+            .queue_transforms
             .iter()
-            .enumerate()
-            .map(|(index, spec)| {
-                let action = MenuAction::QueueEdit(QueueOp::ApplyTransform {
-                    index,
-                    selected: Some(selected),
-                });
-                spec.key().map_or_else(
-                    || MenuItem::labeled(spec.label().clone(), action.clone()),
-                    |key| MenuItem::keyed(key, spec.label().clone(), action.clone()),
+            .map(|name| {
+                MenuItem::labeled(
+                    name.clone(),
+                    MenuAction::QueueEdit(QueueOp::ApplyTransform {
+                        name: name.clone(),
+                        selected: Some(selected),
+                    }),
                 )
             })
             .collect()
@@ -376,7 +375,7 @@ impl App {
     /// 选中实体的 `y` 复制项(按实体类型),后随 Lua 自定义模板项。四类实体均带网页链接(源
     /// 声明模板者)与模板。全站(browse / search results / search detail / queue)共用。
     fn copy_items(&self, entity: &EntityRef) -> Vec<MenuItem> {
-        let templates = self.state.cfg.tui().copy().templates();
+        let templates = self.state.cfg.copy().templates();
         let caps = self.state.models.caps.get(&entity_source(entity));
         match entity {
             EntityRef::Song(song) => {
@@ -465,7 +464,7 @@ impl App {
     ///
     /// 走结果列的 [`ScrollList`] 读取 offset 还原屏幕行，与左栏 `row_anchor` 使用同一算法。
     fn search_row_anchor(&self) -> Option<Rect> {
-        let panel = compute_search(self.state.ui.frame_area, self.state.cfg.tui().layout()).left;
+        let panel = compute_search(self.state.ui.frame_area, self.state.cfg.layout()).left;
         let kr = self.state.ui.channel_search.active_results()?;
         Some(row_anchor(panel, kr.list(), kr.len()))
     }
@@ -478,7 +477,7 @@ impl App {
     fn search_detail_row_anchor(&self) -> Option<Rect> {
         let kr = self.state.ui.channel_search.active_results()?;
         let dframe = kr.detail.current()?;
-        let panel = compute_search(self.state.ui.frame_area, self.state.cfg.tui().layout()).right?;
+        let panel = compute_search(self.state.ui.frame_area, self.state.cfg.layout()).right?;
         let is_artist = matches!(dframe.entity, EntityRef::Artist(_));
         let list_area = detail_list_area(panel_inner(panel), is_artist);
         Some(borderless_row_anchor(
@@ -516,7 +515,7 @@ impl App {
 
     /// 由上一帧面积重算浏览态布局,取左栏面板矩形。
     fn left_panel(&self) -> Rect {
-        compute(self.state.ui.frame_area, self.state.cfg.tui().layout()).left
+        compute(self.state.ui.frame_area, self.state.cfg.layout()).left
     }
 }
 
@@ -845,7 +844,7 @@ mod tests {
     };
 
     /// 经 serde 造一个 CopyTemplate(schema 字段私有,只能落型构造)。
-    fn template(json: serde_json::Value) -> color_eyre::Result<mineral_config::CopyTemplate> {
+    fn template(json: serde_json::Value) -> color_eyre::Result<crate::config::CopyTemplate> {
         Ok(serde_json::from_value(json)?)
     }
 
@@ -864,12 +863,12 @@ mod tests {
     /// 给测试 App 热更 Library 过滤起播范围。
     fn set_filter_play_scope(app: &mut App, scope: &str) -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
+        let path = dir.path().join("tui.lua");
         std::fs::write(
             &path,
-            format!("return {{ tui = {{ behavior = {{ filter_play_scope = \"{scope}\" }} }} }}"),
+            format!("return {{ behavior = {{ filter_play_scope = \"{scope}\" }} }}"),
         )?;
-        let (cfg, warnings) = mineral_config::load(&path)?;
+        let (cfg, warnings) = crate::config::load_tui(&path)?;
         assert!(warnings.is_empty(), "配置字段应被 schema 接受:{warnings:?}");
         app.apply_config(std::sync::Arc::new(cfg));
         Ok(())
@@ -1428,7 +1427,7 @@ mod tests {
         let anchor = app
             .search_row_anchor()
             .ok_or_else(|| color_eyre::eyre::eyre!("有结果时应能算出锚点"))?;
-        let results = compute_search(app.state.ui.frame_area, app.state.cfg.tui().layout()).left;
+        let results = compute_search(app.state.ui.frame_area, app.state.cfg.layout()).left;
         assert_eq!(anchor.x, results.x + 1, "锚点在 results 面板内(去左边框)");
         assert_eq!(
             anchor.y,
@@ -1535,7 +1534,7 @@ mod tests {
         let anchor = app
             .search_detail_row_anchor()
             .ok_or_else(|| color_eyre::eyre::eyre!("有详情应能算出锚点"))?;
-        let right = compute_search(app.state.ui.frame_area, app.state.cfg.tui().layout())
+        let right = compute_search(app.state.ui.frame_area, app.state.cfg.layout())
             .right
             .ok_or_else(|| color_eyre::eyre::eyre!("应有 detail 面板"))?;
         assert!(
@@ -1556,8 +1555,8 @@ mod tests {
     /// 模板项追加:context 过滤、同字母顶掉内置快捷位、index 按全量数组序对位。
     #[test]
     fn template_items_append_and_override_hotkeys() -> color_eyre::Result<()> {
-        use mineral_config::CopyContext;
-        use mineral_protocol::CopyTemplateCtx;
+        use crate::config::CopyContext;
+        use mineral_script::CopyTemplateCtx;
         let song = mineral_test::song("s1");
         let templates = vec![
             // 与内置 Copy title 的 't' 同字母 → 顶掉内置的快捷位。
@@ -1607,31 +1606,36 @@ mod tests {
         Ok(())
     }
 
-    /// CopyTemplate 确认:实体与下标发给 client 渲染;失败回 toast 不碰剪贴板。
+    /// Named daemon operations carry no shortcuts and dispatch the selected operation name.
     #[test]
-    fn copy_template_action_calls_client() -> color_eyre::Result<()> {
-        use mineral_protocol::CopyTemplateCtx;
-        let (mut app, _ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
-        let calls = {
-            // TestClient 在 Arc<dyn Client> 后面,记录通道经构造前克隆持有——
-            // probed helper 没暴露这支探针,这里直接重建一个带探针的 App。
-            let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let client = crate::test_support::TestClient {
-                copy_template_calls: std::sync::Arc::clone(&calls),
-                ..crate::test_support::TestClient::default()
-            };
-            app.client = std::sync::Arc::new(client);
-            calls
-        };
-        let song = mineral_test::song("s1");
-        app.run_menu_action(MenuAction::CopyTemplate {
-            index: 5,
-            ctx: CopyTemplateCtx::Song(Box::new(song)),
+    fn queue_transform_menu_dispatches_names() -> color_eyre::Result<()> {
+        use crate::components::popup::{Placement, PopMenu};
+        use mineral_protocol::{QueueOp, ServiceInfo};
+        let (mut app, edits) = crate::test_support::app_with_queue_edits(3, 1)?;
+        app.apply_service_info(ServiceInfo {
+            queue_transforms: vec!["Reverse queue".to_owned(), "Keep current source".to_owned()],
+            ..ServiceInfo::default()
         });
-        let got = calls
+        let items = app.queue_transform_items(1);
+        assert!(items.iter().all(|item| item.hotkey.is_none()));
+        app.overlays.push(crate::app::AppOverlay::menu(PopMenu::new(
+            "queue",
+            items,
+            ratatui::layout::Rect::default(),
+            Placement::Below,
+        )));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        let got = edits
             .lock()
-            .map_err(|e| color_eyre::eyre::eyre!("calls 锁中毒: {e}"))?;
-        assert_eq!(*got, vec![5], "下标原样到达 client");
+            .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+        assert_eq!(
+            *got,
+            vec![QueueOp::ApplyTransform {
+                name: "Keep current source".to_owned(),
+                selected: Some(1),
+            }]
+        );
         Ok(())
     }
 }

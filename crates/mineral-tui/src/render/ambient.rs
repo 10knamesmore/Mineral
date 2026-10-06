@@ -6,13 +6,13 @@
 //! 从底色向场色走、边缘叠暗角,**只写 `bg` 不动字符与 `fg`**——后画的面板文字
 //! (fg-only style 是补丁语义)天然叠加其上,无需任何组件配合。
 //!
-//! 锚点表 / σ / 暗角等观感数值全部现读配置(`tui.ambient`),状态机只携带
+//! 锚点表 / σ / 暗角等观感数值全部现读配置(`ambient`),状态机只携带
 //! 「色过渡进度 + 漂移时钟 + 轮转相位」三样运行态,锚点热更下一帧即生效。
 //!
 //! [`LoudnessPulse`] 是独立的响度包络:播放中的 PCM 样本每拍喂入,输出平滑响度
 //! 供 [`render`] 叠加进场浓度——音乐越响封面色越浓,随鼓点呼吸。
 
-use mineral_config::{AmbientConfig, AnchorConfig, PulseConfig};
+use crate::config::{AmbientConfig, AnchorConfig, PulseConfig};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;

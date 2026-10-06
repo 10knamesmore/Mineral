@@ -87,14 +87,14 @@ impl LyricsPanel {
         &mut self,
         scroll: ScrollStep,
         input: LyricsInput<'_>,
-        config: &mineral_config::Config,
+        config: &crate::config::TuiConfig,
     ) {
         let len = input.lines().map_or(0, <[mineral_model::LyricLine]>::len);
         let Some(max_line) = len.checked_sub(1).and_then(|m| i64::try_from(m).ok()) else {
             return;
         };
-        let lyrics = config.tui().lyrics();
-        let behavior = config.tui().behavior();
+        let lyrics = config.lyrics();
+        let behavior = config.behavior();
         let line = i64::try_from(*behavior.line_scroll_rows()).unwrap_or(0);
         let page = i64::try_from(*behavior.page_scroll_rows()).unwrap_or(0);
         let delta = match scroll {
@@ -143,7 +143,7 @@ impl LyricsPanel {
     pub(crate) fn tick_lyric_scroll(
         &mut self,
         input: LyricsInput<'_>,
-        config: &mineral_config::Config,
+        config: &crate::config::TuiConfig,
     ) {
         let changed = input.song != self.scroll_song.as_ref();
         if changed {
@@ -157,8 +157,8 @@ impl LyricsPanel {
         // 借用 lyric_view.scroll 前先把依赖 &self 的量算好,避免重叠借用。
         let synced = input.lines().is_some_and(mineral_model::has_timed);
         let reattach_ticks = ticks16_from_ms(
-            *config.tui().lyrics().reattach_ms(),
-            *config.tui().animation().frame_tick_ms(),
+            *config.lyrics().reattach_ms(),
+            *config.animation().frame_tick_ms(),
         );
         let cur_line = Self::current_line_anchor(input);
         let glide_ticks = Self::glide_ticks(config);
@@ -170,7 +170,7 @@ impl LyricsPanel {
         // 居中接手,零重演。`cur == line` 判「已落进焦点行区间」——向后 seek 时旧位置在别处,
         // 不会在 seek 落地前误判;超时兜底防 seek 未落地(拒绝 / 越界)卡死在脱离态。
         if let Some(GlidePhase::AwaitSeek { line }) = self.scroll.as_ref().map(|g| g.phase) {
-            let scroll_ms = *config.tui().lyrics().scroll_ms();
+            let scroll_ms = *config.lyrics().scroll_ms();
             let past_fade = input
                 .lines()
                 .and_then(|lines| usize::try_from(line).ok().and_then(|i| lines.get(i)))
@@ -239,10 +239,10 @@ impl LyricsPanel {
             .unwrap_or(0)
     }
 
-    /// 手动滚动 / 回锚平移的缓动拍数(复用 `tui.lyrics.scroll_ms` 过渡时长)。
-    fn glide_ticks(config: &mineral_config::Config) -> u16 {
-        let scroll_ms = u32::try_from(*config.tui().lyrics().scroll_ms()).unwrap_or(u32::MAX);
-        ticks16_from_ms(scroll_ms, *config.tui().animation().frame_tick_ms())
+    /// 手动滚动 / 回锚平移的缓动拍数(复用 `lyrics.scroll_ms` 过渡时长)。
+    fn glide_ticks(config: &crate::config::TuiConfig) -> u16 {
+        let scroll_ms = u32::try_from(*config.lyrics().scroll_ms()).unwrap_or(u32::MAX);
+        ticks16_from_ms(scroll_ms, *config.animation().frame_tick_ms())
     }
 
     /// 脱离态当前锚定的原文行(渲染端给它半程高亮,标记手动浏览焦点);`None` = 附着态。
@@ -336,8 +336,8 @@ mod tests {
     #[test]
     fn scroll_lyrics_gated_on_fullscreen() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(timed_lines())?;
-        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
-        let line = i64::try_from(*s.cfg.tui().behavior().line_scroll_rows())?;
+        let page = i64::try_from(*s.cfg.behavior().page_scroll_rows())?;
+        let line = i64::try_from(*s.cfg.behavior().line_scroll_rows())?;
         assert!(page <= 19, "前提:默认翻页步长须落在 20 行 fixture 界内");
         s.ui.browse.fullscreen.set(false);
         s.scroll_lyrics(ScrollStep::PageDown);
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn synced_reattaches_after_timeout() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(timed_lines())?;
-        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        let page = i64::try_from(*s.cfg.behavior().page_scroll_rows())?;
         s.tick_lyric_scroll(); // 先注册当前歌
         s.scroll_lyrics(ScrollStep::PageDown);
         assert_eq!(target(&s), Some(page), "脱离锚定行 = 一页步长");
@@ -396,7 +396,7 @@ mod tests {
     #[test]
     fn unsynced_never_reattaches() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(untimed_lines())?;
-        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        let page = i64::try_from(*s.cfg.behavior().page_scroll_rows())?;
         s.tick_lyric_scroll();
         s.scroll_lyrics(ScrollStep::PageDown);
         for _ in 0..3000 {
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn song_change_resets_scroll() -> color_eyre::Result<()> {
         let mut s = fullscreen_with(untimed_lines())?;
-        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        let page = i64::try_from(*s.cfg.behavior().page_scroll_rows())?;
         s.tick_lyric_scroll();
         s.scroll_lyrics(ScrollStep::PageDown);
         assert_eq!(target(&s), Some(page));
@@ -431,7 +431,7 @@ mod tests {
         );
         s.tick_lyric_scroll();
         s.scroll_lyrics(ScrollStep::PageDown);
-        let page = u64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        let page = u64::try_from(*s.cfg.behavior().page_scroll_rows())?;
         assert_eq!(
             s.lyric_focus_seek_target(),
             Some(page * 1000),
@@ -479,7 +479,7 @@ mod tests {
 
         // 越过淡入窗口(elapsed ≥ scroll_ms)→ 清脱离回附着。scroll_ms < 1000 故仍落在该行
         // 区间(timed_lines 行距 1000ms)。
-        let scroll_ms = *s.cfg.tui().lyrics().scroll_ms();
+        let scroll_ms = *s.cfg.lyrics().scroll_ms();
         assert!(
             scroll_ms < 1000,
             "前提:淡入窗口须短于行距,否则会溢出到下一行"
@@ -508,7 +508,7 @@ mod tests {
             "cur=18 ≠ line=5:不误判抵达(`>=` 会在此错误清脱离)"
         );
         // seek 落地到第 5 行并越过淡入窗口 → 清回附着。
-        let scroll_ms = *s.cfg.tui().lyrics().scroll_ms();
+        let scroll_ms = *s.cfg.lyrics().scroll_ms();
         assert!(scroll_ms < 1000, "前提:淡入窗口须短于行距");
         s.models.playback.position_ms = 5_000 + scroll_ms;
         s.tick_lyric_scroll();
@@ -523,7 +523,7 @@ mod tests {
     fn manual_scroll_does_not_drift_with_playback() -> color_eyre::Result<()> {
         // detach 后推进播放位置 + tick,锚点目标行不应被播放推动(完全独立)。
         let mut s = fullscreen_with(timed_lines())?;
-        let page = i64::try_from(*s.cfg.tui().behavior().page_scroll_rows())?;
+        let page = i64::try_from(*s.cfg.behavior().page_scroll_rows())?;
         s.tick_lyric_scroll();
         s.scroll_lyrics(ScrollStep::PageDown);
         assert_eq!(target(&s), Some(page));

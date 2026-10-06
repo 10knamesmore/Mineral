@@ -1,4 +1,4 @@
-//! server → client 主动推送的事件类型与属性树的协议面(observe 的 wire 形状)。
+//! server → client 主动推送的事件类型与属性状态协议。
 
 use std::sync::{Mutex, OnceLock};
 
@@ -36,26 +36,6 @@ pub enum Event {
         ttl_secs: Option<u64>,
     },
 
-    /// 多行通知卡片(标题与 body 都带行内样式)。`id` 相同则替换不堆叠
-    /// (与 [`Event::Toast`] 同款顶替语义)。
-    Card {
-        /// 视觉级别(client 据此选边框 / 标题色)。
-        kind: ToastKind,
-
-        /// 顶替键:同 id 的存活卡片被替换内容(退场中复活);`None` 不参与顶替。
-        id: Option<String>,
-
-        /// 标题(client 画进卡片边框,行内 spans);空 = 不画。
-        title: Vec<TextSpan>,
-
-        /// 卡片正文:外层 = 行,内层 = 行内 spans。
-        body: Vec<Vec<TextSpan>>,
-
-        /// 展示时长(秒):`Some` 到时自动退场(与 toast 同款);
-        /// `None` 驻留,用户显式关闭才退场。
-        ttl_secs: Option<u64>,
-    },
-
     /// 属性树某项变更。「订阅即回放 + 末值合并」语义在 daemon 侧实现,此处只是线格式。
     PropertyChanged {
         /// 属性名(命名空间化,见 [`PropName`])。
@@ -89,40 +69,16 @@ pub enum Event {
         key: String,
     },
 
-    /// 脚本已热重载(config.lua 变更、新 VM 顶上)。client 据此重拉
-    /// `ScriptBinds` 合 keymap(daemon 重载完成是 bind 表就绪的权威信号)。
-    ScriptReloaded,
-
-    /// 自定义事件总线消息(脚本 `mineral.emit` 扇出)。daemon 零解释、
-    /// 原样转发;语义契约在用户自己的两端(脚本 ↔ 外部 client)之间。
-    BusMessage {
-        /// 事件名(用户命名空间,建议 `插件名.事件` 形)。
-        name: String,
-
-        /// 开放载荷(树形自描述,见 [`BusValue`])。
-        payload: BusValue,
-    },
-
-    /// 有效配置变更(配置文件重载 / 脚本 session 覆盖):daemon 推送合成后的
-    /// **完整**配置树(default + user + 覆盖,已过 daemon 落型校验),client
-    /// 落型后整体顶替自己的配置。订阅 [`Subscription::Config`](crate::Subscription::Config)
-    /// 的 client 握手后先收当前有效配置一帧再进实时流。
-    ConfigChanged {
-        /// 有效配置树。
-        config: BusValue,
-    },
-
-    /// 窗口标题整串覆盖(`mineral.ui.window_title`,脚本自渲染);`None` = 撤销,
-    /// client 回落结构化模板。高频友好:直通转发,不触发配置合成。
-    WindowTitleOverride {
-        /// 覆盖文本;`None` 撤销。
-        text: Option<String>,
+    /// 队列变换或播放统计采集能力变更；订阅时先重放当前能力。
+    ServiceInfoChanged {
+        /// 当前 daemon 可用的操作与统计能力，不包含配置树。
+        info: crate::ServiceInfo,
     },
 
     /// 按顶替键撤销存活通知(flash / 卡片)。daemon 用于「问题修复后主动撤卡」,
     /// 如坏配置的警告卡在干净重载后消失。
     DismissToast {
-        /// 顶替键(与 [`Event::Toast`] / [`Event::Card`] 的 `id` 同一命名空间)。
+        /// 顶替键(与 [`Event::Toast`] 的 `id` 同一命名空间)。
         id: String,
     },
 
@@ -136,28 +92,24 @@ impl Event {
     #[must_use]
     pub fn subscription(&self) -> Subscription {
         match self {
-            Self::Failure(_)
-            | Self::Toast { .. }
-            | Self::Card { .. }
-            | Self::DismissToast { .. } => Subscription::Toast,
+            Self::Failure(_) | Self::Toast { .. } | Self::DismissToast { .. } => {
+                Subscription::Toast
+            }
             Self::PropertyChanged { .. } => Subscription::Property,
             Self::TrackFinished { .. }
             | Self::DownloadCompleted { .. }
-            | Self::StoreChanged { .. }
-            | Self::ScriptReloaded => Subscription::Lifecycle,
-            Self::BusMessage { .. } => Subscription::Bus,
-            Self::ConfigChanged { .. } => Subscription::Config,
-            Self::WindowTitleOverride { .. } => Subscription::WindowTitle,
+            | Self::StoreChanged { .. } => Subscription::Lifecycle,
+            Self::ServiceInfoChanged { .. } => Subscription::ServiceInfo,
             Self::Task(_) => Subscription::Task,
         }
     }
 }
 
-/// 自定义事件总线的开放载荷:用户自定义结构,daemon 零解释转发。
+/// 宿主内部配置覆盖的自描述值；不用于传输配置树。
 ///
-/// 树形自描述值,bincode 可编解码(不依赖 `deserialize_any`,故**不用**
-/// `serde_json::Value`);Lua table ↔ 本类型的转换在脚本 crate 的 VM 边界。
-/// `Map` 用有序键值对(非 hash 容器):编码确定、保留脚本侧构造顺序。
+/// bincode 可编解码(不依赖 `deserialize_any`,故**不用** `serde_json::Value`);
+/// Lua table ↔ 本类型的转换在脚本 crate 的 VM 边界。`Map` 用有序键值对:
+/// 编码确定、保留脚本侧构造顺序。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum BusValue {
     /// 空。
@@ -210,7 +162,7 @@ impl BusValue {
         }
     }
 
-    /// 从 JSON 值构造(配置树等 serde 产物上 wire 前的边缘转换,方向与
+    /// 从 JSON 值构造(宿主配置覆盖的边缘转换,方向与
     /// [`Self::into_json`] 相反)。整数优先 `Int`;超出 `i64` 的巨大无符号数
     /// 降为 `Float`(配置域不出现,防御性兜底)。
     ///
@@ -509,12 +461,12 @@ mod tests {
         );
     }
 
-    /// JSON → BusValue → JSON 往返保形(配置树上 wire 的双向边缘转换互逆)。
+    /// JSON → BusValue → JSON 往返保形。
     #[test]
     fn bus_value_json_roundtrip() {
         let json = serde_json::json!({
             "audio": { "volume": 100 },
-            "tui": { "lyrics": { "gap": 1, "damping": 1.5 } },
+            "lyrics": { "gap": 1, "damping": 1.5 } ,
             "list": [1, "two", null, true],
         });
         assert_eq!(BusValue::from_json(json.clone()).into_json(), json);

@@ -15,6 +15,9 @@ mod queue_edit;
 mod spectrum_feed;
 
 #[cfg(test)]
+mod tui_script_tests;
+
+#[cfg(test)]
 mod transport_input_tests;
 
 pub use application::App;

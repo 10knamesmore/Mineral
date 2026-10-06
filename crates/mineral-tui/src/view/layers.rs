@@ -31,7 +31,7 @@ impl PaintView for RootLayer<'_> {
         let app = self.app;
         inputs.observe(&(self.full, self.search));
         inputs.observe(&app.ambient_reveal.progress());
-        let ambient_cfg = env.config.tui().ambient();
+        let ambient_cfg = env.config.ambient();
         if app.ambient_reveal.active() && (*ambient_cfg.enabled() || !app.ambient.settled_at_base())
         {
             inputs.observe(app.ambient);
@@ -71,7 +71,7 @@ impl PaintView for RootLayer<'_> {
     }
 
     fn paint(&self, frame: &mut Frame<'_>, _area: Rect, env: FrameEnv<'_>) {
-        super::frame::paint_backdrop(frame, self.app, &self.normal, env.config.tui().layout());
+        super::frame::paint_backdrop(frame, self.app, &self.normal, env.config.layout());
         if self.full {
             if let Some(cover) = self.areas.cover.filter(|area| !area.is_empty()) {
                 super::frame::draw_fullscreen_cover(frame, cover, self.app);

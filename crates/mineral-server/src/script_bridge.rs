@@ -12,8 +12,8 @@ use mineral_playback::PlaybackRequest;
 use mineral_protocol::{DownloadTarget, Event};
 use mineral_script::mlua::Lua;
 use mineral_script::{
-    PlaylistBrief, PropKey, PropValue, QueryId, ResolveValue, ScriptCmd, ScriptHost, ScriptRuntime,
-    ScriptSender, SourceWebUrls, WatchdogConfig,
+    PlaylistBrief, QueryId, ResolveValue, ScriptCmd, ScriptHost, ScriptRuntime, ScriptSender,
+    SourceWebUrls, WatchdogConfig,
 };
 use num_traits::ToPrimitive;
 use tokio::sync::broadcast;
@@ -27,25 +27,21 @@ use crate::player::PlayerCore;
 enum QueryError {
     /// Playback provider is absent for the requested source.
     #[error("no playback provider for source {0:?}")]
-    NoProvider(mineral_model::SourceKind),
+    MissingProvider(mineral_model::SourceKind),
 
     /// Catalog channel is absent for the requested source.
     #[error("no channel for source {0:?}")]
-    NoChannel(mineral_model::SourceKind),
+    MissingChannel(mineral_model::SourceKind),
 
     /// Provider resolved media without a direct URL.
     #[error("{0} has no direct media capability")]
     NoDirectMedia(SongId),
-
-    /// Script child-process concurrency limit was reached.
-    #[error("spawn concurrency limit reached: {0}")]
-    SpawnLimit(usize),
 }
 
 /// daemon 入口(main)装配、`serve` 层消费的脚本部件包。
 ///
-/// `vm` 为 `None` 表示无用户脚本(文件缺失 / eval 失败已降级),此时只有
-/// 泵在跑;热重载发现 config.lua 后仍可升级为有脚本。
+/// `vm` 为 `None` 表示无用户脚本(入口文件缺失 / 求值失败已降级),此时只有
+/// 泵在跑；创建或修复 daemon.lua 后可经热重载启用脚本。
 pub struct ScriptParts {
     /// Stable message sender shared during assembly, before the VM thread starts.
     sender: ScriptSender,
@@ -62,19 +58,19 @@ pub struct ScriptParts {
     /// 脚本 → daemon 的命令出口接收端。
     cmd_rx: UnboundedReceiver<ScriptCmd>,
 
-    /// 脚本 → client 的推送出口发送端(热重载给新 host 复用同一通道)。
+    /// daemon 回调失败 → client 的诊断出口发送端(重载复用)。
     push_tx: UnboundedSender<Event>,
 
-    /// 脚本 → client 的推送出口接收端。
+    /// daemon 回调失败 → client 的诊断出口接收端。
     push_rx: UnboundedReceiver<Event>,
 }
 
 impl ScriptParts {
-    /// 打包装配件(由 daemon 入口在 `load_with_vm` 后构造)。
+    /// 打包装配件(由 daemon 入口在 `load_daemon_with_vm` 后构造)。
     ///
     /// # Params:
-    ///   - `vm`: `load_with_vm` 交还的 VM
-    ///   - `host`: 与 `install_api` 同一个宿主句柄
+    ///   - `vm`: `load_daemon_with_vm` 交还的 VM，setup 留给 runtime 执行
+    ///   - `host`: 与 `install_daemon_api` 同一个宿主句柄
     ///   - `cmd_tx`: 命令通道发送端(与 `host` 内同源,热重载复用)
     ///   - `cmd_rx`: 命令通道接收端
     ///   - `push_tx`: 推送通道发送端(同上)
@@ -193,11 +189,6 @@ pub struct ScriptPumps {
     web_urls: Vec<SourceWebUrls>,
 }
 
-/// 属性值快照源:重载起新 VM 前取 daemon 当前属性,播种其缓存
-/// (经 [`ScriptHost::seed_props`];daemon 只下发 diff,不播种则新 VM
-/// 的 observe 回放 / 顶层 get 要等属性下次真变更)。
-pub(crate) type PropsSnapshot = Arc<dyn Fn() -> Vec<(PropKey, PropValue)> + Send + Sync>;
-
 /// `ScriptPumps::start` 拆出的热重载接线件(交给
 /// [`crate::script_reload::spawn_script_reloader`])。
 pub struct ScriptReloadParts {
@@ -210,9 +201,6 @@ pub struct ScriptReloadParts {
     /// 看门狗参数(重载起新线程用)。
     pub(crate) watchdog: WatchdogConfig,
 
-    /// 属性值快照源(重载播种新 VM 的属性缓存)。
-    pub(crate) props_snapshot: PropsSnapshot,
-
     /// 各源网页链接模板(重载的新 VM 重新 seed 用)。
     pub(crate) web_urls: Vec<SourceWebUrls>,
 
@@ -224,7 +212,7 @@ pub struct ScriptReloadParts {
     pub(crate) stats: crate::StatsRecorder,
 }
 
-/// 配置底树落点(重载任务 → 配置宿主的间接层,同 [`PropsSnapshot`] 模式)。
+/// 配置底树落点(重载任务 → 配置宿主)。
 pub(crate) type ApplyConfigBase = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
 
 impl ScriptPumps {
@@ -251,16 +239,11 @@ impl ScriptPumps {
         } = self;
         // player 随后被泵任务 move 走,先留一份埋点句柄给重载器。
         let stats = player.inner.stats.clone();
-        let props_snapshot: PropsSnapshot = {
-            let player = player.clone();
-            Arc::new(move || player.props_snapshot())
-        };
         let apply_config_base: ApplyConfigBase = {
             let player = player.clone();
             Arc::new(move |tree| player.set_config_base(tree))
         };
-        // 拼错的 curate 源名在 config 层无从校验(config crate 不知运行期
-        // channel 集),这里对无对应 channel 的键打 warn 兜诊断。
+        // 配置落型时还没有运行期 channel 集;这里诊断没有对应 channel 的策展键。
         {
             let player = player.clone();
             tokio::spawn(async move {
@@ -282,63 +265,24 @@ impl ScriptPumps {
                 }
             });
         }
-        let stats_bus = player.inner.stats.clone();
         tokio::spawn(async move {
             while let Some(event) = push_rx.recv().await {
-                // 埋点:脚本事件总线消息(bus_messages;actor=Script)。只记名,载荷不入库。
-                if let Event::BusMessage { name, .. } = &event {
-                    stats_bus.event(mineral_stats::StatsEvent::Behavior {
-                        actor: mineral_stats::Actor::Script,
-                        event: mineral_stats::BehaviorEvent::BusMessage { name: name.clone() },
-                    });
-                }
-                // 无订阅者 send 失败即丢(advisory)。
+                // 回调失败与重载诊断汇入 wire;无订阅者即丢(advisory)。
                 let _ = sink.send(event);
             }
         });
         tokio::spawn(async move {
-            // 在跑子进程表归泵任务所有,随泵同生命周期。
-            let spawns = SpawnTable::new(player.spawn_max_concurrent());
             while let Some(cmd) = cmd_rx.recv().await {
-                apply_cmd(&player, cmd, &spawns);
+                apply_cmd(&player, cmd);
             }
         });
         ScriptReloadParts {
             cmd_tx,
             push_tx,
             watchdog,
-            props_snapshot,
             web_urls,
             apply_config_base,
             stats,
-        }
-    }
-}
-
-/// `mineral.spawn` 的在跑子进程表:id → kill 信号发送端。
-///
-/// 完成 / 被杀即移除;并发闸按表长判断(`max == 0` 不限)。
-struct SpawnTable {
-    /// 在跑子进程。
-    running: Arc<
-        parking_lot::Mutex<
-            rustc_hash::FxHashMap<mineral_script::SpawnId, tokio::sync::oneshot::Sender<()>>,
-        >,
-    >,
-
-    /// 并发上限(配置 `script.spawn_max_concurrent`)。
-    max: usize,
-}
-
-impl SpawnTable {
-    /// 建空表。
-    ///
-    /// # Params:
-    ///   - `max`: 并发上限(0 = 不限)
-    fn new(max: usize) -> Self {
-        Self {
-            running: Arc::new(parking_lot::Mutex::new(rustc_hash::FxHashMap::default())),
-            max,
         }
     }
 }
@@ -365,7 +309,7 @@ fn resolve_ok(player: &PlayerCore, query: QueryId, value: ResolveValue) {
 /// Resolves `library.song_url` and returns the provider's direct media capability.
 fn apply_library_song_url(player: &PlayerCore, song: SongId, query: QueryId) {
     let Some(provider) = player.playback().get(song.namespace()) else {
-        let error = QueryError::NoProvider(song.namespace());
+        let error = QueryError::MissingProvider(song.namespace());
         resolve_err(player, query, error);
         return;
     };
@@ -417,7 +361,7 @@ async fn resolve_search(
     match source {
         Some(source) => {
             let Some(channel) = player.channel_for(source).cloned() else {
-                let error = QueryError::NoChannel(source);
+                let error = QueryError::MissingChannel(source);
                 resolve_err(player, query, error);
                 return;
             };
@@ -462,8 +406,8 @@ async fn resolve_search(
     }
 }
 
-/// 记一次脚本发起的歌曲搜索(searches;actor=script,kind=song——`mineral.search`
-/// / `library.search` 只搜曲)。`count` 有值表示成功,`None` 表示失败。
+/// 记录 `library.search` 的歌曲搜索(actor=script)。
+/// `count` 有值表示成功,`None` 表示失败。
 fn record_script_search(
     player: &PlayerCore,
     term: &str,
@@ -508,28 +452,8 @@ fn record_store_write(
         });
 }
 
-/// 记一次脚本子进程 spawn 收束(actor=script;spawns 表)。
-fn record_spawn(
-    player: &PlayerCore,
-    program: String,
-    outcome: mineral_stats::SpawnOutcome,
-    exit_code: Option<i64>,
-) {
-    player
-        .inner
-        .stats
-        .event(mineral_stats::StatsEvent::Behavior {
-            actor: mineral_stats::Actor::Script,
-            event: mineral_stats::BehaviorEvent::Spawn {
-                program,
-                outcome,
-                exit_code,
-            },
-        });
-}
-
 /// 把一条脚本命令落到 player 执行面(与 client Request 同一些方法)。
-fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
+fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
     // 传输类命令(暂停 / 跳转 / 音量 / 模式)一律走 PlayerCore 的 transport 方法,与
     // client Handler 同一执行 + 埋点出口——脚本操作以 actor=Script 入库。
     match cmd {
@@ -647,36 +571,6 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
                 }
             });
         }
-        ScriptCmd::StoreInc {
-            song,
-            key,
-            delta,
-            query,
-        } => {
-            record_store_write(player, &song, &key, mineral_stats::StoreOp::Inc);
-            let player = player.clone();
-            tokio::spawn(async move {
-                let scope = player.persist().scope(song.namespace());
-                match scope.kv_inc(&song, &key, delta).await {
-                    Ok(value) => {
-                        player.notify().store_changed(&song, &key);
-                        if let Some(query) = query {
-                            resolve_ok(&player, query, ResolveValue::Store(value));
-                        }
-                    }
-                    Err(e) => match query {
-                        Some(query) => resolve_err(&player, query, e),
-                        None => mineral_log::warn!(
-                            target: "script",
-                            song_id = song.qualified(),
-                            key,
-                            error = mineral_log::chain(&e),
-                            "store.inc 失败"
-                        ),
-                    },
-                }
-            });
-        }
         ScriptCmd::LibraryPlaylists { query } => {
             // 读聚合快照,与 client 严格同一份出口变换结果(不逐源真拉)。
             // 初始完备前(daemon 启动早期)query 停靠,完备时刻由管线统一 resolve。
@@ -692,7 +586,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             let player = player.clone();
             tokio::spawn(async move {
                 let Some(channel) = player.channel_for(playlist.namespace()).cloned() else {
-                    let error = QueryError::NoChannel(playlist.namespace());
+                    let error = QueryError::MissingChannel(playlist.namespace());
                     resolve_err(&player, query, error);
                     return;
                 };
@@ -727,49 +621,6 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             });
         }
         ScriptCmd::LibrarySongUrl { song, query } => apply_library_song_url(player, song, query),
-        ScriptCmd::Spawn { id, spec, query } => {
-            // spec 随即被 run_child 移走,先留程序名给埋点。
-            let program = spec.program().to_owned();
-            let over_limit = spawns.max != 0 && spawns.running.lock().len() >= spawns.max;
-            if over_limit {
-                // 埋点:并发超限即起进程失败(spawns;outcome=SpawnFailed,无退出码)。
-                record_spawn(
-                    player,
-                    program,
-                    mineral_stats::SpawnOutcome::SpawnFailed,
-                    None,
-                );
-                let error = QueryError::SpawnLimit(spawns.max);
-                resolve_err(player, query, error);
-            } else {
-                let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
-                spawns.running.lock().insert(id, kill_tx);
-                let player = player.clone();
-                let running = Arc::clone(&spawns.running);
-                tokio::spawn(async move {
-                    let result = mineral_script::run_child(spec, kill_rx).await;
-                    running.lock().remove(&id);
-                    // 埋点:子进程收束(kill / 正常退出 / 起进程失败)。退出码仅正常退出有。
-                    let outcome = match &result {
-                        Ok(done) if done.killed => mineral_stats::SpawnOutcome::Killed,
-                        Ok(_) => mineral_stats::SpawnOutcome::Exited,
-                        Err(_) => mineral_stats::SpawnOutcome::SpawnFailed,
-                    };
-                    let exit_code = result.as_ref().ok().and_then(|d| d.code).map(i64::from);
-                    record_spawn(&player, program, outcome, exit_code);
-                    match result {
-                        Ok(done) => resolve_ok(&player, query, ResolveValue::Spawn(done)),
-                        Err(e) => resolve_err(&player, query, e),
-                    }
-                });
-            }
-        }
-        ScriptCmd::SpawnKill { id } => {
-            // 已退出 / 未知 id:发送端缺席,no-op。
-            if let Some(kill) = spawns.running.lock().remove(&id) {
-                let _ = kill.send(());
-            }
-        }
         ScriptCmd::ConfigOverride { ops } => {
             // 埋点:config_overrides 逐叶入库(表对象形一次调用多条叶子,按 path 各记一行)。
             for op in &ops {
@@ -785,7 +636,6 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd, spawns: &SpawnTable) {
             }
             player.apply_config_overrides(ops);
         }
-        ScriptCmd::WindowTitle { text } => player.apply_window_title_override(text),
         ScriptCmd::SetLoved { song, loved } => {
             let player = player.clone();
             tokio::spawn(async move {

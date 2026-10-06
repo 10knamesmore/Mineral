@@ -94,11 +94,8 @@ pub(super) enum FailureReason {
     /// 队列编辑锚点过期:client 视图与 daemon 队列不一致。
     Stale,
 
-    /// 有效配置里没有这个队列变换 label。
+    /// daemon 服务能力中没有这个队列变换名称。
     UnknownTransform,
-
-    /// 有效配置里有多条同名队列变换 label。
-    AmbiguousTransform,
 }
 
 impl FailureReason {
@@ -114,7 +111,6 @@ impl FailureReason {
             },
             Self::Stale => "stale",
             Self::UnknownTransform => "unknown-transform",
-            Self::AmbiguousTransform => "ambiguous-transform",
         }
     }
 
@@ -127,8 +123,7 @@ impl FailureReason {
             Self::Daemon(FailureKind::Conflict) => "与当前状态冲突",
             Self::Daemon(FailureKind::Internal) => "daemon 内部错误",
             Self::Stale => "队列已被改动或变换返回了队列外的 id,本次未执行",
-            Self::UnknownTransform => "有效配置里没有这个队列变换",
-            Self::AmbiguousTransform => "有效配置里有多个同名队列变换",
+            Self::UnknownTransform => "daemon 没有这个可用的队列变换",
         }
     }
 }
@@ -249,8 +244,8 @@ mod tests {
         assert_eq!(SkipReason::NoChange.as_str(), "no-change");
         assert_eq!(FailureReason::Stale.as_str(), "stale");
         assert_eq!(
-            FailureReason::AmbiguousTransform.as_str(),
-            "ambiguous-transform"
+            FailureReason::UnknownTransform.as_str(),
+            "unknown-transform"
         );
         assert_eq!(
             FailureReason::Daemon(FailureKind::Unavailable).as_str(),

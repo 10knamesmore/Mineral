@@ -40,7 +40,7 @@ pub use overlay_reveal::OverlayReveal;
 pub use player::PlayerMirror;
 pub use playlist_tracks::PlaylistTracks;
 pub use search::SearchState;
-pub use view_context::{ActiveLayer, PageKind, View};
+pub use view_context::{PageKind, View};
 
 pub(crate) use view_switch::ViewSwitch;
 

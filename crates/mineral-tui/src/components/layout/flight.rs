@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn plan_none_without_cached_images() -> color_eyre::Result<()> {
         let app = app_in_search_morph(/*cache_browse*/ false, /*cache_detail*/ false)?;
-        let cfg = app.state.cfg.tui().layout().clone();
+        let cfg = app.state.cfg.layout().clone();
         let area = Rect::new(0, 0, 120, 40);
         let normal = compute(area, &cfg);
         let search = compute_search(area, &cfg);
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn plan_from_only_when_browse_cached() -> color_eyre::Result<()> {
         let app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ false)?;
-        let cfg = app.state.cfg.tui().layout().clone();
+        let cfg = app.state.cfg.layout().clone();
         let area = Rect::new(0, 0, 120, 40);
         let normal = compute(area, &cfg);
         let search = compute_search(area, &cfg);

@@ -7,5 +7,5 @@ expression: lines
 {"command":"volume","outcome":"applied","volume_pct":45}
 {"command":"seek","outcome":"applied","position_ms":90000}
 {"command":"play-pause","outcome":"skipped","reason":"no-current-track"}
-{"command":"queue transform","outcome":"failed","kind":"ambiguous-transform","detail":"同名 label `x` 出现在下标 0, 1"}
+{"command":"queue transform","outcome":"failed","kind":"unknown-transform"}
 {"command":"pause","outcome":"unknown","detail":"连不上 daemon"}

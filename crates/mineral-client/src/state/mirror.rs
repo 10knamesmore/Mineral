@@ -34,17 +34,6 @@ pub(crate) enum ApplyOutcome {
     Resync,
 }
 
-/// 窗口标题覆盖的镜像状态:区分「尚未收到」与「已知无覆盖」。
-#[derive(Clone, Debug, Default)]
-pub enum WindowTitleOverride {
-    /// 尚未收到任何覆盖状态。
-    #[default]
-    NotKnown,
-
-    /// 已知状态:`Some` 为覆盖文本,`None` 为无覆盖(回落模板)。
-    Set(Option<String>),
-}
-
 /// 播放镜像:队列 / 当前曲 / 轻段。
 #[derive(Clone, Debug, Default)]
 pub struct PlayerMirror {
@@ -306,8 +295,8 @@ struct MirrorState {
     /// 下载明细(订阅后才有值)。
     downloads_detail: Option<DownloadsDetailMirror>,
 
-    /// 窗口标题覆盖状态。
-    window_title: WindowTitleOverride,
+    /// 当前 daemon 服务能力；尚未收到订阅重放时为 None。
+    service_info: Option<mineral_protocol::ServiceInfo>,
 
     /// 待消费事件。
     events: VecDeque<Event>,
@@ -351,7 +340,7 @@ impl Mirror {
                 tasks: None,
                 downloads_summary: DownloadSummary::default(),
                 downloads_detail: None,
-                window_title: WindowTitleOverride::NotKnown,
+                service_info: None,
                 events: VecDeque::new(),
                 events_dropped: 0,
                 pcm: PcmWindow::new(pcm_window),
@@ -409,10 +398,10 @@ impl Mirror {
         f(self.state.read().downloads_detail.as_ref())
     }
 
-    /// 窗口标题覆盖状态。
+    /// 当前服务能力快照；尚未收到服务能力订阅更新时为 None。
     #[must_use]
-    pub fn window_title_override(&self) -> WindowTitleOverride {
-        self.state.read().window_title.clone()
+    pub fn service_info_snapshot(&self) -> Option<mineral_protocol::ServiceInfo> {
+        self.state.read().service_info.clone()
     }
 
     /// 设置链路状态。
@@ -596,23 +585,8 @@ impl Mirror {
             }
             UpdatePayload::Pcm(chunk) => state.pcm.push(&chunk),
             UpdatePayload::Event(event) => {
-                // 事件本身只排队;只有窗口标题覆盖需要镜像一份当前值。
-                match &*event {
-                    Event::WindowTitleOverride { text } => {
-                        state.window_title = WindowTitleOverride::Set(text.clone());
-                    }
-                    Event::Failure(_)
-                    | Event::Toast { .. }
-                    | Event::Card { .. }
-                    | Event::PropertyChanged { .. }
-                    | Event::TrackFinished { .. }
-                    | Event::DownloadCompleted { .. }
-                    | Event::StoreChanged { .. }
-                    | Event::ScriptReloaded
-                    | Event::BusMessage { .. }
-                    | Event::ConfigChanged { .. }
-                    | Event::DismissToast { .. }
-                    | Event::Task(_) => {}
+                if let Event::ServiceInfoChanged { info } = event.as_ref() {
+                    state.service_info = Some(info.clone());
                 }
                 state.events.push_back(*event);
                 while state.events.len() > self.event_capacity {

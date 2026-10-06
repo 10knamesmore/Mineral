@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
+use crate::config::CoverCellFit;
 use image::{DynamicImage, Rgba, RgbaImage};
-use mineral_config::CoverCellFit;
 use mineral_model::MediaUrl;
 use mineral_protocol::AdvanceKind;
 use ratatui::buffer::Buffer;
@@ -35,11 +35,11 @@ pub(crate) enum BlendStyle {
     Zoom,
 }
 
-impl From<mineral_config::CoverTransitionStyle> for BlendStyle {
-    fn from(value: mineral_config::CoverTransitionStyle) -> Self {
+impl From<crate::config::CoverTransitionStyle> for BlendStyle {
+    fn from(value: crate::config::CoverTransitionStyle) -> Self {
         match value {
-            mineral_config::CoverTransitionStyle::Slide => Self::Slide,
-            mineral_config::CoverTransitionStyle::Zoom => Self::Zoom,
+            crate::config::CoverTransitionStyle::Slide => Self::Slide,
+            crate::config::CoverTransitionStyle::Zoom => Self::Zoom,
             _ => Self::Fade,
         }
     }
@@ -613,7 +613,7 @@ mod tests {
         let second = MediaUrl::remote("https://example.com/unused.png")?;
         let area = Rect::new(0, 0, 4, 2);
         for paints in [0, 1, 2] {
-            let mut engine = ImageEngine::disabled(Arc::new(mineral_config::Config::defaults()?));
+            let mut engine = ImageEngine::disabled(Arc::new(crate::config::TuiConfig::defaults()?));
             for url in [&first, &second] {
                 engine
                     .cache
@@ -654,7 +654,8 @@ mod tests {
         use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
         use mineral_model::MediaUrl;
         use std::sync::Arc;
-        let mut engine = ImageEngine::disabled_kitty(Arc::new(mineral_config::Config::defaults()?));
+        let mut engine =
+            ImageEngine::disabled_kitty(Arc::new(crate::config::TuiConfig::defaults()?));
         let url = MediaUrl::remote("https://example.com/kitty-wide.png")?;
         let image = Arc::new(DynamicImage::ImageRgb8(RgbImage::from_pixel(
             301,
@@ -745,7 +746,7 @@ mod tests {
             area,
             &image,
             (8, 16),
-            mineral_config::CoverCellFit::Contain,
+            crate::config::CoverCellFit::Contain,
         );
 
         for y in 0..2u16 {
@@ -790,7 +791,7 @@ mod tests {
             area,
             &image,
             (4, 16),
-            mineral_config::CoverCellFit::Contain,
+            crate::config::CoverCellFit::Contain,
         );
 
         let top = buf.cell((0, 0)).ok_or_else(|| eyre!("顶 cell 越界"))?;

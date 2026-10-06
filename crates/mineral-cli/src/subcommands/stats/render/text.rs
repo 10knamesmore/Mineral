@@ -18,7 +18,7 @@ const BAR_WIDTH: usize = 20;
 /// stats.db 不存在时的友好提示(指向配置,不报错栈)。
 pub fn render_absent() -> String {
     "stats.db does not exist yet — nothing recorded, or stats.level = \"off\".\n\
-     To enable: set stats.level = \"core\" (plays + sessions) or \"full\" (all interactions) in config.lua."
+     To enable: set stats.level = \"core\" (plays + sessions) or \"full\" (all interactions) in daemon.lua."
         .to_owned()
 }
 

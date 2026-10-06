@@ -90,7 +90,7 @@ impl crate::components::lifecycle::PaintView for TrackView<'_> {
         self.list.scroll.dependencies(inputs, total, viewport);
         self.list
             .title
-            .dependencies(inputs, self.frame.config.tui().animation(), self.frame.now);
+            .dependencies(inputs, self.frame.config.animation(), self.frame.now);
         inputs.observe(&self.list.stable);
         inputs.observe(&self.list.expansion.active.is_some());
         if self.list.stable && self.list.expansion.active.is_some() {

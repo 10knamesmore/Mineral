@@ -1,6 +1,6 @@
-//! 「转 Client」的领域动作执行器:播放控制 / love / 下载 / 脚本动作。
+//! 「转 Client」的领域动作执行器:播放控制 / love / 下载。
 //!
-//! 实现 `App` 的播放控制、love、下载与脚本动作；入口由 `App::dispatch` 调用。
+//! 实现 `App` 的播放控制、love 与下载；入口由 `App::dispatch` 调用。
 
 use mineral_model::Song;
 use mineral_protocol::DownloadTarget;
@@ -9,8 +9,7 @@ use mineral_task::TaskEvent;
 use crate::app::App;
 use crate::components::popup::{ContainerRef, MenuAction};
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
-use crate::runtime::action::ScriptSlot;
-use crate::runtime::state::{ActiveLayer, DetailFetch, EntityRef, PageKind, View};
+use crate::runtime::state::{DetailFetch, EntityRef, PageKind, View};
 
 /// 容器入队模式:替换队列起播 / 追加到队尾 / 按序插播(由 `PlayContainer` /
 /// `AppendContainer` / `PlayNextContainer` 决定)。
@@ -74,86 +73,6 @@ impl PendingPlaylistPlay {
 }
 
 impl App {
-    /// 触发 `tui.keys.script` 绑定的脚本动作:槽位 → 注册名 → daemon;
-    /// daemon 报错(未注册 / 脚本未启用 / 执行失败)时 toast 提示。
-    pub(crate) fn invoke_script_action(&mut self, slot: ScriptSlot) {
-        // owned 拷贝:松开对 keymap 的借用,下面才能可变借用 notifications。
-        let Some(name) = self.keymap.script_action(slot).map(str::to_owned) else {
-            return;
-        };
-        let ctx = self.collect_key_context();
-        // 结论异步回流(完成事件带动作名),失败时提示;按键立即继续。
-        self.client.invoke_action(&name, Some(ctx));
-    }
-
-    /// 采集按键瞬间的上下文快照(脚本动作的 `ctx` 实参)。
-    ///
-    /// view 判定与 `handle_key` 路由共用 `active_layer`(队列浮层光标特例除外),优先级
-    /// 队列浮层 > 搜索 > 全屏 >
-    /// 主视图映射(`Playlists` → Playlists,`Library` → Tracks)。选中歌只在
-    /// 「有歌列表光标」的视图采(Library 列表 / 队列浮层光标),其余为 `None`;
-    /// `selected_loved` 随选中歌给(♥ 装饰缓存),`search_query` 空词为 `None`。
-    pub(crate) fn collect_key_context(&self) -> mineral_protocol::KeyContext {
-        use mineral_protocol::{KeyContext, PlaylistRef, ViewKind};
-        let now_playing = self.state.models.player.current.clone().map(Box::new);
-        let selected_playlist = self.state.selected_playlist().map(|p| PlaylistRef {
-            id: p.data.id.clone(),
-            name: p.data.name.clone(),
-        });
-        let search_query = if self.state.ui.browse.active_search().query().is_empty() {
-            None
-        } else {
-            Some(self.state.ui.browse.active_search().query().to_owned())
-        };
-        // 选中歌 + 其 ♥ 态:队列浮层取光标条目(♥ 查 liked_ids 缓存),
-        // Library 列表取选中行(PlaylistEntryView 已装饰)。
-        let (view, selected_song, selected_loved) =
-            if let Some(cursor) = self.overlays.active_queue_cursor(&self.state) {
-                // 队列浮层:唯一带脚本选中的浮层(取光标条目)。
-                let song = self.state.models.player.queue.get(cursor).cloned();
-                let loved = song.as_ref().map(|s| {
-                    self.state
-                        .models
-                        .library
-                        .liked_ids
-                        .get(&s.id.namespace())
-                        .is_some_and(|ids| ids.contains(&s.id))
-                });
-                (ViewKind::Queue, song, loved)
-            } else {
-                // 其余浮层对脚本 ctx 透明,看穿到下层布局层(与 handle_key 路由共用 active_layer)。
-                match self.state.active_layer() {
-                    ActiveLayer::SearchSession | ActiveLayer::DeepSearch => {
-                        (ViewKind::Search, None, None)
-                    }
-                    ActiveLayer::Fullscreen => (ViewKind::Fullscreen, None, None),
-                    ActiveLayer::Browse => match self.state.ui.browse.view.current() {
-                        View::Playlists => (ViewKind::Playlists, None, None),
-                        View::Library => {
-                            let sel = self
-                                .state
-                                .filtered_tracks()
-                                .get(self.state.ui.browse.tracks.scroll().sel());
-                            let loved = sel.as_ref().map(|entry| entry.loved);
-                            (
-                                ViewKind::Tracks,
-                                sel.map(|entry| entry.data.song.clone()),
-                                loved,
-                            )
-                        }
-                    },
-                }
-            };
-        KeyContext::builder()
-            .view(view)
-            .selected_song(selected_song.map(Box::new))
-            .selected_playlist(selected_playlist)
-            .now_playing(now_playing)
-            .selected_loved(selected_loved)
-            .search_query(search_query)
-            .build()
-    }
-
     /// 空格键:有当前曲目时在 pause/resume 间切换;没歌时无动作。
     pub(crate) fn toggle_play_pause(&mut self) {
         if self.state.models.playback.track.is_none() {
@@ -191,10 +110,7 @@ impl App {
     /// 发出 seek 请求并反馈操作，进度与歌词位置仍等待后端确认。
     pub(crate) fn seek_to(&mut self, position_ms: u64) {
         self.client.seek(position_ms);
-        self.state
-            .ui
-            .transport
-            .on_seek(self.state.cfg.tui().animation());
+        self.state.ui.transport.on_seek(self.state.cfg.animation());
     }
 
     /// 持久化并乐观切换当前页面选中歌曲的喜欢态。Search 取结果或详情曲目，Browse 取
@@ -265,9 +181,17 @@ impl App {
                 self.start_container_play(&container, PlayMode::InsertNext);
             }
             MenuAction::Copy(text) => self.copy_to_clipboard(&text),
-            // 渲染在 daemon 脚本运行时,结论异步回流(低频操作,按键不等)。
             MenuAction::CopyTemplate { index, ctx } => {
-                self.client.render_copy_template(index, ctx);
+                match self.render_local_copy_template(index, ctx) {
+                    Ok(text) => self.copy_to_clipboard(&text),
+                    Err(error) => {
+                        mineral_log::warn!(target: "tui.script", index, error = mineral_log::chain(&error), "local copy template failed");
+                        self.notifications.flash(tinted_text_item(
+                            "Could not copy selection".to_owned(),
+                            TextTint::Error,
+                        ));
+                    }
+                }
             }
         }
     }
@@ -403,13 +327,7 @@ impl App {
                 .filter(|entry| entry.data.song.id == selected.id)
                 .nth(occurrence)
             {
-                let query = (self
-                    .state
-                    .cfg
-                    .tui()
-                    .behavior()
-                    .filter_play_scope()
-                    .matches_only()
+                let query = (self.state.cfg.behavior().filter_play_scope().matches_only()
                     && !self.state.ui.browse.active_search().query().is_empty())
                 .then(|| self.state.ui.browse.active_search().query().to_owned());
                 self.pending_playlist_play = Some(PendingPlaylistPlay {
@@ -588,15 +506,13 @@ fn container_context(container: &ContainerRef) -> mineral_protocol::QueueContext
 mod tests {
     use mineral_channel_core::Page;
     use mineral_model::{Album, AlbumId, Artist, ArtistId, SourceKind};
-    use mineral_protocol::{QueueContextWire, ViewKind};
+    use mineral_protocol::QueueContextWire;
     use mineral_task::TaskEvent;
 
     use super::PlayMode;
     use crate::components::popup::{ContainerRef, MenuAction};
     use crate::runtime::state::DetailFetch;
-    use crate::test_support::{
-        app_with_library, app_with_library_probed, app_with_queue, endserenading,
-    };
+    use crate::test_support::{app_with_library_probed, endserenading};
 
     /// 首批起播等待完整结果；补进中间缺口后仍定位到同一重复歌曲 occurrence。
     #[test]
@@ -1011,134 +927,6 @@ mod tests {
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("queue_ops 锁中毒: {e}"))?;
         assert_eq!(*ops, want, "本地空队列不改变插播意图或歌曲顺序");
-        Ok(())
-    }
-
-    /// Library 视图:view 映射 Tracks,选中歌 / 所在歌单 / 在播全采到。
-    #[test]
-    fn keyctx_library_view_collects_selection() -> color_eyre::Result<()> {
-        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 1)?;
-        app.state.models.player.current = app
-            .state
-            .filtered_tracks()
-            .first()
-            .map(|entry| entry.data.song.clone());
-        let ctx = app.collect_key_context();
-        assert_eq!(*ctx.view(), ViewKind::Tracks);
-        let want_sel = app
-            .state
-            .filtered_tracks()
-            .get(1)
-            .map(|entry| entry.data.song.id.clone());
-        assert_eq!(ctx.selected_song().as_ref().map(|s| s.id.clone()), want_sel);
-        assert_eq!(
-            *ctx.selected_loved(),
-            Some(false),
-            "选中歌的 ♥ 态随投影给(测试装饰默认 false)"
-        );
-        assert!(
-            ctx.selected_playlist()
-                .as_ref()
-                .is_some_and(|p| !p.name.is_empty()),
-            "Library 视图下所在歌单也算选中,且带名字"
-        );
-        assert_eq!(
-            ctx.now_playing().as_ref().map(|s| s.id.clone()),
-            app.state
-                .models
-                .player
-                .current
-                .as_ref()
-                .map(|s| s.id.clone())
-        );
-        assert_eq!(*ctx.search_query(), None, "无过滤词为 None");
-        Ok(())
-    }
-
-    /// Playlists 视图:选中歌单命中、选中歌为 None。
-    #[test]
-    fn keyctx_playlists_view_selects_playlist_only() -> color_eyre::Result<()> {
-        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state
-            .ui
-            .browse
-            .view
-            .switch_to(crate::runtime::state::View::Playlists);
-        app.state.models.player.current = None;
-        let ctx = app.collect_key_context();
-        assert_eq!(*ctx.view(), ViewKind::Playlists);
-        assert!(ctx.selected_song().is_none());
-        assert!(ctx.selected_playlist().is_some());
-        assert!(ctx.now_playing().is_none(), "停止态在播为 None");
-        Ok(())
-    }
-
-    /// 队列浮层开着:view 报 Queue,选中歌取浮层光标所指的队列条目。
-    #[test]
-    fn keyctx_queue_overlay_selects_cursor_entry() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 3, /*current_idx*/ 0)?;
-        app.overlays.push(crate::app::AppOverlay::queue(/*sel*/ 2));
-        let ctx = app.collect_key_context();
-        assert_eq!(*ctx.view(), ViewKind::Queue);
-        assert_eq!(
-            ctx.selected_song().as_ref().map(|s| s.id.clone()),
-            app.state.models.player.queue.get(2).map(|s| s.id.clone()),
-            "浮层光标所指条目算选中"
-        );
-        assert_eq!(
-            *ctx.selected_loved(),
-            Some(false),
-            "队列条目 ♥ 态查 liked_ids 缓存(测试无 liked 记录 = false)"
-        );
-        Ok(())
-    }
-
-    /// 全屏态:view 报 Fullscreen,无列表选中,在播照常。
-    #[test]
-    fn keyctx_fullscreen_reports_now_playing() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 2, /*current_idx*/ 1)?;
-        app.state.ui.browse.fullscreen.set(true);
-        let ctx = app.collect_key_context();
-        assert_eq!(*ctx.view(), ViewKind::Fullscreen);
-        assert!(ctx.selected_song().is_none());
-        assert_eq!(
-            ctx.now_playing().as_ref().map(|s| s.id.clone()),
-            app.state
-                .models
-                .player
-                .current
-                .as_ref()
-                .map(|s| s.id.clone())
-        );
-        Ok(())
-    }
-
-    /// channel 搜索布局态的脚本上下文必须报 Search，不能看穿到下层主视图。
-    #[test]
-    fn keyctx_channel_search_reports_search() -> color_eyre::Result<()> {
-        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.ui.channel_search.active.set(true);
-        let ctx = app.collect_key_context();
-        assert_eq!(
-            *ctx.view(),
-            ViewKind::Search,
-            "channel 搜索态应报 Search,而非看穿到下层主视图"
-        );
-        Ok(())
-    }
-
-    /// 非 queue 浮层(确认框)对脚本上下文透明；channel 搜索态上叠确认框仍报 Search。
-    #[test]
-    fn keyctx_non_queue_overlay_is_transparent() -> color_eyre::Result<()> {
-        let mut app = app_with_library(/*len*/ 3, /*sel_track*/ 0)?;
-        app.state.ui.channel_search.active.set(true);
-        app.overlays.push(crate::app::AppOverlay::confirm());
-        let ctx = app.collect_key_context();
-        assert_eq!(
-            *ctx.view(),
-            ViewKind::Search,
-            "非 queue 浮层透明,看穿到下层 channel 搜索 = Search"
-        );
         Ok(())
     }
 }

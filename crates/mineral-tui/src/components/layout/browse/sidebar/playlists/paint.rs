@@ -75,7 +75,7 @@ impl crate::components::lifecycle::Prepare for PlaylistList {
             std::iter::empty(),
             motion,
             ticks,
-            frame.config.tui().minimap(),
+            frame.config.minimap(),
             advance,
         );
         if matches!(motion, ScrollMotion::Advancing { .. }) {
@@ -135,11 +135,7 @@ impl crate::components::lifecycle::Prepare for PlaylistList {
                     minimap: Some(PreparedMinimap {
                         area: super::super::preparation::minimap_track(area),
                         total,
-                        cursor: MinimapCursor::new(
-                            &self.scroll,
-                            total,
-                            frame.config.tui().minimap(),
-                        ),
+                        cursor: MinimapCursor::new(&self.scroll, total, frame.config.minimap()),
                         entries: Vec::new(),
                         theme: *theme,
                     }),
@@ -324,7 +320,7 @@ fn paint_minimap(
     theme: &Theme,
     total: usize,
 ) {
-    let cursor = MinimapCursor::new(&view.list.scroll, total, view.frame.config.tui().minimap());
+    let cursor = MinimapCursor::new(&view.list.scroll, total, view.frame.config.minimap());
     render_minimap(
         buf,
         Rect::new(
@@ -383,7 +379,7 @@ fn build_row(
             src.label(),
             Style::new().fg(crate::render::theme::resolve_source_color(
                 theme,
-                view.frame.config.sources(),
+                view.frame.config.source_colors(),
                 src,
             )),
         )),

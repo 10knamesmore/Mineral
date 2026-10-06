@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
-use mineral_config::SweepStyle;
+use crate::config::SweepStyle;
 use mineral_model::{Album, AlbumTrack, PlaylistEntry, Song};
 
 use crate::components::layout::shared::marquee::{MarqueeCtx, resolve_column_rects, row_marquee};
@@ -137,7 +137,7 @@ fn draw_artist_body(
                 &hot_buf,
                 &alb_buf,
                 eased,
-                *state.frame.config.tui().animation().view_sweep(),
+                *state.frame.config.animation().view_sweep(),
             );
         }
         None => draw_artist_section(buf, list, dframe.section, dframe, state, theme),
@@ -267,7 +267,7 @@ fn draw_track_list(
     // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
     let marquee_ctx = MarqueeCtx::new(
         paint.title,
-        state.frame.config.tui().animation(),
+        state.frame.config.animation(),
         state.frame.now,
         theme,
         /*fade_to*/ theme.surface0,

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use mineral_client::operation::Outcome;
 use mineral_model::SongId;
-use mineral_protocol::{CopyTextFailure, QueueEditOutcome, ScriptBind};
+use mineral_protocol::QueueEditOutcome;
 
 /// 操作完成事件(daemon 结论回流到 UI)。
 #[derive(Debug)]
@@ -31,18 +31,6 @@ pub(crate) enum Completion {
     /// 队列编辑回执。
     QueueEdit(Outcome<QueueEditOutcome>),
 
-    /// 脚本动作执行结果。
-    ScriptAction {
-        /// 动作注册名(提示用)。
-        name: String,
-
-        /// 结论。
-        outcome: Outcome<()>,
-    },
-
-    /// 复制模板渲染结果。
-    CopyTemplate(Outcome<Result<String, CopyTextFailure>>),
-
     /// 喜欢切换结果(乐观值以服务端结论校正)。
     Love {
         /// 目标歌曲(提示 / 校正归属用)。
@@ -54,9 +42,6 @@ pub(crate) enum Completion {
 
     /// 下载 Stop 结果。
     StopDownload(Outcome<()>),
-
-    /// 脚本绑定表刷新(重新拉取完成)。
-    ScriptBinds(Vec<ScriptBind>),
 }
 
 /// 完成事件队列:后端写入、App 每帧 drain(不阻塞 UI 线程)。

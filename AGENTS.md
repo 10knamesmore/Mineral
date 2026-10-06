@@ -8,39 +8,24 @@ Mineral 是一个多源, C-S 架构音乐播放器(tui as a client)
 
 数据库使用结构化列和关系，禁止存储或处理 JSON。
 
-测试运行器是 **cargo-nextest**(需 `cargo install cargo-nextest cargo-insta`);`cargo t` / `td` / `snap` 是 `.cargo/config.toml` 里的 alias。
+调用`scripts/check.sh` 跑代码编写完成后的验证
 
-测试优先使用真实进程 E2E 或 App 输入入口，验证操作结果、后端请求和状态变化；同一行为已有上层证明时，不重复维护底层单测。协议、存储、解析和资源生命周期等独立边界可保留单测。
+测试优先使用真实进程 E2E 或 App 输入入口，验证；非必要不写unit tests
 
-不为配色、视觉布局、动画帧或展示文案编写断言与快照。配置重载的应用行为、终端与 UTF-8 边界、机器消费的字段和协议字节仍需验证。
-
-项目有自定义dylint, 调用`scripts/check.sh` 跑代码编写完成后的验证
-
-所有测试**禁止**debug run, debug 运行花的时间比 release 编译多得多, 大头时间都在编译, **禁止**先跑部分测试再跑全量，浪费大头编译时间， 直接跑全量
+不为配色、视觉布局、动画帧或展示文案编写断言与快照。
 
 **版本号只由 CI release workflow 更新， 禁止手改版本**
 
-## 架构要点
+## 规范
 
-`mineral-model` 的设计原则是"平铺合并":模型里没有 source-specific 字段。任何 channel 实现都把网络/本地原始数据先映射到 `mineral-model` 的类型,再交给上层。这意味着新增 channel 时,**不要**给 `Song` 加 source-only 字段——要么提升为通用字段,要么保留在 channel 内部 dto 里。来源由 ID namespace 表达:`Song::source()` / `Album::source()` 等从各自 `id` 派生(见下)。
+`mineral-model` 的设计原则是"平铺合并":模型不应放 source-specific 字段。任何 channel 实现都把网络/本地原始数据先映射到 `mineral-model` 的类型,再交给上层
 
-ID 类型(`SongId`、`AlbumId` 等)由 `mineral_macros::define_id!` 生成
+- 配置默认值放在lua里面,不要在 Rust 里另设默认值。
+- 配置按 daemon 与 TUI 两个宿主归属：`crates/mineral-server/src/config/` 和 `crates/mineral-tui/src/config/` 各自集中根类型、全部子 schema、默认 Lua、用户模板、LuaLS 生成与加载校验；不按具体 UI 组件拆分。`mineral-config` 只提供共用求值、合并、落型、诊断与资产写出能力；`mineral-script` 拥有脚本执行、回调 registry 与共享 Lua API/实体元数据，不依赖宿主配置类型。CLI 协调两个宿主的 init/check。
+- `daemon.lua` 与 `tui.lua` 按文件区分宿主,直接返回配置根表与可选的 `setup(api)`,不接受顶层 `daemon` / `tui` 包装。两者拥有独立默认值、VM、覆盖和重载;IPC 只传业务状态与能力,不传配置或源码。
 
-`mineral-channel-core::MusicChannel`定义 catalog、library 与 user-data 操作:搜索、详情、歌词、用户歌单和喜欢状态等能力。`mineral-playback::PlaybackProvider` 独立负责把 song identity 解析为可打开的播放资源，并封装来源鉴权与媒体 preparation。server 面向这两个 trait 组合能力；TUI 通过 `mineral_server::Client` 发请求，不直接调用来源适配器。
+* \*\*do not use guard value (`0` / `""` / `-1` / `usize::MAX` etc ), use Option::None
 
-**术语:`channel`(适配器)≠ `source`(身份)**——`source`(`SourceKind`)是数据的**来源身份**,烙进每个 ID 的 namespace(回答"这条数据来自哪");`channel`(`MusicChannel` 实现)是 catalog / library / user-data 的**连接器 / 适配器**(回答"用哪个后端取数"),经 `channel.source()` 声明它服务哪个 source。注释与命名别把两者混用:讲 ID 归属 / `Song::source()` / `sources.<name>` 配置时用 **source(来源)**;讲搜索、详情、歌词或用户数据后端时用 **channel**;讲播放资源解析与打开时用 **playback provider**。
+* use structural Error instead of anyhow/String
 
-配置(file + session 覆盖)是 daemon 上的一份**运行时状态**:daemon mtime 轮询config.lua、合成 `merge(default, user, overlay)`、落型校验后经 `Event::ConfigChanged` 推整树给订阅 client(握手先重放一帧);**client 不看文件**(TUI 启动本地 load 一次只是自举,连上即被推送顶替)。
-
-client 侧配置消费两条规矩:
-
-- **现读优先**:组件直接读 `state.cfg`(Arc,换整棵即热更),**不许**构造期把配置值拷进自己字段(第二数据源)。
-- 确需构造期折算 / 固化的(拍数折算、FFT 预计算、缓存预算),必须挂`App::apply_config` 单入口(就地重设:`retempo` 保动画相位、`set_budgets` 不清缓存),并配一条重载测试(仿 `mineral-tui/src/runtime/reload.rs` 的既有测试)。
-
-- 类型标注优先 turbofish:写 `Vec::<T>::new()`、`.collect::<Vec<T>>()`,而不是左侧 `: Vec<T>`。例外:trait object 向上转型(`let x: Arc<dyn Trait> = ...`)和无法推断的 `None`(`let x: Option<T> = None`)。
-
-* 配置的默认值都放在 `default.lua` 里面， 不要在rust里面设置default导致多重数据源
-
-- **绝不用哨兵值(`0` / `""` / `-1` / `usize::MAX` 等)表达「未知 / 缺失 / 默认」**。「没有值」在 Rust 里只有一种正确表示:`Option<T>`(需要携带原因用 `Result` / 枚举)。
-
-- 生产代码按领域定义结构化错误，用 `thiserror` 实现 `Error`；只有一种底层失败的函数可以直接返回该依赖的错误类型。 `color-eyre` 只用于进程最外层诊断、示例入口和测试辅助
+- 将use 写在文件最开头, 而不是 full qualified 或者其他地方, 用来便于阅读文件开头就知道是用了哪些模块

@@ -1,25 +1,19 @@
-//! 从键位配置与交互步长构建动作查表、脚本槽位和帮助目录。
+//! 从键位配置与交互步长构建动作查表和帮助目录。
 //!
-//! keys 段给出动作绑定，behavior 段给出带参动作的步长；default.lua 与用户配置已完成深合并。
+//! keys 段给出动作绑定，behavior 段给出带参动作的步长；tui-default.lua 与用户配置已完成深合并。
 
 use std::borrow::Cow;
 
-use mineral_config::keys::KeyChord;
+use crate::config::key_syntax::KeyChord;
 use rustc_hash::FxHashMap;
 
 use super::help::{CatalogBuilder, HelpEntry, HelpGroup};
-use crate::runtime::action::{
-    Action, ScriptSlot, ScrollStep, SeekDelta, SelectionMove, VolumeDelta,
-};
+use crate::runtime::action::{Action, ScrollStep, SeekDelta, SelectionMove, VolumeDelta};
 
 /// 键 → 动作绑定表。生产路径经 [`Self::from_config`] 由配置落地。
 pub struct Keymap {
     /// 归一和弦 → 动作。一对一(单动作);多键映同动作即多条目。
     table: FxHashMap<KeyChord, Action>,
-
-    /// 脚本动作名表:`Action::InvokeScript` 的槽位 → 注册名
-    /// (Action 须 `Copy`,名字进不了枚举,经此表间接)。
-    script_names: Vec<String>,
 
     /// cheatsheet 目录(与查表同源产出,显示顺序;测试直喂构造时为空)。
     help: Vec<HelpEntry>,
@@ -36,21 +30,17 @@ impl Keymap {
     /// # Return:
     ///   查表结构。
     pub fn from_config(
-        keys: &mineral_config::KeysConfig,
-        behavior: &mineral_config::BehaviorConfig,
+        keys: &crate::config::KeysConfig,
+        behavior: &crate::config::BehaviorConfig,
     ) -> Self {
         let vol = i16::from(*behavior.volume_step());
         let seek = i64::from(*behavior.seek_step_secs());
         let seek_big = i64::from(*behavior.seek_big_step_secs());
         let jump = usize::from(*behavior.list_jump_rows());
-        // 脚本动作绑定:开放映射按名排序保证槽位确定性。
-        let mut script_bindings = keys.script().iter().collect::<Vec<_>>();
-        script_bindings.sort_by(|a, b| a.0.cmp(b.0));
-        let mut script_names = Vec::with_capacity(script_bindings.len());
         // 绑定 × 动作 × 目录元数据(组 + label):声明序即 cheatsheet 显示序;
         // 相邻同(组, label)的成对动作(±增减 / 上下移动)在目录里合并为一行。
         type Pair<'k> = (
-            &'k mineral_config::KeyBinding,
+            &'k crate::config::KeyBinding,
             Action,
             HelpGroup,
             Cow<'static, str>,
@@ -70,7 +60,7 @@ impl Keymap {
                 )
             ),+ ),+ ] };
         }
-        let mut pairs: Vec<Pair<'_>> = bind! {
+        let pairs: Vec<Pair<'_>> = bind! {
             Playback {
                 play_pause => TogglePlayPause, "Play / Pause";
                 next => NextSong, "Next / Previous";
@@ -123,15 +113,6 @@ impl Keymap {
                 scroll_page_up => Scroll(ScrollStep::PageUp), "Page scroll";
             }
         };
-        for (name, binding) in script_bindings {
-            pairs.push((
-                binding,
-                Action::InvokeScript(ScriptSlot(script_names.len())),
-                HelpGroup::Scripts,
-                Cow::Owned(name.clone()),
-            ));
-            script_names.push(name.clone());
-        }
         let mut table = FxHashMap::default();
         let mut catalog = CatalogBuilder::default();
         for (binding, action, group, label) in pairs {
@@ -143,7 +124,6 @@ impl Keymap {
         }
         Self {
             table,
-            script_names,
             help: catalog.finish(),
         }
     }
@@ -159,49 +139,7 @@ impl Keymap {
     pub fn from_entries(entries: impl IntoIterator<Item = (KeyChord, Action)>) -> Self {
         Self {
             table: entries.into_iter().collect::<FxHashMap<_, _>>(),
-            script_names: Vec::new(),
             help: Vec::new(),
-        }
-    }
-
-    /// 槽位 → 脚本动作注册名(`Action::InvokeScript` 的执行点用)。
-    ///
-    /// # Params:
-    ///   - `slot`: 查表命中的槽位
-    ///
-    /// # Return:
-    ///   对应注册名;槽位越界(理论不可达)为 `None`。
-    pub fn script_action(&self, slot: ScriptSlot) -> Option<&str> {
-        self.script_names.get(slot.0).map(String::as_str)
-    }
-
-    /// 把 daemon 拉回的 `mineral.bind` 表追加进查表(槽位排在配置
-    /// `keys.script` 之后)。键字符串解析失败的条目 warn 跳过、不占槽位,
-    /// 不拖死其余绑定。
-    ///
-    /// # Params:
-    ///   - `binds`: bind 表(注册顺序)
-    pub fn append_script_binds(&mut self, binds: &[mineral_protocol::ScriptBind]) {
-        for bind in binds {
-            let chord = match mineral_config::keys::KeyChord::parse(&bind.key) {
-                Ok(chord) => chord,
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "tui",
-                        key = bind.key,
-                        action = bind.action,
-                        error = mineral_log::chain(&e),
-                        "mineral.bind 的键解析失败,跳过该绑定"
-                    );
-                    continue;
-                }
-            };
-            self.table.insert(
-                chord,
-                Action::InvokeScript(ScriptSlot(self.script_names.len())),
-            );
-            self.help.push(HelpEntry::script(&bind.action, chord));
-            self.script_names.push(bind.action.clone());
         }
     }
 
@@ -241,7 +179,7 @@ impl Keymap {
 
 #[cfg(test)]
 mod tests {
-    use mineral_config::keys::KeyChord;
+    use crate::config::key_syntax::KeyChord;
 
     use super::Keymap;
     use crate::runtime::action::{Action, ScrollStep, SeekDelta, SelectionMove, VolumeDelta};
@@ -306,10 +244,10 @@ mod tests {
         ]
     }
 
-    /// 取 defaults 配置落地的键表(= 旧 builtin 表,由 default.lua keys/behavior 驱动)。
+    /// 取 defaults 配置落地的键表(= 旧 builtin 表,由 tui-default.lua keys/behavior 驱动)。
     fn default_keymap() -> color_eyre::Result<Keymap> {
-        let cfg = mineral_config::Config::defaults()?;
-        Ok(Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior()))
+        let cfg = crate::config::TuiConfig::defaults()?;
+        Ok(Keymap::from_config(cfg.keys(), cfg.behavior()))
     }
 
     #[test]
@@ -348,14 +286,14 @@ mod tests {
     #[test]
     fn behavior_steps_take_effect() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let user = dir.path().join("config.lua");
+        let user = dir.path().join("tui.lua");
         std::fs::write(
             &user,
-            "return { tui = { behavior = { volume_step = 10, seek_step_secs = 15, list_jump_rows = 3 } } }",
+            "return { behavior = { volume_step = 10, seek_step_secs = 15, list_jump_rows = 3 } }",
         )?;
-        let (cfg, warnings) = mineral_config::load(&user)?;
+        let (cfg, warnings) = crate::config::load_tui(&user)?;
         assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
-        let km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
+        let km = Keymap::from_config(cfg.keys(), cfg.behavior());
         assert_eq!(
             km.lookup(KeyChord::parse("+")?),
             Some(Action::NudgeVolume(VolumeDelta(10)))
@@ -368,103 +306,6 @@ mod tests {
             km.lookup(KeyChord::parse("J")?),
             Some(Action::MoveSelection(SelectionMove::Down(3)))
         );
-        Ok(())
-    }
-
-    /// daemon 拉回的 bind 表合进 keymap:键命中 InvokeScript 新槽位、槽位
-    /// 解析回内部名;非法键字符串跳过该条不拖死其余。
-    #[test]
-    fn script_binds_append_after_config_slots() -> color_eyre::Result<()> {
-        use mineral_protocol::ScriptBind;
-
-        use crate::runtime::action::ScriptSlot;
-        let dir = tempfile::tempdir()?;
-        let user = dir.path().join("config.lua");
-        // 配置里已有一个 keys.script 槽位,bind 槽位必须排在其后不串位。
-        std::fs::write(
-            &user,
-            "return { tui = { keys = { script = { [\"my.first\"] = \"X\" } } } }",
-        )?;
-        let (cfg, warnings) = mineral_config::load(&user)?;
-        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
-        let mut km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
-        km.append_script_binds(&[
-            ScriptBind {
-                key: "<C-g>".to_owned(),
-                action: "bind#1".to_owned(),
-            },
-            ScriptBind {
-                key: "不是键".to_owned(),
-                action: "bind#2".to_owned(),
-            },
-            ScriptBind {
-                key: "B".to_owned(),
-                action: "bind#3".to_owned(),
-            },
-        ]);
-        let hit = km.lookup(KeyChord::parse("<C-g>")?);
-        let Some(Action::InvokeScript(slot)) = hit else {
-            color_eyre::eyre::bail!("<C-g> 应命中 InvokeScript,实得 {hit:?}");
-        };
-        assert_eq!(km.script_action(slot), Some("bind#1"));
-        let hit = km.lookup(KeyChord::parse("B")?);
-        let Some(Action::InvokeScript(slot)) = hit else {
-            color_eyre::eyre::bail!("非法键跳过后,B 仍应命中,实得 {hit:?}");
-        };
-        assert_eq!(km.script_action(slot), Some("bind#3"));
-        // 配置槽位不被 bind 追加破坏。
-        let hit = km.lookup(KeyChord::parse("X")?);
-        let Some(Action::InvokeScript(slot)) = hit else {
-            color_eyre::eyre::bail!("配置 keys.script 槽位应保留,实得 {hit:?}");
-        };
-        assert_eq!(km.script_action(slot), Some("my.first"));
-        assert_eq!(km.script_action(ScriptSlot(3)), None, "非法键不占槽位");
-        Ok(())
-    }
-
-    /// help 目录的 Scripts 组:配置 keys.script 与 daemon bind 追加都进目录,
-    /// label = 注册名、排在内建组之后。
-    #[test]
-    fn help_catalog_lists_script_binds() -> color_eyre::Result<()> {
-        use mineral_protocol::ScriptBind;
-
-        use crate::runtime::keymap::help::HelpGroup;
-        let dir = tempfile::tempdir()?;
-        let user = dir.path().join("config.lua");
-        std::fs::write(
-            &user,
-            "return { tui = { keys = { script = { [\"my.first\"] = \"X\" } } } }",
-        )?;
-        let (cfg, warnings) = mineral_config::load(&user)?;
-        assert!(warnings.is_empty(), "合法配置不应有 warning: {warnings:?}");
-        let mut km = Keymap::from_config(cfg.tui().keys(), cfg.tui().behavior());
-        km.append_script_binds(&[ScriptBind {
-            key: "<C-g>".to_owned(),
-            action: "bind#1".to_owned(),
-        }]);
-        let scripts = km
-            .help()
-            .iter()
-            .filter(|e| *e.group() == HelpGroup::Scripts)
-            .map(|e| {
-                let chords = e
-                    .chords()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>();
-                (e.label().to_owned(), chords)
-            })
-            .collect::<Vec<(String, Vec<String>)>>();
-        assert_eq!(
-            scripts,
-            vec![
-                ("my.first".to_owned(), vec!["X".to_owned()]),
-                ("bind#1".to_owned(), vec!["<C-g>".to_owned()]),
-            ]
-        );
-        // Scripts 组恒在目录尾部。
-        let last_group = km.help().last().map(|e| *e.group());
-        assert_eq!(last_group, Some(HelpGroup::Scripts));
         Ok(())
     }
 }

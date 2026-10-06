@@ -268,7 +268,9 @@ mod tests {
         dir: std::path::PathBuf,
     ) -> color_eyre::Result<MediaCache> {
         let persist = ServerStore::open(db).await?;
-        let capacity = *mineral_config::Config::defaults()?.cache().audio_capacity();
+        let capacity = *crate::config::DaemonConfig::defaults()?
+            .cache()
+            .audio_capacity();
         Ok(MediaCache::open(&persist, dir, capacity).await?)
     }
 

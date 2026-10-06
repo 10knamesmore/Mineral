@@ -263,17 +263,4 @@ impl LocalPlayCounts {
         self.entries.clear();
         self.selected = None;
     }
-
-    /// 当前是否没有在飞行请求，也没有已记录的 selection。
-    ///
-    /// # Return:
-    ///   查询状态完全空闲时为 `true`
-    #[cfg(test)]
-    pub(crate) fn is_idle(&self) -> bool {
-        self.selected.is_none()
-            && self
-                .entries
-                .values()
-                .all(|entry| matches!(entry, LocalPlayCountEntry::Ready(_)))
-    }
 }

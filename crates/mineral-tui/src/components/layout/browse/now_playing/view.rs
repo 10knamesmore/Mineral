@@ -66,7 +66,7 @@ impl crate::components::lifecycle::PaintView for NowPlayingView<'_> {
         inputs.observe(&self.phase);
         self.panel
             .title
-            .dependencies(inputs, self.frame.config.tui().animation(), self.frame.now);
+            .dependencies(inputs, self.frame.config.animation(), self.frame.now);
         self.images.dependencies(
             inputs,
             [

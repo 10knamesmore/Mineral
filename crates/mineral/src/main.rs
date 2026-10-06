@@ -9,8 +9,9 @@ use mineral_channel_bilibili::BilibiliChannel;
 use mineral_channel_core::MusicChannel;
 use mineral_channel_netease::{NeteaseChannel, load_stored};
 use mineral_cli::{Args, Command};
-use mineral_config::DaemonLoad;
+use mineral_config::ConfigWarning;
 use mineral_playback::{PlaybackProvider, PlaybackRegistry};
+use mineral_server::config::DaemonLoad;
 use tokio::runtime::Runtime;
 
 use crate::error::{Error, Result};
@@ -35,13 +36,9 @@ fn main() -> ExitCode {
     }
 }
 
-/// 主流程:初始化错误处理与日志,按顶层命令分发并给出进程退出码。
-///
-/// # Return:
-///   进程退出码;初始化或子命令失败(`ctl` 的结论态除外)返回 `Err`,由 [`main`] 打印。
+/// actural run
 fn run() -> color_eyre::Result<ExitCode> {
     color_eyre::install()?;
-    // _log_guard 必须持到 run 返回:drop 它会停后台 flush 线程,后续日志丢失。
     let _log_guard = mineral_log::init().wrap_err("init log")?;
 
     let args = Args::parse();
@@ -49,7 +46,6 @@ fn run() -> color_eyre::Result<ExitCode> {
         Some(Command::Serve) => Ok(os::run_daemon().map(|()| ExitCode::SUCCESS)?),
         Some(command) => Ok(mineral_cli::run(command)?),
         None => {
-            // dhat guard 必须持到 TUI 退出:Drop 时才落 dhat-heap.json。
             #[cfg(feature = "dhat-heap")]
             let _dhat = dhat::Profiler::new_heap();
             let runtime = named_runtime("mineral-rt")?;
@@ -76,52 +72,49 @@ fn named_runtime(name: &'static str) -> Result<Runtime> {
         .map_err(Error::Runtime)
 }
 
-/// 在 tokio runtime 上跑完整个 daemon 生命周期(build channels → serve → 优雅收尾)。
-///
-/// 平台无关的 daemon 主体;主线程归属(直接 block_on,还是让给系统 UI 后台跑)由
-/// [`os::run_daemon`] 按平台决定。
-///
-/// daemon 通常被 TUI 以 stderr 重定向的子进程方式拉起,返回的 `Err` 只会进 color-eyre
-/// 的 stderr;这里在边界处额外把它写进 **tracing 日志文件**,这样即便 stderr 不可见,
-/// 启动失败(如凭证解析失败)也能在日志里查到。
+/// start the server
 pub(crate) fn serve_blocking() -> Result<()> {
     let runtime = named_runtime("mineral-daemon-rt")?;
-    let result = runtime.block_on(async {
-        // daemon 走活 host API:config.lua 顶层的 mineral.* 真实注册,
-        // eval 成功的 VM 随 ScriptParts 移交脚本线程(失败已降级纯默认 + 无脚本)。
+    let result = (|| -> Result<()> {
+        // 同步加载在进入异步执行器前完成,只读取 daemon.lua。
+        // ScriptRuntime 启动时调用 daemon.lua 的 setup。
+        // 成功的 VM 随 ScriptParts 移交脚本线程,不读取客户端文件。
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (push_tx, push_rx) = tokio::sync::mpsc::unbounded_channel();
         let host = mineral_script::ScriptHost::new(cmd_tx.clone(), push_tx.clone());
         let dir = mineral_paths::config_dir()?;
-        let config_path = dir.join("config.lua");
-        let loaded = mineral_config::load_with_vm(&config_path, |lua| {
-            mineral_script::install_api(lua, &host)
+        let daemon_path = dir.join("daemon.lua");
+        let loaded = mineral_server::config::load_daemon_with_vm(&daemon_path, |lua| {
+            mineral_script::install_daemon_api(lua, &host)
         })?;
         log_config_warnings(&loaded.warnings);
 
-        let DaemonLoad {
-            config,
-            vm,
-            tree: config_tree,
-            ..
-        } = loaded;
-        let script = mineral_server::ScriptParts::new(vm, host, cmd_tx, cmd_rx, push_tx, push_rx);
-        let persist = open_persist().await;
-        let sources = build_sources(&persist, config.sources())?;
-        mineral_cli::serve_run(
-            mineral_server::SourceBackends::builder()
-                .channels(sources.channels)
-                .playback(sources.playback)
-                .build(),
-            persist,
-            config,
-            script,
-            config_tree,
-            config_path,
-        )
-        .await?;
-        Ok(())
-    });
+        runtime.block_on(async {
+            let DaemonLoad {
+                config,
+                vm,
+                tree: daemon_tree,
+                ..
+            } = loaded;
+            let script =
+                mineral_server::ScriptParts::new(vm, host, cmd_tx, cmd_rx, push_tx, push_rx);
+            let persist = open_persist().await;
+            let sources = build_sources(&persist, config.sources())?;
+            mineral_cli::serve_run(
+                mineral_server::SourceBackends::builder()
+                    .channels(sources.channels)
+                    .playback(sources.playback)
+                    .build(),
+                persist,
+                config,
+                script,
+                daemon_tree,
+                daemon_path,
+            )
+            .await?;
+            Ok(())
+        })
+    })();
     if let Err(e) = &result {
         mineral_log::error!(target: "daemon", error = mineral_log::chain(e), "daemon 启动失败");
     }
@@ -135,7 +128,7 @@ pub(crate) fn serve_blocking() -> Result<()> {
 async fn open_persist() -> mineral_server::ServerStore {
     match mineral_paths::data_dir() {
         Ok(dir) => {
-            if let Err(e) = std::fs::create_dir_all(&dir) {
+            if let Err(e) = tokio::fs::create_dir_all(&dir).await {
                 mineral_log::warn!(
                     target: "daemon",
                     error = mineral_log::chain(&e),
@@ -169,25 +162,16 @@ async fn open_persist() -> mineral_server::ServerStore {
 /// 起 TUI:优先 attach 已有 daemon、没有则 spawn 一个独立 daemon 再 attach;
 /// channels / playback / persist 都由 daemon 进程持有,TUI 进程不构造音乐源。
 async fn run_tui() -> Result<()> {
-    let (config, warnings) = load_config()?;
-    log_config_warnings(&warnings);
-    Ok(mineral_tui::run(config, warnings).await?)
+    Ok(mineral_tui::run().await?)
 }
 
-/// 加载用户配置:config 目录解析失败或内置 default.lua 损坏(程序员错误)时冒泡;
-/// 用户 `config.lua` 的错误已在 loader 内降级为 warnings,不会让加载失败。
-fn load_config() -> Result<(mineral_config::Config, Vec<mineral_config::ConfigWarning>)> {
-    let dir = mineral_paths::config_dir()?;
-    Ok(mineral_config::load(&dir.join("config.lua"))?)
-}
-
-/// 把配置降级告警逐条落日志(daemon 无 UI,日志是唯一出口;TUI 另有 toast)。
-fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
+/// 把配置或 daemon 入口加载告警逐条落日志(TUI 自举告警另有 toast)。
+fn log_config_warnings(warnings: &[ConfigWarning]) {
     for warning in warnings {
         mineral_log::warn!(
             target: "config",
             error = mineral_log::chain(warning),
-            "用户配置降级"
+            "配置或脚本入口加载问题"
         );
     }
 }
@@ -202,7 +186,7 @@ fn log_config_warnings(warnings: &[mineral_config::ConfigWarning]) {
 ///   - `sources`: 音乐源段配置。
 fn build_sources(
     persist: &mineral_server::ServerStore,
-    sources: &mineral_config::SourcesConfig,
+    sources: &mineral_server::config::SourcesConfig,
 ) -> Result<BuiltSources> {
     let mut channels = Vec::<Arc<dyn MusicChannel>>::new();
     let mut providers = Vec::<Arc<dyn PlaybackProvider>>::new();
@@ -254,7 +238,7 @@ fn build_sources(
 ///
 /// # Params:
 ///   - `bilibili`: B站源段配置(timeout / proxy / 并发)。
-fn build_bilibili(bilibili: &mineral_config::BilibiliSection) -> Result<SourcePair> {
+fn build_bilibili(bilibili: &mineral_server::config::BilibiliSection) -> Result<SourcePair> {
     let bc = mineral_cli::bilibili_config_from(bilibili);
     // 有存储凭证 → 带登录态(解锁我的收藏夹 / 高码率);否则 guest。
     let channel = match mineral_channel_bilibili::load_stored()? {
@@ -275,7 +259,7 @@ fn build_bilibili(bilibili: &mineral_config::BilibiliSection) -> Result<SourcePa
 ///   - `netease`: 网易云源段配置(timeout / proxy / 并发)。
 fn build_netease(
     persist: &mineral_server::ServerStore,
-    netease: &mineral_config::NeteaseSection,
+    netease: &mineral_server::config::NeteaseSection,
 ) -> Result<Option<SourcePair>> {
     let Some(auth) = load_stored()? else {
         return Ok(None);

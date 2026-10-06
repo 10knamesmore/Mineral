@@ -44,7 +44,7 @@ pub fn draw_prompt(
     area: Rect,
     rs: &SearchPage,
     theme: &Theme,
-    sources: &mineral_config::SourcesConfig,
+    source_colors: &std::collections::BTreeMap<String, crate::config::ColorRef>,
     border_focused: bool,
 ) {
     let block = Block::new()
@@ -62,7 +62,7 @@ pub fn draw_prompt(
     let focus = rs.prompt_focus();
     // source chip:focus 时 accent 反色药丸(暗字,最跳);否则 source 色暗染底 + source 色字(身份)。
     if let (Some(rect), Some(source)) = (tokens.source, rs.source) {
-        let source_color = resolve_source_color(theme, sources, source);
+        let source_color = resolve_source_color(theme, source_colors, source);
         let (bg, fg) = if focus == Some(PromptSegment::Source) {
             (theme.accent, theme.crust)
         } else {
@@ -230,7 +230,7 @@ pub(crate) fn draw_prompt_dropdown(
                 .map(|s| {
                     MenuItem::display_tinted(
                         s.label(),
-                        resolve_source_color(theme, state.frame.config.sources(), *s),
+                        resolve_source_color(theme, state.frame.config.source_colors(), *s),
                     )
                 })
                 .collect();
@@ -353,7 +353,7 @@ pub(crate) fn draw_results(
     let Some(kr) = rs.active_results().filter(|kr| kr.len() != 0) else {
         if rs.current_loading() {
             let glyph = spinner::glyph(
-                state.frame.config.tui().animation().spinner_frames(),
+                state.frame.config.animation().spinner_frames(),
                 rs.spinner_counter(),
             );
             draw_centered_hint(frame, inner, &format!("{glyph} searching"), theme);
@@ -373,7 +373,7 @@ pub(crate) fn draw_results(
             // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
             &MarqueeCtx::new(
                 &kr.title,
-                state.frame.config.tui().animation(),
+                state.frame.config.animation(),
                 state.frame.now,
                 theme,
                 /*fade_to*/ theme.surface0,
@@ -385,12 +385,7 @@ pub(crate) fn draw_results(
         let highlight = highlight_style(
             theme,
             rs.focus_permille(
-                *state
-                    .frame
-                    .config
-                    .tui()
-                    .animation()
-                    .search_focus_transition(),
+                *state.frame.config.animation().search_focus_transition(),
                 SearchFocus::Results,
             ),
         );

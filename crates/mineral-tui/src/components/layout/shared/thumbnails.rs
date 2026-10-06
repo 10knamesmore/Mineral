@@ -97,7 +97,7 @@ pub(crate) fn thumbnail_phase(
 mod tests {
     use std::sync::Arc;
 
-    use mineral_config::Config;
+    use crate::config::TuiConfig;
     use mineral_model::MediaUrl;
     use ratatui::buffer::Buffer;
     use ratatui::layout::{Constraint, Rect};
@@ -110,7 +110,7 @@ mod tests {
     /// 与真实 Table 对照所有窄宽度:列宽不足时留空,够宽时只覆盖图片列的数据格。
     #[test]
     fn squeezed_thumbnail_columns_do_not_overwrite_neighbors() -> color_eyre::Result<()> {
-        let mut images = ImageEngine::disabled_kitty(Arc::new(Config::defaults()?));
+        let mut images = ImageEngine::disabled_kitty(Arc::new(TuiConfig::defaults()?));
         let url = MediaUrl::remote("https://example.com/narrow-cover.png")?;
         images.insert_test_thumbnail(&url)?;
         let widths = [

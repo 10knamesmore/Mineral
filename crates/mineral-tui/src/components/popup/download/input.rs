@@ -10,7 +10,7 @@ pub(crate) struct DownloadInput<'a> {
     pub(crate) downloads_summary: &'a mineral_protocol::DownloadSummary,
 
     /// 当前有效配置。
-    pub(crate) cfg: &'a mineral_config::Config,
+    pub(crate) cfg: &'a crate::config::TuiConfig,
 
     /// 本次显式采样时间。
     pub(crate) frame_now: std::time::Instant,
@@ -19,18 +19,18 @@ pub(crate) struct DownloadInput<'a> {
 impl DownloadInput<'_> {
     /// 列表光标与视口边缘的行距。
     pub(super) fn scrolloff(&self) -> usize {
-        usize::from(*self.cfg.tui().behavior().scrolloff())
+        usize::from(*self.cfg.behavior().scrolloff())
     }
 
     /// 列表视口移动拍数。
     pub(super) fn list_glide_ticks(&self) -> u16 {
-        let anim = self.cfg.tui().animation();
+        let anim = self.cfg.animation();
         crate::render::anim::ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms())
     }
 
     /// 位置标记移动拍数。
     pub(super) fn minimap_cursor_ticks(&self) -> u16 {
-        let anim = self.cfg.tui().animation();
+        let anim = self.cfg.animation();
         crate::render::anim::ticks16_from_ms(*anim.minimap_cursor_ms(), *anim.frame_tick_ms())
     }
 }

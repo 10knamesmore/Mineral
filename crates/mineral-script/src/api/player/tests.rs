@@ -12,6 +12,7 @@ fn command_family_maps_to_script_cmds() -> color_eyre::Result<()> {
     let (lua, mut cmd_rx) = vm_with_commands()?;
     lua.load(
         r#"
+        local mineral = require("mineral.daemon")
         mineral.player.toggle()
         mineral.player.next()
         mineral.player.prev()
@@ -46,6 +47,7 @@ fn volume_and_seek_clamp_out_of_range() -> color_eyre::Result<()> {
     let (lua, mut cmd_rx) = vm_with_commands()?;
     lua.load(
         r#"
+        local mineral = require("mineral.daemon")
         mineral.player.set_volume(150)
         mineral.player.set_volume(-3)
         mineral.player.seek_to(-10)
@@ -68,13 +70,15 @@ fn volume_and_seek_clamp_out_of_range() -> color_eyre::Result<()> {
 fn unknown_mode_and_bad_song_id_are_lua_errors() -> color_eyre::Result<()> {
     let (lua, mut cmd_rx) = vm_with_commands()?;
     assert!(
-        lua.load(r#"mineral.player.set_mode("random")"#)
+        lua.load(r#"local mineral = require("mineral.daemon"); mineral.player.set_mode("random")"#)
             .exec()
             .is_err(),
         "未知模式名必须报 Lua 错"
     );
     assert!(
-        lua.load(r#"mineral.player.play("42")"#).exec().is_err(),
+        lua.load(r#"local mineral = require("mineral.daemon"); mineral.player.play("42")"#)
+            .exec()
+            .is_err(),
         "缺 namespace 的 song id 必须报 Lua 错"
     );
     assert!(drain_cmds(&mut cmd_rx).is_empty(), "报错时不得发出命令");

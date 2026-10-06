@@ -179,7 +179,7 @@ pub(crate) enum SkipCause {
 ///   - `env`: 下载环境(导出根目录 + 脚本拦截门)
 ///   - `attempt`: Unique download identity and cancellation handle.
 ///   - `reporter`: Lifecycle progress callback.
-///   - `speed_tick`: 测速刷新节流间隔(配置 `daemon.download_speed_tick_ms`)
+///   - `speed_tick`: 测速刷新节流间隔(配置 `download_speed_tick_ms`)
 ///
 /// # Return:
 ///   下载成功 → `Ok(Downloaded)`;已下载 / 脚本跳过 → `Ok(Skipped)`;
@@ -506,13 +506,16 @@ mod tests {
     fn script_gate(
         script: &str,
     ) -> color_eyre::Result<(mineral_script::ScriptRuntime, crate::hook_bridge::HookGate)> {
-        use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
+        use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_daemon_api};
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
         let host = ScriptHost::new(cmd_tx, push_tx);
         let lua = mineral_script::mlua::Lua::new();
-        install_api(&lua, &host)?;
-        lua.load(script).exec()?;
+        install_daemon_api(&lua, &host)?;
+        lua.load(format!(
+            "local mineral = require(\"mineral.daemon\")\n{script}"
+        ))
+        .exec()?;
         let sender = ScriptSender::detached();
         let watchdog = mineral_script::WatchdogConfig::builder()
             .instruction_interval(10_000)

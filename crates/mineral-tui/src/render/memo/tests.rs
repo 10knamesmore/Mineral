@@ -13,8 +13,8 @@ use crate::components::frame::FrameEnv;
 /// 值相同不重画，依赖变化和取消过的计划仍须重画。
 #[test]
 fn values_are_reused_only_after_a_completed_paint() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -61,8 +61,8 @@ fn values_are_reused_only_after_a_completed_paint() -> color_eyre::Result<()> {
 /// 已命中的上层缓存也必须响应下层内容变化，以及下层组件的卸载。
 #[test]
 fn underlying_changes_and_unmounts_are_not_hidden_by_cache_hits() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -112,8 +112,8 @@ fn underlying_changes_and_unmounts_are_not_hidden_by_cache_hits() -> color_eyre:
 /// 前景连续变化时，稳定的下层仍能复用，不必随整帧重新运行绘制。
 #[test]
 fn a_changing_component_does_not_repaint_stable_layers_forever() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -153,8 +153,8 @@ fn a_changing_component_does_not_repaint_stable_layers_forever() -> color_eyre::
 /// 局部更新不得清空旁边的保留画布，也不提交或重画不相交的组件。
 #[test]
 fn retained_frame_leaves_unaffected_components_and_cells_alone() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -205,8 +205,8 @@ fn retained_frame_leaves_unaffected_components_and_cells_alone() -> color_eyre::
 /// 移动和卸载只恢复旧、新位置；下层缓存能局部恢复，而不是再画整个背景。
 #[test]
 fn retained_frame_restores_moved_and_removed_layers() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,

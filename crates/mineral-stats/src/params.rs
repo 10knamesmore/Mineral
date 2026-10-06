@@ -2,7 +2,7 @@
 //!
 //! server 把 `stats` 配置段折算成 [`StatsParams`] 交给 recorder;热路径调用方只做
 //! 这里的 gating(档位放不放行、来源早丢、搜索词模式)再决定组不组装命令。默认值不
-//! 在此(在 default.lua),故所有字段 builder 必填——空集合也是从 config 来的空。
+//! 在此(在 daemon-default.lua),故所有字段 builder 必填——空集合也是从 config 来的空。
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use typed_builder::TypedBuilder;

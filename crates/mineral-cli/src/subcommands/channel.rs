@@ -34,17 +34,15 @@ pub enum ChannelCommand {
 pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
     match args.channel {
         ChannelCommand::Netease(cli) => {
-            // 自 eval 配置取网易云网络参数:代理 / 超时对扫码登录同样生效。
-            let (config, _warnings) =
-                mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
+            // 加载 daemon 的网络参数，不执行 setup；代理与超时对扫码登录同样生效。
+            let (config, _warnings) = super::config::load_daemon().await?;
             let nc = netease_config_from(config.sources().netease());
             mineral_channel_netease::cli::run(cli, &nc)
                 .await
                 .map_err(Into::into)
         }
         ChannelCommand::Bilibili(cli) => {
-            let (config, _warnings) =
-                mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
+            let (config, _warnings) = super::config::load_daemon().await?;
             let bc = bilibili_config_from(config.sources().bilibili());
             mineral_channel_bilibili::cli::run(cli, &bc)
                 .await
@@ -61,7 +59,7 @@ pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
 ///
 /// # Return:
 ///   网易云构造参数。
-pub fn netease_config_from(section: &mineral_config::NeteaseSection) -> NeteaseConfig {
+pub fn netease_config_from(section: &mineral_server::config::NeteaseSection) -> NeteaseConfig {
     NeteaseConfig::builder()
         .playlist_fetch(
             mineral_channel_netease::config::PlaylistFetchConfig::builder()
@@ -82,7 +80,7 @@ pub fn netease_config_from(section: &mineral_config::NeteaseSection) -> NeteaseC
 ///
 /// # Return:
 ///   B站构造参数。
-pub fn bilibili_config_from(section: &mineral_config::BilibiliSection) -> BilibiliConfig {
+pub fn bilibili_config_from(section: &mineral_server::config::BilibiliSection) -> BilibiliConfig {
     BilibiliConfig::builder()
         .max_connections(*section.max_connections())
         .proxy(section.proxy().clone())

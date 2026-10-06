@@ -76,6 +76,6 @@ impl AppState {
         self.ui
             .browse
             .lyrics
-            .cycle_extra(input, self.cfg.tui().animation());
+            .cycle_extra(input, self.cfg.animation());
     }
 }

@@ -46,4 +46,6 @@ jobs:
         run: cargo install --locked cargo-dylint dylint-link
 
       - name: 完整检查
+        env:
+          CHECK_TOOLING: "1"
         run: scripts/check.sh

@@ -111,26 +111,25 @@ impl AppState {
         }
     }
 
-    /// 当前配置是否允许记录指定 source 的本地播放统计。
+    /// Daemon 当前是否提供指定 source 的本地播放统计。
     ///
     /// # Params:
     ///   - `source`: 目标歌曲来源
     ///
     /// # Return:
-    ///   `stats.level` 非 off 且 source 未被排除时为 `true`
+    ///   统计已启用且 source 未被排除时为 `true`
     pub(crate) fn records_local_plays_for(&self, source: SourceKind) -> bool {
-        *self.cfg.stats().level() != mineral_config::StatsLevel::Off
-            && !self
-                .cfg
-                .stats()
-                .exclude_sources()
+        let availability = &self.models.service_info.play_counts;
+        availability.enabled
+            && !availability
+                .excluded_sources
                 .iter()
                 .any(|excluded| excluded == source.name())
     }
 
     /// 清空本地播放次数的查询状态与所有已装饰值。
     ///
-    /// 配置热更时调用，确保切到 `stats.level = off` / 排除来源后旧值立即消失；重新启用后
+    /// Daemon 统计能力变化时调用，确保停采 / 排除来源后旧值立即消失；重新启用后
     /// 下一次驻留会重新查询，不复用停采期间可能过期的缓存。
     pub(crate) fn clear_local_play_counts(&mut self) {
         self.models.library.local_play_counts.clear();

@@ -162,7 +162,7 @@ impl QueueOverlay {
         // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
         let marquee_ctx = MarqueeCtx::new(
             &self.title,
-            ctx.cfg.tui().animation(),
+            ctx.cfg.animation(),
             ctx.frame_now,
             theme,
             /*fade_to*/ theme.surface0,
@@ -232,7 +232,7 @@ impl Overlay for QueueOverlay {
         let viewport = usize::from(ctx.panel_area.height.saturating_sub(3));
         self.list.dependencies(inputs, visible.len(), viewport);
         self.title
-            .dependencies(inputs, env.config.tui().animation(), env.now);
+            .dependencies(inputs, env.config.animation(), env.now);
         inputs.observe(&self.expansion.active.is_some());
         if self.expansion.active.is_some() {
             inputs.time(env.now);
@@ -321,7 +321,7 @@ impl Overlay for QueueOverlay {
             playing,
             motion,
             ticks,
-            ctx.cfg.tui().minimap(),
+            ctx.cfg.minimap(),
             advance,
         );
         let cols =
@@ -356,7 +356,7 @@ impl Overlay for QueueOverlay {
                     motion,
                     ctx.frame_now,
                     self.last_sel_change,
-                    std::time::Duration::from_millis(*ctx.cfg.tui().cover().debounce_ms()),
+                    std::time::Duration::from_millis(*ctx.cfg.cover().debounce_ms()),
                 )
             };
             let covers = window.map(|index| {
@@ -437,11 +437,7 @@ impl Overlay for QueueOverlay {
                     minimap: Some(PreparedMinimap {
                         area: track,
                         total: visible.len(),
-                        cursor: MinimapCursor::new(
-                            &self.list,
-                            visible.len(),
-                            ctx.cfg.tui().minimap(),
-                        ),
+                        cursor: MinimapCursor::new(&self.list, visible.len(), ctx.cfg.minimap()),
                         entries,
                         theme: *theme,
                     }),
@@ -563,7 +559,7 @@ impl Overlay for QueueOverlay {
             // `<C-d>` 族:视口目标与光标同移 n 行(vim 语义);光标边界由 page 钳,
             // 视口上界由渲染端统一钳。
             Action::Scroll(step) => {
-                let delta = scroll::viewport::step_delta(step, ctx.cfg.tui().behavior());
+                let delta = scroll::viewport::step_delta(step, ctx.cfg.behavior());
                 self.list.page(delta, len, ctx.list_glide_ticks());
                 Some(OverlayResponse::Consumed)
             }
@@ -818,8 +814,8 @@ mod tests {
         ctx.models.player.queue = (0..100)
             .map(|i| mineral_test::song(&format!("q{i}")))
             .collect();
-        let page = *ctx.cfg.tui().behavior().page_scroll_rows();
-        let line = *ctx.cfg.tui().behavior().line_scroll_rows();
+        let page = *ctx.cfg.behavior().page_scroll_rows();
+        let line = *ctx.cfg.behavior().line_scroll_rows();
         let mut o = QueueOverlay::new(0);
         assert!(matches!(
             o.on_action(

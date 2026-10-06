@@ -99,11 +99,11 @@ impl App {
         self.state.ui.frame_now = now;
         self.state.ui.frame_area = area;
         self.state.resources.images.begin_preparation();
-        let layout = self.state.cfg.tui().layout();
+        let layout = self.state.cfg.layout();
         let normal = compute(area, layout);
         let full = compute_fullscreen(area, layout);
         let search = compute_search(area, layout);
-        let ambient_cfg = self.state.cfg.tui().ambient();
+        let ambient_cfg = self.state.cfg.ambient();
         let field = (self.state.ui.browse.ambient_reveal.active()
             && (*ambient_cfg.enabled() || !self.ambient.settled_at_base()))
         .then(|| ambient::rgb_of(self.theme.base))
@@ -289,7 +289,7 @@ impl App {
     pub(crate) fn frame_view(&self) -> ComponentView<'_, FrameView<'_>> {
         let state = &self.state;
         let theme = &self.theme;
-        let normal = compute(state.ui.frame_area, state.cfg.tui().layout());
+        let normal = compute(state.ui.frame_area, state.cfg.layout());
         let env = crate::components::frame::FrameEnv {
             config: &state.cfg,
             theme,
@@ -315,7 +315,7 @@ impl App {
                 .then(|| {
                     super::flight::plan(
                         &normal,
-                        &compute_search(state.ui.frame_area, state.cfg.tui().layout()),
+                        &compute_search(state.ui.frame_area, state.cfg.layout()),
                         state,
                     )
                 })
@@ -324,7 +324,7 @@ impl App {
                 .then(|| {
                     super::flight::plan_fullscreen(
                         &normal,
-                        &compute_fullscreen(state.ui.frame_area, state.cfg.tui().layout()),
+                        &compute_fullscreen(state.ui.frame_area, state.cfg.layout()),
                         state,
                     )
                 })
@@ -355,7 +355,7 @@ fn prepare_fullscreen_cover(area: Rect, steady: Option<Rect>, state: &mut AppSta
             let to = active.to_url.clone();
             let progress = active.anim.eased_in_out();
             let advance = active.advance;
-            let style = crate::image::BlendStyle::from(*state.cfg.tui().cover_transition().style());
+            let style = crate::image::BlendStyle::from(*state.cfg.cover_transition().style());
             state.resources.images.prepare_display(
                 ImageContent::Blend {
                     from: &from,
@@ -376,7 +376,7 @@ fn prepare_fullscreen_cover(area: Rect, steady: Option<Rect>, state: &mut AppSta
             );
         }
         let urls = state
-            .queue_neighbor_indexes(*state.cfg.tui().prefetch().prewarm_ahead())
+            .queue_neighbor_indexes(*state.cfg.prefetch().prewarm_ahead())
             .into_iter()
             .filter_map(|index| {
                 state

@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(item.width(), single.width(), "多行内容的宽度应等于首行宽度");
     }
 
-    /// 测试对照值 = default.lua 默认(flash_ttl_secs=4 / toast_anim_ms=96 ÷ 16ms = 6 拍)。
+    /// 测试对照值 = tui-default.lua 默认(flash_ttl_secs=4 / toast_anim_ms=96 ÷ 16ms = 6 拍)。
     const FLASH_TTL: Duration = Duration::from_secs(4);
 
     /// 同上:toast 动画 tick 数默认。

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use mineral_config::Config;
+use crate::config::TuiConfig;
 
 use crate::image::{ImageNeeds, ImageRenderPhase};
 use crate::render::theme::Theme;
@@ -13,7 +13,7 @@ use crate::runtime::scroll::list::ScrollMotion;
 #[derive(Clone, Copy)]
 pub(crate) struct FrameEnv<'a> {
     /// 当前有效配置，热更新后替换借用，不在组件构造时复制。
-    pub(crate) config: &'a Arc<Config>,
+    pub(crate) config: &'a Arc<TuiConfig>,
 
     /// 本次有效主题。
     pub(crate) theme: &'a Theme,
@@ -43,7 +43,7 @@ pub(crate) struct PrepareCx<'a> {
 impl FrameEnv<'_> {
     /// 按当前配置折算位置动画拍数，不保存配置副本。
     pub(crate) fn cursor_ticks(self) -> u16 {
-        let anim = self.config.tui().animation();
+        let anim = self.config.animation();
         crate::render::anim::ticks16_from_ms(*anim.minimap_cursor_ms(), *anim.frame_tick_ms())
     }
 }

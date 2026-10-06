@@ -2,11 +2,11 @@
 //!
 //! 只折采集侧旋钮(level / collect / search_queries / exclude_sources /
 //! session_gap_minutes / retention_days);`report` 口径不进此处,报告装配时现读
-//! effective 配置。config↔stats 是两个 crate 各自的枚举,这里做边缘互映。
+//! effective 配置。daemon 配置与统计库各自定义枚举,在服务边界转换。
 
 use rustc_hash::FxHashSet;
 
-use mineral_config::{
+use crate::config::{
     RetentionDays as ConfigRetention, SearchQueryMode as ConfigSearchMode, StatsConfig,
     StatsLevel as ConfigLevel,
 };
@@ -67,9 +67,9 @@ mod tests {
 
     #[test]
     fn folds_default_config() -> color_eyre::Result<()> {
-        let config = mineral_config::Config::defaults()?;
+        let config = crate::config::DaemonConfig::defaults()?;
         let params = params_from_config(config.stats());
-        // 对齐 default.lua 的 stats 段。
+        // 对齐 daemon-default.lua 的 stats 段。
         assert_eq!(params.level(), Level::Full);
         assert_eq!(params.search_queries(), SearchQueryMode::Raw);
         assert_eq!(params.retention(), Retention::Forever);

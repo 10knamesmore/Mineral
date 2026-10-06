@@ -46,8 +46,8 @@ impl PaintView for CounterComponent {
 /// 移动实例保留身份；复制和重建不会继承原缓存，即使前一帧仍保存其位置。
 #[test]
 fn component_identity_survives_moves_but_not_new_instances() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -91,8 +91,8 @@ fn component_identity_survives_moves_but_not_new_instances() -> color_eyre::Resu
 /// 相同区域和相同依赖的组件交换顺序仍然失效；内容相同不能代替实例身份。
 #[test]
 fn reordering_instances_invalidates_an_otherwise_unchanged_plan() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -123,8 +123,8 @@ fn reordering_instances_invalidates_an_otherwise_unchanged_plan() -> color_eyre:
 /// 每次准备都执行；跳过绘制不冻结状态，取消变化计划也不能把未绘制结果当作命中。
 #[test]
 fn preparation_runs_through_cache_hits_and_cancelled_plans() -> color_eyre::Result<()> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.tui().theme());
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let theme = crate::render::theme::Theme::from_config(cfg.theme());
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,

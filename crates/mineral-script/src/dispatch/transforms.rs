@@ -1,11 +1,11 @@
-//! 执行歌单整理、复制模板和队列变换，解释脚本返回值。
+//! 执行 daemon 歌单整理和具名队列变换，解释脚本返回值。
 
 use mlua::Lua;
 
 use super::callbacks::report_callback_failure;
-use super::projection::{album_table, artist_table, briefs_table, playlist_table, song_table};
 use super::return_value::lua_field;
 use crate::host::ScriptHost;
+use crate::projection::{briefs_table, song_table};
 use crate::watchdog::{WatchdogConfig, call_guarded};
 use crate::{Error, Result};
 
@@ -42,12 +42,12 @@ pub(super) fn run_curate(
 fn curate_fn(lua: &Lua, source: Option<&mineral_model::SourceKind>) -> Option<mlua::Function> {
     match source {
         Some(kind) => lua
-            .named_registry_value::<mlua::Table>(mineral_config::CURATE_PLAYLISTS_SOURCE_FNS)
+            .named_registry_value::<mlua::Table>(crate::registry::CURATE_PLAYLISTS_SOURCE_FNS)
             .ok()?
             .get::<mlua::Function>(kind.name())
             .ok(),
         None => lua
-            .named_registry_value::<mlua::Function>(mineral_config::CURATE_PLAYLISTS_MERGED_FN)
+            .named_registry_value::<mlua::Function>(crate::registry::CURATE_PLAYLISTS_MERGED_FN)
             .ok(),
     }
 }
@@ -55,7 +55,7 @@ fn curate_fn(lua: &Lua, source: Option<&mineral_model::SourceKind>) -> Option<ml
 /// per-source curate 函数的源名键集(daemon 对无对应 channel 的键打 warn 用)。
 pub(super) fn curate_source_keys(lua: &Lua) -> Vec<String> {
     let Ok(fns) =
-        lua.named_registry_value::<mlua::Table>(mineral_config::CURATE_PLAYLISTS_SOURCE_FNS)
+        lua.named_registry_value::<mlua::Table>(crate::registry::CURATE_PLAYLISTS_SOURCE_FNS)
     else {
         return Vec::new();
     };
@@ -96,53 +96,6 @@ fn interpret_curate_return(value: &mlua::Value) -> mlua::Result<Vec<crate::messa
     Ok(entries)
 }
 
-/// 渲染一个复制模板:registry 函数表按下标取函数,实体投影成表喂入,看门狗
-/// 保护执行,返回剪贴板文本。失败返回带 source 的脚本错误,完整链记日志。
-pub(super) fn render_copy_template(
-    lua: &Lua,
-    watchdog: &WatchdogConfig,
-    index: usize,
-    ctx: &mineral_protocol::CopyTemplateCtx,
-) -> Result<String> {
-    use mineral_protocol::CopyTemplateCtx;
-    let fns: mlua::Table = lua
-        .named_registry_value(mineral_config::COPY_TEMPLATE_FNS)
-        .map_err(|source| Error::Lua {
-            operation: "读取模板函数表",
-            source,
-        })?;
-    // protocol 下标 0-based,Lua 数组 1-based。
-    let func: mlua::Function =
-        fns.get(index.saturating_add(1))
-            .map_err(|source| Error::MissingFunction {
-                kind: "模板",
-                index,
-                source,
-            })?;
-    let arg = match ctx {
-        CopyTemplateCtx::Song(song) => song_table(lua, song),
-        CopyTemplateCtx::Playlist(playlist) => playlist_table(lua, playlist),
-        CopyTemplateCtx::Album(album) => album_table(lua, album),
-        CopyTemplateCtx::Artist(artist) => artist_table(lua, artist),
-    }
-    .map_err(|source| Error::Lua {
-        operation: "实体投影",
-        source,
-    })?;
-    call_guarded::<_, String>(lua, watchdog, &func, arg).map_err(|e| {
-        mineral_log::error!(
-            target: "script",
-            index,
-            error = mineral_log::chain(&e),
-            "copy template failed"
-        );
-        Error::Lua {
-            operation: "执行复制模板",
-            source: e,
-        }
-    })
-}
-
 /// 跑一个具名队列变换,回执新的队列顺序(只取 id,实体由 daemon 从原队列回捞)。
 ///
 /// 只读 id 是刻意的:脚本手里的 song 表是有损投影(艺人 / 专辑只有名字,没有 id),让它
@@ -151,7 +104,7 @@ pub(super) fn render_copy_template(
 /// # Params:
 ///   - `lua`: 脚本 VM
 ///   - `watchdog`: 看门狗阈值
-///   - `index`: 变换下标(0-based)
+///   - `name`: daemon 配置中的唯一操作名，与 TUI 菜单显示名一致
 ///   - `queue`: 当前队列(有序)
 ///   - `current`: 在播条目下标(0-based)
 ///   - `selected`: 光标下标(0-based),无则 `None`
@@ -161,25 +114,23 @@ pub(super) fn render_copy_template(
 pub(super) fn run_queue_transform(
     lua: &Lua,
     watchdog: &WatchdogConfig,
-    index: usize,
+    name: &str,
     queue: &[mineral_model::Song],
     current: usize,
     selected: Option<usize>,
 ) -> Result<Vec<mineral_model::SongId>> {
     let fns: mlua::Table = lua
-        .named_registry_value(mineral_config::QUEUE_TRANSFORM_FNS)
+        .named_registry_value(crate::registry::QUEUE_TRANSFORM_FNS)
         .map_err(|source| Error::Lua {
             operation: "读取队列变换函数表",
             source,
         })?;
-    // protocol 下标 0-based,Lua 数组 1-based。
-    let func: mlua::Function =
-        fns.get(index.saturating_add(1))
-            .map_err(|source| Error::MissingFunction {
-                kind: "变换",
-                index,
-                source,
-            })?;
+    let func = fns
+        .get::<mlua::Function>(name)
+        .map_err(|source| Error::MissingQueueTransform {
+            name: name.to_owned(),
+            source,
+        })?;
     let songs = lua
         .create_sequence_from(
             queue
@@ -209,7 +160,7 @@ pub(super) fn run_queue_transform(
     let returned: mlua::Table = call_guarded(lua, watchdog, &func, (songs, ctx)).map_err(|e| {
         mineral_log::error!(
             target: "script",
-            index,
+            name,
             error = mineral_log::chain(&e),
             "queue transform failed"
         );

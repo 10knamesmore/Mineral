@@ -1,6 +1,6 @@
 //! 定义图片引擎内部的图片身份与终端成品键。
 
-use mineral_config::CoverCellFit;
+use crate::config::CoverCellFit;
 use mineral_model::MediaUrl;
 
 /// 图片在终端中的目标像素尺寸。

@@ -104,8 +104,12 @@ struct CacheKey {
 
 impl CacheKey {
     /// 以当前 state 算一份指纹。
-    fn current(search: &SearchState, library: &LibraryData, cfg: &mineral_config::Config) -> Self {
-        let scfg = cfg.tui().search().deep();
+    fn current(
+        search: &SearchState,
+        library: &LibraryData,
+        cfg: &crate::config::TuiConfig,
+    ) -> Self {
+        let scfg = cfg.search().deep();
         Self {
             query: search.query().to_owned(),
             generation: library.tracks_generation,
@@ -119,9 +123,9 @@ impl CacheKey {
         &self,
         search: &SearchState,
         library: &LibraryData,
-        cfg: &mineral_config::Config,
+        cfg: &crate::config::TuiConfig,
     ) -> bool {
-        let scfg = cfg.tui().search().deep();
+        let scfg = cfg.search().deep();
         self.deep == *scfg.enabled()
             && self.generation == library.tracks_generation
             && self.weights == weight_bits(scfg.weights())
@@ -130,7 +134,7 @@ impl CacheKey {
 }
 
 /// 四字段权重的位模式(`f32::to_bits`)——热重载改任一权重即指纹失配。
-fn weight_bits(w: &mineral_config::DeepWeights) -> [u32; 4] {
+fn weight_bits(w: &crate::config::DeepWeights) -> [u32; 4] {
     [
         w.name().to_bits(),
         w.alias().to_bits(),
@@ -142,7 +146,7 @@ fn weight_bits(w: &mineral_config::DeepWeights) -> [u32; 4] {
 /// 保证缓存与当前 `(query, tracks 版本, 权重)` 一致,失配则重建。
 ///
 /// 每帧可重复调用:命中指纹时只做几次整数 / 字符串比较。
-pub fn ensure(search: &SearchState, library: &LibraryData, cfg: &mineral_config::Config) {
+pub fn ensure(search: &SearchState, library: &LibraryData, cfg: &crate::config::TuiConfig) {
     if let Some(key) = &search.deep_cache.borrow().key
         && key.matches(search, library, cfg)
     {
@@ -164,9 +168,9 @@ pub fn ensure(search: &SearchState, library: &LibraryData, cfg: &mineral_config:
 fn build(
     search: &SearchState,
     library: &LibraryData,
-    cfg: &mineral_config::Config,
+    cfg: &crate::config::TuiConfig,
 ) -> FxHashMap<PlaylistId, DeepHit> {
-    let weights = FieldWeights::from_cfg(cfg.tui().search().deep().weights());
+    let weights = FieldWeights::from_cfg(cfg.search().deep().weights());
     let mut out = FxHashMap::default();
     for (pid, tracks) in &library.tracks {
         let mut best: Option<SongHit<'_>> = None;
@@ -205,7 +209,7 @@ struct FieldWeights {
 
 impl FieldWeights {
     /// 从配置读四字段权重并 clamp 到合法区间。
-    fn from_cfg(w: &mineral_config::DeepWeights) -> Self {
+    fn from_cfg(w: &crate::config::DeepWeights) -> Self {
         Self {
             name: f64::from(w.name().clamp(0.0, 1.0)),
             alias: f64::from(w.alias().clamp(0.0, 1.0)),
@@ -432,12 +436,12 @@ mod tests {
     #[test]
     fn zero_alias_weight_disables_alias() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
+        let path = dir.path().join("tui.lua");
         std::fs::write(
             &path,
-            "return { tui = { search = { deep = { weights = { alias = 0 } } } } }",
+            "return { search = { deep = { weights = { alias = 0 } } } }",
         )?;
-        let (cfg, warnings) = mineral_config::load(&path)?;
+        let (cfg, warnings) = crate::config::load_tui(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");
         let mut s = AppState::test_with_config(Arc::new(cfg));
         s.models.library.playlists = vec![playlist_view(
@@ -477,12 +481,12 @@ mod tests {
     #[test]
     fn zero_weight_disables_field() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
+        let path = dir.path().join("tui.lua");
         std::fs::write(
             &path,
-            "return { tui = { search = { deep = { weights = { artist = 0 } } } } }",
+            "return { search = { deep = { weights = { artist = 0 } } } }",
         )?;
-        let (cfg, warnings) = mineral_config::load(&path)?;
+        let (cfg, warnings) = crate::config::load_tui(&path)?;
         assert!(warnings.is_empty(), "测试配置不应有 warning");
         let mut s = AppState::test_with_config(Arc::new(cfg));
         s.models.library.playlists = vec![playlist_view(

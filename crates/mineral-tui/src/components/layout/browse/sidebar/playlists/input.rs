@@ -74,7 +74,7 @@ impl PlaylistList {
     pub(crate) fn clear_filter(
         &mut self,
         library: &crate::runtime::state::LibraryData,
-        config: &mineral_config::Config,
+        config: &crate::config::TuiConfig,
     ) {
         if self.search.query().is_empty() {
             return;
@@ -99,7 +99,7 @@ impl PlaylistList {
                 .iter()
                 .enumerate()
                 .map(|(index, playlist)| (playlist.data.id.clone(), index)),
-            config.tui().animation(),
+            config.animation(),
         );
     }
 
@@ -108,7 +108,7 @@ impl PlaylistList {
         &mut self,
         key: &crossterm::event::KeyEvent,
         library: &crate::runtime::state::LibraryData,
-        config: &mineral_config::Config,
+        config: &crate::config::TuiConfig,
     ) -> bool {
         match filter_input::edit(&mut self.search, key) {
             filter_input::FilterEdit::Unchanged => false,

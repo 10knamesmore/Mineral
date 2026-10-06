@@ -24,17 +24,17 @@ const STATS_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2
 /// # Params:
 ///   - `sources`: 已构造的 channel 和 playback provider。
 ///   - `persist`: 持久化句柄,透传给 [`Server::spawn`] 供 PlayerCore 持有。
-///   - `config`: 已加载的全局配置(audio 后端 / daemon 切片在此派生)。
-///   - `script`: 脚本部件包(daemon 入口经 `load_with_vm` 装配;无脚本时 VM 槽为空)。
-///   - `config_tree`: 有效配置底树(与 `config` 同一次加载的合成树,交配置宿主)。
-///   - `config_path`: 用户 config.lua 路径(热重载 mtime 轮询的目标)。
+///   - `config`: 已加载的 daemon 私有配置，audio 后端与启动切片在此派生。
+///   - `script`: 脚本部件包，runtime 激活时执行 daemon.lua 的 setup(api)。
+///   - `config_tree`: 与 `config` 同一次加载的私有底树，供 session 覆盖使用。
+///   - `daemon_path`: 用户 daemon.lua 路径；仅此文件参与 daemon 热重载。
 pub async fn run(
     sources: SourceBackends,
     persist: ServerStore,
-    config: mineral_config::Config,
+    config: mineral_server::config::DaemonConfig,
     script: mineral_server::ScriptParts,
     config_tree: serde_json::Value,
-    config_path: std::path::PathBuf,
+    daemon_path: std::path::PathBuf,
 ) -> Result<()> {
     mineral_log::info!(target: "daemon", "starting mineral daemon");
     // 信号 handler 必须在 bind 之前装好:unix socket 一 bind,client 就能连上(连接进
@@ -94,8 +94,8 @@ pub async fn run(
     )
     .await?;
     let reload_parts = server.attach_script_pumps(pumps);
-    // config.lua 热重载:mtime 轮询,变更即重 eval 换脚本线程(失败保留旧)。
-    mineral_server::spawn_script_reloader(config_path, script_runtime, script_sender, reload_parts);
+    // daemon.lua 热重载；tui.lua 独立由各 TUI 加载。
+    mineral_server::spawn_script_reloader(daemon_path, script_runtime, script_sender, reload_parts);
     mineral_log::info!(target: "daemon", "server core initialized");
     // 接入系统媒体服务(MPRIS)。无 D-Bus session 等失败时降级:daemon 照常跑。
     if let Err(e) = server.start_media_service() {
@@ -128,7 +128,7 @@ pub async fn run(
     if let Err(e) = tokio::time::timeout(STATS_JOIN_TIMEOUT, stats_actor).await {
         mineral_log::warn!(target: "daemon", error = mineral_log::chain(&e), "埋点 actor join 超时,末尾在播行可能未落库");
     }
-    if let Err(e) = std::fs::remove_file(&socket_path) {
+    if let Err(e) = tokio::fs::remove_file(&socket_path).await {
         mineral_log::warn!(
             target: "daemon",
             socket_path = %socket_path.display(),
@@ -163,7 +163,14 @@ async fn wait_for_signal(term: &mut Signal, interrupt: &mut Signal) {
 ///   - 连得上 → daemon 已活,bail
 ///   - 连不上(ConnectionRefused / NotFound)→ 残留 socket 文件,删；其他错误保留原始原因。
 async fn prepare_socket(path: &std::path::Path) -> Result<()> {
-    if !path.exists() {
+    if !tokio::fs::try_exists(path)
+        .await
+        .map_err(|source| Error::Io {
+            operation: "check daemon socket path",
+            path: path.to_path_buf(),
+            source,
+        })?
+    {
         mineral_log::debug!(target: "daemon", "socket path fresh, no cleanup needed");
         return Ok(());
     }
@@ -181,11 +188,13 @@ async fn prepare_socket(path: &std::path::Path) -> Result<()> {
             ) =>
         {
             mineral_log::warn!(target: "daemon", socket_path = %path.display(), "removing stale socket");
-            std::fs::remove_file(path).map_err(|source| Error::Io {
-                operation: "remove stale socket",
-                path: path.to_path_buf(),
-                source,
-            })?;
+            tokio::fs::remove_file(path)
+                .await
+                .map_err(|source| Error::Io {
+                    operation: "remove stale socket",
+                    path: path.to_path_buf(),
+                    source,
+                })?;
             Ok(())
         }
         Err(source) => Err(Error::Io {
@@ -200,15 +209,15 @@ async fn prepare_socket(path: &std::path::Path) -> Result<()> {
 /// 返回 actor 的 `JoinHandle` 供停机路径带超时 await(在播 pending 结算 stop 后退出)。
 ///
 /// # Params:
-///   - `config`: 全局配置(取 `stats` 段折算;`report` 口径留给报告层现读)
+///   - `config`: Daemon 配置，取 `stats` 段折算；报告口径由离线报告入口读取
 ///
 /// # Return:
 ///   (recorder 句柄, actor 的 `JoinHandle`);降级路径亦返回可用句柄(打点静默丢弃)
 async fn spawn_recorder(
-    config: &mineral_config::Config,
+    config: &mineral_server::config::DaemonConfig,
 ) -> (mineral_server::StatsRecorder, tokio::task::JoinHandle<()>) {
     let store = match mineral_paths::data_dir() {
-        Ok(dir) => match std::fs::create_dir_all(&dir) {
+        Ok(dir) => match tokio::fs::create_dir_all(&dir).await {
             Ok(()) => match mineral_stats::StatsStore::open(&dir.join("stats.db")).await {
                 Ok(store) => store,
                 Err(e) => {

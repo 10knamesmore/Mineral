@@ -37,7 +37,7 @@ pub(crate) struct MarqueeCtx<'a> {
     pub(crate) marquee: &'a Marquee,
 
     /// 本次有效动画配置，绘制时现读。
-    anim: &'a mineral_config::AnimationConfig,
+    anim: &'a crate::config::AnimationConfig,
 
     /// 主循环采样的本帧时刻。
     now: Instant,
@@ -65,7 +65,7 @@ impl<'a> MarqueeCtx<'a> {
     ///   - `fade_to`: 边缘 fade 目标色(所在渲染位的底色)
     pub(crate) fn new(
         title: &'a Marquee,
-        anim: &'a mineral_config::AnimationConfig,
+        anim: &'a crate::config::AnimationConfig,
         now: Instant,
         theme: &Theme,
         fade_to: Color,

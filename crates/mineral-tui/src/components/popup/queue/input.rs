@@ -28,7 +28,7 @@ pub(crate) struct QueueInput<'a> {
     pub(crate) liked: &'a FxHashMap<SourceKind, FxHashSet<SongId>>,
 
     /// 当前有效配置，输入和显示均现读。
-    pub(crate) cfg: &'a mineral_config::Config,
+    pub(crate) cfg: &'a crate::config::TuiConfig,
 
     /// 预计播放结束时间所用的本地钟点。
     pub(crate) now: chrono::DateTime<chrono::Local>,
@@ -53,18 +53,18 @@ impl QueueInput<'_> {
 
     /// 列表与视口边缘保留的行距。
     pub(super) fn scrolloff(&self) -> usize {
-        usize::from(*self.cfg.tui().behavior().scrolloff())
+        usize::from(*self.cfg.behavior().scrolloff())
     }
 
     /// 当前配置的视口移动时长。
     pub(super) fn list_glide_ticks(&self) -> u16 {
-        let anim = self.cfg.tui().animation();
+        let anim = self.cfg.animation();
         crate::render::anim::ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms())
     }
 
     /// 当前配置的位置标记移动时长。
     pub(super) fn minimap_cursor_ticks(&self) -> u16 {
-        let anim = self.cfg.tui().animation();
+        let anim = self.cfg.animation();
         crate::render::anim::ticks16_from_ms(*anim.minimap_cursor_ms(), *anim.frame_tick_ms())
     }
 }

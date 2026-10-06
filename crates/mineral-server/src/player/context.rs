@@ -68,8 +68,8 @@ pub(crate) struct Inner {
     /// [`TerminalStates`](crate::props::TerminalStates))。
     pub(crate) ui_state: Mutex<crate::props::TerminalStates>,
 
-    /// 有效配置宿主(合成底树 + session 覆盖 + 窗口标题覆盖,见 [`crate::config_host`])。
-    pub(crate) config_host: crate::config_host::ConfigHost,
+    /// Daemon 私有配置宿主(文件底树与 session 覆盖),不传给客户端。
+    pub(crate) config_host: crate::config::ConfigHost,
 
     /// 播放上下文(队列/当前歌/歌词/预拉状态)。
     pub(crate) state: Mutex<State>,
@@ -103,29 +103,26 @@ pub(crate) struct Inner {
     /// 响度包络计算参数(配置 `audio.envelope`)。
     pub(crate) envelope_params: mineral_audio::EnvelopeParams,
 
-    /// gapless 预排触发距曲终的剩余时间(ms,配置 `daemon.gapless_prefetch_ms`)。
+    /// gapless 预排触发距曲终的剩余时间(ms,配置 `gapless_prefetch_ms`)。
     pub(super) gapless_prefetch_ms: u64,
 
-    /// `p` 键的「回开头 vs 上一首」分界(ms,配置 `daemon.prev_restart_threshold_ms`)。
+    /// `p` 键的「回开头 vs 上一首」分界(ms,配置 `prev_restart_threshold_ms`)。
     pub(super) prev_restart_threshold_ms: u64,
 
-    /// 长跑后台 task 的醒来间隔(ms,配置 `daemon.player_tick_ms`)。
+    /// 长跑后台 task 的醒来间隔(ms,配置 `player_tick_ms`)。
     pub(super) player_tick_ms: u64,
 
-    /// 会话「位置刷新」的节流间隔(配置 `daemon.session_save_secs`)。
+    /// 会话「位置刷新」的节流间隔(配置 `session_save_secs`)。
     pub(crate) session_save: Duration,
 
-    /// 系统媒体服务的播放进度上报间隔(ms,配置 `daemon.report_interval_ms`)。
+    /// 系统媒体服务的播放进度上报间隔(ms,配置 `report_interval_ms`)。
     pub(super) media_report_interval_ms: u64,
 
-    /// 系统媒体服务判定 seek 的位置跳变阈值(ms,配置 `daemon.seek_threshold_ms`)。
+    /// 系统媒体服务判定 seek 的位置跳变阈值(ms,配置 `seek_threshold_ms`)。
     pub(super) media_seek_threshold_ms: u64,
 
     /// 同步拦截 hook 软超时(配置 `script.hook_timeout_ms`)。
     pub(super) hook_timeout: Duration,
-
-    /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
-    pub(super) spawn_max_concurrent: usize,
 
     /// 聚合收藏补 meta 后台任务的状态 + 节流旋钮(单飞闸 / 待办标志 / 并发参数,见 [`crate::favorites`])。
     pub(crate) backfill: crate::favorites::Backfill,
@@ -205,7 +202,7 @@ impl PlayerCore {
         self.inner.playback_prefetch_bytes
     }
 
-    /// gapless 预排触发距曲终的剩余时间(ms,配置 `daemon.gapless_prefetch_ms`)。
+    /// gapless 预排触发距曲终的剩余时间(ms,配置 `gapless_prefetch_ms`)。
     pub(crate) fn gapless_prefetch_ms(&self) -> u64 {
         self.inner.gapless_prefetch_ms
     }
@@ -215,17 +212,12 @@ impl PlayerCore {
         self.inner.hook_timeout
     }
 
-    /// `mineral.spawn` 并发上限(配置 `script.spawn_max_concurrent`;0 = 不限)。
-    pub(crate) fn spawn_max_concurrent(&self) -> usize {
-        self.inner.spawn_max_concurrent
-    }
-
-    /// 系统媒体服务的播放进度上报间隔(ms,配置 `daemon.report_interval_ms`)。
+    /// 系统媒体服务的播放进度上报间隔(ms,配置 `report_interval_ms`)。
     pub(crate) fn media_report_interval_ms(&self) -> u64 {
         self.inner.media_report_interval_ms
     }
 
-    /// 系统媒体服务判定 seek 的位置跳变阈值(ms,配置 `daemon.seek_threshold_ms`)。
+    /// 系统媒体服务判定 seek 的位置跳变阈值(ms,配置 `seek_threshold_ms`)。
     pub(crate) fn media_seek_threshold_ms(&self) -> u64 {
         self.inner.media_seek_threshold_ms
     }

@@ -104,7 +104,7 @@ impl TransportView<'_> {
         self.component.dependencies(inputs);
         self.component
             .title
-            .dependencies(inputs, env.config.tui().animation(), env.now);
+            .dependencies(inputs, env.config.animation(), env.now);
     }
 
     /// 根据当前背景绘制标题、播放进度和已经更新的操作反馈。
@@ -112,7 +112,7 @@ impl TransportView<'_> {
         let env = self.environment;
         let marquee = MarqueeCtx::new(
             &self.component.title,
-            env.config.tui().animation(),
+            env.config.animation(),
             env.now,
             env.theme,
             fade_to,

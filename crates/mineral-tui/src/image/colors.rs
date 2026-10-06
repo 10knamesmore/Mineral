@@ -24,13 +24,13 @@ use super::resize::thumbnail;
 ///
 /// # Params:
 ///   - `img`: 已解码的完整封面图
-///   - `k`: k-means 取色旋钮(配置 `tui.cover.kmeans` 段)
+///   - `k`: k-means 取色旋钮(配置 `cover.kmeans` 段)
 ///
 /// # Return:
 ///   `Some(CoverPalette)`;尺寸为 0 / 有效像素为 0 / 聚类无结果时 `None`。
 pub fn extract_palette(
     img: &DynamicImage,
-    k: &mineral_config::KmeansConfig,
+    k: &crate::config::KmeansConfig,
 ) -> Option<CoverPalette> {
     // 大图先降采样:聚类只看颜色分布,sample_dim² 样本足够;box filter 极快且确定。
     let dim = (*k.sample_dim()).max(1);
@@ -217,7 +217,7 @@ fn hue_distance(a: Lch, b: Lch) -> f32 {
 ///
 /// # Return:
 ///   既不近黑/近白、也不近灰则 `true`。
-fn is_vivid(lab: &Lab, k: &mineral_config::KmeansConfig) -> bool {
+fn is_vivid(lab: &Lab, k: &crate::config::KmeansConfig) -> bool {
     let chroma = (lab.a * lab.a + lab.b * lab.b).sqrt();
     lab.l >= *k.l_min() && lab.l <= *k.l_max() && chroma >= *k.chroma_min()
 }
@@ -240,9 +240,8 @@ mod tests {
     use super::extract_palette;
     use image::{DynamicImage, RgbImage};
 
-    fn kcfg() -> color_eyre::Result<mineral_config::KmeansConfig> {
-        Ok(mineral_config::Config::defaults()?
-            .tui()
+    fn kcfg() -> color_eyre::Result<crate::config::KmeansConfig> {
+        Ok(crate::config::TuiConfig::defaults()?
             .cover()
             .kmeans()
             .clone())

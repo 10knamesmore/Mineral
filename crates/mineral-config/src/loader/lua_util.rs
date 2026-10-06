@@ -1,17 +1,17 @@
 //! Lua 表在 Rust 侧的导航辅助:配置表手术(函数摘取等)共用的小件。
 
-use mlua::{Table, Value};
+use mlua::{Function, Lua, Table, Value};
 
-/// [`table_path`] 的点号语法糖:`table_at!(merged, tui.copy.templates)`
-/// = `table_path(merged, &["tui", "copy", "templates"])`。键必须是合法标识符。
-/// (与函数不同名是刻意的:`use` 再导出宏时,同名函数会在值命名空间撞车。)
-macro_rules! table_at {
-    ($root:expr, $($key:ident).+) => {
-        crate::loader::lua_util::table_path($root, &[$(stringify!($key)),+])
-    };
+/// 摘取可选根 setup 到宿主指定的 registry 键;不执行函数。
+/// 非函数值留在配置表中,由宿主 schema 报未知字段。
+pub fn extract_setup(lua: &Lua, root: &Table, registry: &str) -> mlua::Result<()> {
+    let mut setup = Value::Nil;
+    if let Ok(function) = root.get::<Function>("setup") {
+        setup = Value::Function(function);
+        root.raw_set("setup", Value::Nil)?;
+    }
+    lua.set_named_registry_value(registry, setup)
 }
-
-pub(crate) use table_at;
 
 /// 顺路径逐级取子表;两种中断都收敛为 `None`,但区别对待:
 /// **键缺失**(用户没配这段,常态)静默;**键存在但不是表**(形态错)打带
@@ -24,7 +24,7 @@ pub(crate) use table_at;
 ///
 /// # Return:
 ///   路径尽头的子表;缺失 / 形态错为 `None`。
-pub(crate) fn table_path(root: &Table, path: &[&str]) -> Option<Table> {
+pub fn table_path(root: &Table, path: &[&str]) -> Option<Table> {
     let mut current = root.clone();
     for (depth, key) in path.iter().enumerate() {
         // get::<Value> 对缺失键给 Nil,不报错;真正的 Err 只剩 VM 级故障。
@@ -58,18 +58,23 @@ pub(crate) fn table_path(root: &Table, path: &[&str]) -> Option<Table> {
 mod tests {
     use mlua::Lua;
 
-    /// 点号宏全路径命中;缺失键与非表节点都静默 `None`。
+    use super::table_path;
+
+    /// 全路径命中;缺失键与非表节点都返回 None,形态错误只记 debug 日志。
     #[test]
     fn walks_path_and_misses_quietly() -> color_eyre::Result<()> {
         let lua = Lua::new();
         let root: mlua::Table = lua
-            .load(r#"{ tui = { copy = { templates = { 1 } } }, flat = 5 }"#)
+            .load(r#"{ copy = { templates = { 1 } }, flat = 5 }"#)
             .eval()?;
-        let hit = table_at!(&root, tui.copy.templates);
+        let hit = table_path(&root, &["copy", "templates"]);
         assert_eq!(hit.map(|t| t.raw_len()), Some(1), "全路径命中");
-        assert!(table_at!(&root, tui.missing).is_none(), "缺失键静默 None");
         assert!(
-            table_at!(&root, flat.deeper).is_none(),
+            table_path(&root, &["copy", "missing"]).is_none(),
+            "缺失键静默 None"
+        );
+        assert!(
+            table_path(&root, &["flat", "deeper"]).is_none(),
             "非表节点 None(仅 debug 日志)"
         );
         Ok(())

@@ -8,10 +8,9 @@ use std::time::Instant;
 /// 在途反馈通过 App::apply_config 换速，当前画面和已建立期限都不重置。
 #[test]
 fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::Result<()> {
-    use mineral_protocol::BusValue;
     let mut app = crate::test_support::app_with_queue(1, 0)?;
     let now = Instant::now();
-    let anim = app.state.cfg.tui().animation();
+    let anim = app.state.cfg.animation();
     app.state.ui.transport.on_action(
         Action::NudgeVolume(VolumeDelta(5)),
         PlayMode::Sequential,
@@ -28,16 +27,16 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
     }
     let before = app.state.ui.transport.clone();
     let tree = mineral_config::merge_tree(
-        mineral_config::default_tree()?,
+        crate::config::default_tui_tree()?,
         serde_json::json!({
-            "tui": { "animation": { "frame_tick_ms": 32, "controls_press_ms": 4400, "transport": {
+            "animation": { "frame_tick_ms": 32, "controls_press_ms": 4400, "transport": {
                 "volume_fade_out_ms": 2200, "volume_fade_in_ms": 3000,
                 "mode_reveal_ms": 4400, "mode_resize_ms": 4000, "controls_fade_ms": 4400,
                 "volume_hold_ms": 6000, "mode_hold_ms": 6000, "controls_hold_ms": 9000
-            } } }
+            } }
         }),
     );
-    app.apply_pushed_config(BusValue::from_json(tree));
+    app.apply_config(std::sync::Arc::new(crate::config::tui_from_tree(&tree)?));
     let after = &app.state.ui.transport;
     assert_eq!(after.heading(), before.heading());
     assert_eq!(after.mode_caption(), before.mode_caption());
@@ -57,18 +56,18 @@ fn app_reload_preserves_feedback_phase_and_existing_deadlines() -> color_eyre::R
     ] {
         assert_eq!(after.button(button), before.button(button));
     }
-    let old_cfg = mineral_config::Config::defaults()?;
+    let old_cfg = crate::config::TuiConfig::defaults()?;
     let before_opacity = before.controls_opacity();
     let before_reveal = before.mode_caption().1;
     let before_width = before.mode.width.current();
     let before_press = before.button(ControlButton::Mode).press_strength;
     let before_elapsed_press = before.elapsed_press_strength();
     let mut old_speed = before;
-    old_speed.tick(PlayMode::RepeatAll, old_cfg.tui().animation(), now);
+    old_speed.tick(PlayMode::RepeatAll, old_cfg.animation(), now);
     app.state
         .ui
         .transport
-        .tick(PlayMode::RepeatAll, app.state.cfg.tui().animation(), now);
+        .tick(PlayMode::RepeatAll, app.state.cfg.animation(), now);
     assert!(app.state.ui.transport.controls_opacity() > before_opacity);
     assert!(app.state.ui.transport.controls_opacity() < old_speed.controls_opacity());
     assert!(app.state.ui.transport.mode_caption().1 > before_reveal);

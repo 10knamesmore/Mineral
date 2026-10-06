@@ -1,46 +1,34 @@
-//! daemon 内嵌 Lua 脚本运行时。
+//! daemon 与 TUI 的独立 Lua 执行宿主。
 //!
-//! 事件 VM 由一条专用 OS 线程持有;daemon 经
-//! channel 投递事件、脚本经 channel 发回命令,两侧消息都是结构化 Rust
-//! 类型,Lua 值只活在 VM 边界。
-//!
-//! 接线顺序:[`ScriptHost::new`] → [`install_api`] → eval 用户脚本 →
-//! [`ScriptRuntime::spawn`] 移交 VM。eval 失败由调用方弃整 VM(脚本是
-//! 旁路增强,不拖垮 daemon 启动)。
+//! daemon.lua 与 tui.lua 分别返回独立配置，setup 参数提供各自宿主 API。
+//! [`ScriptRuntime`] 在线程启动前执行 daemon.lua 的 setup，再串行执行音乐查询与 hook。
+//! [`evaluate_tui`] 保护 TUI 提供的配置求值操作并执行同 VM 的 setup;
+//! [`TuiRuntime`] 保留复制模板闭包,不创建脚本线程。配置类型由宿主持有。
 
 mod api;
+mod copy;
 mod dispatch;
 mod hooks;
 mod host;
 mod intercept;
+mod lua_stub;
 mod message;
-mod proc;
+mod projection;
+pub mod registry;
 mod runtime;
 mod sender;
+mod setup;
+mod tui;
 mod watchdog;
 
-/// 脚本线程或子进程执行失败。
+/// 脚本求值或 daemon 回调执行失败。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// 脚本专用线程无法启动。
     #[error("spawn mineral-script thread")]
     Thread(#[source] std::io::Error),
 
-    /// 子进程启动或运行失败。
-    #[error("{operation} `{program}` 失败")]
-    Child {
-        /// 子进程操作。
-        operation: &'static str,
-
-        /// 可执行文件。
-        program: String,
-
-        /// 原始进程错误。
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// 复制模板或队列变换所需的脚本线程不可用。
+    /// 队列变换所需的 daemon 脚本线程不可用。
     #[error("脚本未启用或线程已退出")]
     Unavailable,
 
@@ -55,7 +43,7 @@ pub enum Error {
         source: mlua::Error,
     },
 
-    /// 对应下标没有可调用的模板或变换函数。
+    /// 对应下标没有可调用的本地复制模板。
     #[error("{kind} #{index} 没有可调用的函数")]
     MissingFunction {
         /// 函数用途。
@@ -63,6 +51,17 @@ pub enum Error {
 
         /// 配置中的零基下标。
         index: usize,
+
+        /// Lua 原始错误。
+        #[source]
+        source: mlua::Error,
+    },
+
+    /// 指定操作名称没有可调用的队列变换。
+    #[error("队列变换 {name} 没有可调用的函数")]
+    MissingQueueTransform {
+        /// daemon 配置中的唯一操作名。
+        name: String,
 
         /// Lua 原始错误。
         #[source]
@@ -95,20 +94,21 @@ pub enum Error {
     },
 }
 
-/// 脚本线程与子进程执行结果。
+/// 脚本求值与回调执行结果。
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub use mlua;
 
+pub use copy::CopyTemplateCtx;
 pub use hooks::{
     BeforeDownloadCtx, BeforeStreamCtx, HookDecision, HookKind, HookMode, RewriteSpec,
 };
-pub use host::{ScriptHost, SourceWebUrls, install_api, seed_web_url_templates};
+pub use host::{ScriptHost, SourceWebUrls, install_daemon_api, seed_web_url_templates};
+pub use lua_stub::TYPES_META;
 pub use message::{
-    ActionOutcome, ConfigOverrideOp, CurateOutcome, CuratedEntry, PlaylistBrief, PropKey,
-    PropValue, QueryId, ResolveValue, ScriptCmd, ScriptEvent, TrackFinishedReason,
+    ConfigOverrideOp, CurateOutcome, CuratedEntry, PlaylistBrief, QueryId, ResolveValue, ScriptCmd,
 };
-pub use proc::{SpawnId, SpawnResult, SpawnSpec, run_child};
 pub use runtime::ScriptRuntime;
 pub use sender::ScriptSender;
+pub use tui::{TuiCommand, TuiLoad, TuiRuntime, evaluate_tui};
 pub use watchdog::WatchdogConfig;

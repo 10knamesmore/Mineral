@@ -191,12 +191,12 @@ fn core_with_curate(
     merged: Option<&str>,
     playlists: Vec<Playlist>,
 ) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
-    use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
+    use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_daemon_api};
     let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
     let host = ScriptHost::new(cmd_tx, push_tx);
     let lua = mineral_script::mlua::Lua::new();
-    install_api(&lua, &host)?;
+    install_daemon_api(&lua, &host)?;
     let fns = lua.create_table()?;
     for (source, src) in per_source {
         fns.set(
@@ -204,10 +204,10 @@ fn core_with_curate(
             lua.load(*src).eval::<mineral_script::mlua::Function>()?,
         )?;
     }
-    lua.set_named_registry_value(mineral_config::CURATE_PLAYLISTS_SOURCE_FNS, fns)?;
+    lua.set_named_registry_value(mineral_script::registry::CURATE_PLAYLISTS_SOURCE_FNS, fns)?;
     if let Some(src) = merged {
         lua.set_named_registry_value(
-            mineral_config::CURATE_PLAYLISTS_MERGED_FN,
+            mineral_script::registry::CURATE_PLAYLISTS_MERGED_FN,
             lua.load(src).eval::<mineral_script::mlua::Function>()?,
         )?;
     }
@@ -313,20 +313,22 @@ async fn library_failure_concludes_with_empty_snapshot() -> color_eyre::Result<(
 }
 
 /// 脚本 `library.playlists` 在初始完备前停靠,完备时刻统一 resolve
-/// (config.lua 顶层调用是常态场景;快照与 client 同为出口变换结果)。
+/// (daemon.lua 顶层查询;快照与 client 同为出口变换结果)。
 #[tokio::test(flavor = "multi_thread")]
 async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()> {
-    use mineral_script::{ScriptHost, install_api};
+    use mineral_script::{ScriptHost, install_daemon_api};
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (push_tx, push_rx) = tokio::sync::mpsc::unbounded_channel();
     let host = ScriptHost::new(cmd_tx.clone(), push_tx.clone());
     let lua = mineral_script::mlua::Lua::new();
-    install_api(&lua, &host)?;
+    install_daemon_api(&lua, &host)?;
     // 顶层调用:此刻聚合态必然未完备 → daemon 侧停靠。
     lua.load(
         r#"
+            local mineral = require("mineral.daemon")
             mineral.library.playlists(function(ps, err)
-                mineral.ui.toast("got:" .. #ps .. ":" .. ps[1].name)
+                assert(err == nil and #ps == 1 and ps[1].id == "netease:p1")
+                mineral.player.set_volume(37)
             end)
             "#,
     )
@@ -346,7 +348,7 @@ async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()
     })];
     let (runtime, pumps) = parts.spawn_runtime(watchdog, &channels);
     let _runtime = runtime.ok_or_else(|| color_eyre::eyre::eyre!("应有脚本线程"))?;
-    let (hub_tx, mut hub_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
+    let (hub_tx, _hub_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
     let core = core_with_events(
         channels,
         ServerStore::disabled(),
@@ -361,20 +363,13 @@ async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         core.consume_events_once();
-        match hub_rx.try_recv() {
-            Ok(mineral_protocol::Event::Toast { content, .. }) => {
-                let text = content.iter().map(|s| s.text.as_str()).collect::<String>();
-                assert_eq!(text, "got:1:日常", "停靠 query 在完备时刻收到快照");
-                return Ok(());
-            }
-            Ok(_other) => {}
-            Err(_empty) => {
-                if std::time::Instant::now() > deadline {
-                    color_eyre::eyre::bail!("超时未收到脚本回调 toast");
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+        if core.audio_snapshot().volume_pct == 37 {
+            return Ok(());
         }
+        if std::time::Instant::now() > deadline {
+            color_eyre::eyre::bail!("超时:停靠 query 未将完整快照交给脚本回调");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -525,7 +520,7 @@ async fn set_favorite_same_state_is_event_idempotent() -> color_eyre::Result<()>
     let dir = tempfile::tempdir()?;
     let persist = ServerStore::open(&dir.path().join("t.db")).await?;
     let stats = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(stats.clone(), params);
     let channel: Arc<dyn MusicChannel> = Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -683,7 +678,7 @@ async fn sync_favorites_imports_remote_add_only_and_emits() -> color_eyre::Resul
     let dir = tempfile::tempdir()?;
     let persist = ServerStore::open(&dir.path().join("t.db")).await?;
     let stats = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(stats.clone(), params);
     let local_only = SongId::new(SourceKind::NETEASE, "B");
     persist

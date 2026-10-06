@@ -1,10 +1,6 @@
-//! daemon 进程级 e2e:用户 `config.lua` 的脚本钩子在真 daemon 内生效。
+//! daemon.lua 的 setup、音乐 hook 与逐曲持久值的进程级 E2E。
 //!
-//! 起真 `mineral serve` 子进程(预埋 config.lua),经 `mineral action <name>`
-//! 子命令穿一整条链:CLI → unix socket → daemon dispatch → 脚本线程查注册表
-//! → Lua 回调 → 结果回包。音频走 `MINERAL_AUDIO_NULL` 降级,headless 稳跑。
-//!
-//! 与 daemon_lifecycle 同进 nextest 的 `daemon-e2e` 串行组(真子进程 + socket)。
+//! 每例使用隔离 XDG/socket 目录和 null 音频后端,不读取个人配置或执行 tui.lua。
 
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -12,53 +8,62 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{WrapErr, bail};
-use mineral_protocol::SocketWire;
+use mineral_client::Client;
+use mineral_client::connection::ClientConfig;
+use mineral_model::SongId;
+use mineral_protocol::{
+    Event, FailureNotice, QueueContextWire, SocketWire, StoreValue, Subscription, SubscriptionTopic,
+};
 
-/// 隔离环境里的一个 daemon 子进程;Drop 时 kill 子进程并清临时目录。
+/// 脚本命令提交与文件轮询的等待上限。
+const WAIT: Duration = Duration::from_secs(10);
+
+/// 一个隔离 daemon;停止后可保留数据目录供重启验证。
 struct Daemon {
-    /// `mineral serve` 子进程。
+    /// daemon 子进程。
     child: Child,
 
-    /// 隔离用的临时根目录(XDG_CONFIG/DATA/CACHE 全指到这下面)。
+    /// 隔离 XDG 根目录。
     root: PathBuf,
 
-    /// socket 目录(经 `MINERAL_SOCKET_DIR` 注入,刻意短于 `root`,
-    /// 压在 `sun_path` 上限内)。
+    /// 短 socket 目录,避免超过 Unix socket 路径上限。
     sock_dir: PathBuf,
 
-    /// daemon 监听的 socket 路径。
+    /// daemon socket。
     socket: PathBuf,
 
-    /// Drop 时是否清目录(`stop_keep_data` 置 false 保留数据给下一只)。
+    /// Drop 时是否删除隔离目录。
     cleanup: bool,
 }
 
 impl Daemon {
-    /// 起一个隔离环境、null 音频后端的 daemon;`config_lua` 为 `Some` 时
-    /// 预埋成用户 config.lua(脚本钩子的输入)。
-    fn spawn(tag: &str, config_lua: Option<&str>) -> color_eyre::Result<Self> {
+    /// 分别写入独立 daemon/tui 文件,再启动真实 daemon 进程。
+    fn spawn(tag: &str, daemon: Option<&str>, tui: Option<&str>) -> color_eyre::Result<Self> {
         let root = std::env::temp_dir().join(format!(
-            "mineral-script-e2e-{}-{}-{}",
-            tag,
+            "mineral-script-e2e-{tag}-{}-{}",
             std::process::id(),
             unique_suffix()
         ));
-        Self::spawn_in(root, config_lua)
+        Self::spawn_in(root, daemon, tui)
     }
 
-    /// 在指定 root 下起 daemon(跨重启持久性测试:第二只复用第一只的数据目录)。
-    /// `config_lua` 为 `None` 时保留 root 内既有 config(若有)。
-    fn spawn_in(root: PathBuf, config_lua: Option<&str>) -> color_eyre::Result<Self> {
+    /// None 保留既有文件,用于同一数据目录重启。
+    fn spawn_in(
+        root: PathBuf,
+        daemon: Option<&str>,
+        tui: Option<&str>,
+    ) -> color_eyre::Result<Self> {
         let sock_dir =
             std::env::temp_dir().join(format!("mnls-{}-{}", std::process::id(), unique_suffix()));
-        std::fs::create_dir_all(&root).wrap_err("create isolated root dir")?;
-        if let Some(src) = config_lua {
-            let cfg_dir = root.join("config/mineral");
-            std::fs::create_dir_all(&cfg_dir).wrap_err("create config dir")?;
-            std::fs::write(cfg_dir.join("config.lua"), src).wrap_err("seed config.lua")?;
+        let cfg_dir = root.join("config/mineral");
+        std::fs::create_dir_all(&cfg_dir).wrap_err("create config dir")?;
+        for (name, source) in [("daemon.lua", daemon), ("tui.lua", tui)] {
+            if let Some(source) = source {
+                std::fs::write(cfg_dir.join(name), source).wrap_err("seed Lua source")?;
+            }
         }
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
-        cmd.arg("serve")
+        let child = Command::new(env!("CARGO_BIN_EXE_mineral"))
+            .arg("serve")
             .env("XDG_CACHE_HOME", root.join("cache"))
             .env("XDG_CONFIG_HOME", root.join("config"))
             .env("XDG_DATA_HOME", root.join("data"))
@@ -66,8 +71,9 @@ impl Daemon {
             .env("MINERAL_AUDIO_NULL", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let child = cmd.spawn().wrap_err("spawn `mineral serve`")?;
+            .stderr(Stdio::null())
+            .spawn()
+            .wrap_err("spawn mineral serve")?;
         let socket = sock_dir.join("mineral.sock");
         Ok(Self {
             child,
@@ -78,7 +84,7 @@ impl Daemon {
         })
     }
 
-    /// 停掉 daemon 但保留数据目录(跨重启持久性测试用),返回 root 供第二只复用。
+    /// 停止进程,保留配置和数据库。
     fn stop_keep_data(mut self) -> PathBuf {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -87,9 +93,9 @@ impl Daemon {
         self.root.clone()
     }
 
-    /// 轮询直到 socket 可连(daemon ready),超时则报错。
+    /// 等 socket 可连接。
     fn wait_ready(&self) -> color_eyre::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + WAIT;
         while Instant::now() < deadline {
             if UnixStream::connect(&self.socket).is_ok() {
                 return Ok(());
@@ -99,17 +105,18 @@ impl Daemon {
         bail!("daemon did not become ready in time");
     }
 
-    /// 在同一隔离环境下跑 `mineral action <name>`,捕获输出。
-    fn action_output(&self, name: &str) -> color_eyre::Result<std::process::Output> {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mineral"));
-        cmd.arg("action")
-            .arg(name)
-            .env("XDG_CACHE_HOME", self.root.join("cache"))
-            .env("XDG_CONFIG_HOME", self.root.join("config"))
-            .env("XDG_DATA_HOME", self.root.join("data"))
-            .env("MINERAL_SOCKET_DIR", &self.sock_dir)
-            .stdin(Stdio::null());
-        cmd.output().wrap_err("run `mineral action`")
+    /// 创建真实 IPC 会话。
+    async fn connect(&self) -> color_eyre::Result<Client> {
+        let wire = SocketWire::connect(&self.socket).await?;
+        Client::from_wire(Box::new(wire), "script_hooks", ClientConfig::cli())
+            .await
+            .map_err(color_eyre::Report::new)
+    }
+
+    /// 重写独立用户文件,由对应宿主决定是否加载。
+    fn write_source(&self, name: &str, source: &str) -> color_eyre::Result<()> {
+        std::fs::write(self.root.join("config/mineral").join(name), source)
+            .wrap_err("rewrite Lua source")
     }
 }
 
@@ -124,232 +131,219 @@ impl Drop for Daemon {
     }
 }
 
-/// 纳秒时间戳,给临时目录名做唯一后缀。
+/// 临时目录唯一后缀。
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_nanos())
 }
 
-/// 注册过的动作经 CLI 触发成功;未注册的动作回人读错误;脚本回调里的
-/// Lua 错误经回执变成非零退出。一只 daemon 串三个断言(进程级 e2e 起停贵)。
-#[test]
-fn registered_action_runs_and_failures_surface() -> color_eyre::Result<()> {
-    let daemon = Daemon::spawn(
-        "action",
-        Some(
-            r#"
-            mineral.action("e2e.echo", function(ctx) mineral.log.info("echoed") end)
-            mineral.action("e2e.boom", function(ctx) error("kapow") end)
-            return {}
-            "#,
-        ),
-    )?;
-    daemon.wait_ready()?;
-
-    let ok = daemon.action_output("e2e.echo")?;
-    assert!(
-        ok.status.success(),
-        "已注册动作应成功,stderr: {}",
-        String::from_utf8_lossy(&ok.stderr)
-    );
-
-    let missing = daemon.action_output("e2e.nope")?;
-    assert!(!missing.status.success(), "未注册动作必须非零退出");
-    assert!(!missing.stderr.is_empty());
-
-    let failing = daemon.action_output("e2e.boom")?;
-    assert!(!failing.status.success(), "回调出错必须非零退出");
-    assert!(!failing.stderr.is_empty());
-    Ok(())
-}
-
-/// 经会话读一条 per-song 持久值(连 socket → 握手 → `StoreGet`)。
-async fn store_get(
-    socket: &std::path::Path,
-    song: mineral_model::SongId,
-    key: &str,
-) -> color_eyre::Result<mineral_protocol::StoreValue> {
-    use mineral_client::Client;
-    use mineral_client::connection::ClientConfig;
-    use mineral_client::operation::Outcome;
-    let wire = SocketWire::connect(socket).await?;
-    let client = Client::from_wire(Box::new(wire), "script_hooks", ClientConfig::cli())
-        .await
-        .map_err(color_eyre::Report::new)?;
-    match client.store_get(song, key).await {
-        Outcome::Applied(value) => Ok(value),
-        other => {
-            bail!("unexpected outcome: {other:?}");
-        }
-    }
-}
-
-/// 轮询 store 值直到等于期望(脚本 inc 是异步落库)或超时。
+/// 通过真实 IPC 等待 daemon 脚本的异步存储提交。
 async fn wait_store_int(
-    socket: &std::path::Path,
-    song: &mineral_model::SongId,
+    client: &Client,
+    song: &SongId,
     key: &str,
     want: i64,
 ) -> color_eyre::Result<()> {
-    use mineral_protocol::StoreValue;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + WAIT;
     loop {
-        // 脚本落库与 IPC 观察不同步；值未到或临时连接失败时都重试到截止时间。
-        match store_get(socket, song.clone(), key).await {
-            Ok(got) if got == StoreValue::Int(want) => return Ok(()),
-            Ok(got) if Instant::now() > deadline => {
-                bail!("store 值未达期望 {want},实得 {got:?}");
-            }
-            Err(e) if Instant::now() > deadline => {
-                return Err(e.wrap_err("store_get 直到超时仍失败"));
-            }
-            Ok(_) | Err(_) => {}
+        let value = client.store_get(song.clone(), key).await;
+        if value.into_success() == Some(StoreValue::Int(want)) {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            bail!("store value for {key} did not become {want}");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
-/// 脚本 `store.inc` 落库持久:同一数据目录重启 daemon 后值仍在。
-/// 顺带穿一遍 wire 的 `StoreGet` dispatch(rust 侧直连 socket 断言)。
+/// 等实际播放器状态变化,而不是仅检查 setup 文件通过加载。
+async fn wait_volume(client: &Client, volume: u8) -> color_eyre::Result<()> {
+    let deadline = Instant::now() + WAIT;
+    while client.playback_snapshot().volume_pct != volume {
+        if Instant::now() > deadline {
+            bail!("setup volume did not become {volume}");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(())
+}
+
+/// daemon.lua 的 setup 接收音乐 API;本地 tui.lua 不参与 daemon 配置或执行。
 #[tokio::test]
-async fn store_survives_daemon_restart() -> color_eyre::Result<()> {
-    use mineral_model::{SongId, SourceKind};
+async fn daemon_setup_store_persists_and_ignores_tui_file() -> color_eyre::Result<()> {
+    use mineral_model::SourceKind;
     let song = SongId::new(SourceKind::NETEASE, "42");
     let first = Daemon::spawn(
         "store",
         Some(
-            r#"
-            mineral.action("e2e.bump", function(ctx)
-                mineral.store.inc("netease:42", "plugin.n", 1)
-            end)
-            return {}
-            "#,
+            r#"return {
+                setup = function(api)
+                    assert(_G.mineral == nil)
+                    assert(api.ui == nil)
+                    assert(type(api.player.stop) == "function")
+                    api.player.set_volume(41)
+                    api.store.get("netease:42", "plugin.saved", function(value, err)
+                        if err then error(err) end
+                        if value == nil then
+                            api.store.set("netease:42", "plugin.saved", 41)
+                        else
+                            api.store.set("netease:42", "plugin.readback", value)
+                        end
+                    end)
+                end
+            }"#,
+        ),
+        Some(
+            r#"return {
+                setup = function(api) error("tui setup must not run in daemon") end,
+                heartbeat_secs = 7,
+            }"#,
         ),
     )?;
     first.wait_ready()?;
-    let bumped = first.action_output("e2e.bump")?;
-    assert!(
-        bumped.status.success(),
-        "bump 应成功,stderr: {}",
-        String::from_utf8_lossy(&bumped.stderr)
-    );
-    let bumped = first.action_output("e2e.bump")?;
-    assert!(bumped.status.success(), "第二次 bump 应成功");
-    wait_store_int(&first.socket, &song, "plugin.n", /*want*/ 2).await?;
-
-    // 杀第一只、保留数据目录,同 root 起第二只 → 值持久
+    let client = first.connect().await?;
+    client.subscribe(SubscriptionTopic::Playback);
+    wait_store_int(&client, &song, "plugin.saved", 41).await?;
+    wait_volume(&client, 41).await?;
+    // 即便 TUI 文件无法解析,daemon 重启仍只读取 daemon.lua。
+    first.write_source("tui.lua", "this is not lua ((")?;
+    drop(client);
     let root = first.stop_keep_data();
-    let second = Daemon::spawn_in(root, /*config_lua*/ None)?;
+    let second = Daemon::spawn_in(root, None, None)?;
     second.wait_ready()?;
-    wait_store_int(&second.socket, &song, "plugin.n", /*want*/ 2).await?;
+    let client = second.connect().await?;
+    wait_store_int(&client, &song, "plugin.readback", 41).await?;
     Ok(())
 }
 
-/// 热重载:daemon 运行中改写 config.lua,新 action 生效、旧 action 退役,
-/// 无需重启(mtime 轮询 1s + 重载执行,轮询等待)。
-#[test]
-fn hot_reload_swaps_actions_without_restart() -> color_eyre::Result<()> {
+/// 配置和 setup 来自同一份 daemon.lua;hook 写出其所属成功重载的版本。
+fn hook_source(version: i64, name: &str, level: &str) -> String {
+    format!(
+        r#"return {{
+            stats = {{ level = "{level}" }},
+            queue = {{ transforms = {{
+                {{ name = "{name}", transform = function(queue) return queue end }},
+            }} }},
+            setup = function(api)
+                api.player.set_volume({volume})
+                api.store.set("netease:42", "plugin.ready", {version})
+                api.hook("before_stream", function(ctx)
+                    api.store.set(ctx.song.id, "plugin.hook", {version})
+                end)
+            end
+        }}"#,
+        volume = 40 + version,
+    )
+}
+
+/// 等 daemon 公开其实际可用操作,不读取私有配置树。
+async fn wait_transform_name(client: &Client, name: &str) -> color_eyre::Result<()> {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if client
+            .service_info()
+            .await
+            .into_success()
+            .is_some_and(|info| info.queue_transforms == [name])
+        {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            bail!("daemon did not publish the reloaded transform");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// 没有该来源的 playback provider 时也运行 before_stream,无需网络或真实媒体。
+async fn trigger_hook(client: &Client, id: &str, version: i64) -> color_eyre::Result<()> {
+    let song = mineral_test::song(id);
+    assert!(
+        client
+            .play_queue(vec![song.clone()], 0, QueueContextWire::Manual)?
+            .outcome()
+            .await
+            .is_success()
+    );
+    wait_store_int(client, &song.id, "plugin.hook", version).await
+}
+
+/// daemon 文件重载替换 hook、能力与 setup 效果;失败 setup 不提交命令并保留旧 VM。
+#[tokio::test]
+async fn daemon_reload_keeps_old_state_when_setup_fails() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn(
         "reload",
-        Some(
-            r#"
-            mineral.action("gen.one", function(ctx) end)
-            return {}
-            "#,
-        ),
+        Some(&hook_source(1, "Keep original order", "off")),
+        None,
     )?;
     daemon.wait_ready()?;
-    let ok = daemon.action_output("gen.one")?;
-    assert!(ok.status.success(), "初代 action 应可触发");
+    let client = daemon.connect().await?;
+    client.subscribe(SubscriptionTopic::Playback);
+    client.subscribe(SubscriptionTopic::Events(Subscription::Toast));
+    let marker = SongId::new(mineral_model::SourceKind::NETEASE, "42");
+    wait_store_int(&client, &marker, "plugin.ready", 1).await?;
+    wait_transform_name(&client, "Keep original order").await?;
+    trigger_hook(&client, "initial-hook", 1).await?;
 
-    // 改写 config.lua:换一代 action。
-    let cfg_path = daemon.root.join("config/mineral/config.lua");
-    std::fs::write(
-        &cfg_path,
-        r#"
-        mineral.action("gen.two", function(ctx) end)
-        -- 重载播种守卫:新 VM 顶层 get 必须立即读到 daemon 当前属性
-        -- (无在播 = "stopped"),不等下次属性真变更。
-        if mineral.get("player.state") == "stopped" then
-            mineral.action("props.seeded", function(ctx) end)
-        end
-        return {}
-        "#,
+    daemon.write_source("daemon.lua", &hook_source(2, "Keep current order", "core"))?;
+    wait_store_int(&client, &marker, "plugin.ready", 2).await?;
+    wait_transform_name(&client, "Keep current order").await?;
+    wait_volume(&client, 42).await?;
+    trigger_hook(&client, "reloaded-hook", 2).await?;
+
+    daemon.write_source(
+        "daemon.lua",
+        r#"return {
+            stats = { level = "off" },
+            queue = { transforms = {
+                { name = "Rejected operation", transform = function(queue) return queue end },
+            } },
+            setup = function(api)
+                api.player.set_volume(1)
+                api.store.set("netease:42", "plugin.rejected", 99)
+                api.config.override("stats.level", "off")
+                api.hook("before_stream", function(ctx)
+                    api.store.set(ctx.song.id, "plugin.hook", 99)
+                end)
+                error("setup failed")
+            end
+        }"#,
     )?;
-    // 等热重载生效(mtime 轮询 1s + 换线程;放宽到 10s)。
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + WAIT;
     loop {
-        let new_gen = daemon.action_output("gen.two")?;
-        if new_gen.status.success() {
+        if client.mirror().drain_events().into_iter().any(|event| {
+            matches!(
+                event,
+                Event::Failure(FailureNotice::ScriptReloadFailed {
+                    previous_kept: true
+                })
+            )
+        }) {
             break;
         }
         if Instant::now() > deadline {
-            bail!(
-                "热重载超时:gen.two 未生效,stderr: {}",
-                String::from_utf8_lossy(&new_gen.stderr)
-            );
+            bail!("failed setup reload was not reported");
         }
-        std::thread::sleep(Duration::from_millis(200));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    // 新一代生效后,旧一代必须已整体退役(注册表原子换)。
-    let old_gen = daemon.action_output("gen.one")?;
-    assert!(!old_gen.status.success(), "旧 action 应随重载退役");
-    // 播种守卫:props.seeded 注册成功 = 重载时新 VM 读到了当前属性值。
-    let seeded = daemon.action_output("props.seeded")?;
-    assert!(
-        seeded.status.success(),
-        "重载后顶层 mineral.get 应读到播种属性,stderr: {}",
-        String::from_utf8_lossy(&seeded.stderr)
+    // 先通过旧 hook 的持久提交,再检查失败 setup 没有留下任何命令效果。
+    trigger_hook(&client, "preserved-hook", 2).await?;
+    assert_eq!(
+        client
+            .store_get(marker, "plugin.rejected")
+            .await
+            .into_success(),
+        Some(StoreValue::Nil)
     );
-    Ok(())
-}
-
-/// 无 config.lua 的 daemon 未启用脚本，动作请求失败。
-#[test]
-fn action_without_script_reports_disabled() -> color_eyre::Result<()> {
-    let daemon = Daemon::spawn("noscript", /*config_lua*/ None)?;
-    daemon.wait_ready()?;
-    let out = daemon.action_output("whatever")?;
-    assert!(!out.status.success(), "无脚本必须非零退出");
-    assert!(!out.stderr.is_empty());
-    Ok(())
-}
-
-/// 多 client 并存:常驻连接挂着时,oneshot CLI 照常服务,且常驻连接不被顶掉。
-#[tokio::test(flavor = "multi_thread")]
-async fn concurrent_clients_are_served() -> color_eyre::Result<()> {
-    use mineral_client::Client;
-    use mineral_client::connection::ClientConfig;
-    use mineral_client::operation::Outcome;
-    let daemon = Daemon::spawn(
-        "multi",
-        Some(
-            r#"
-            mineral.action("e2e.ping", function(ctx) end)
-            return {}
-            "#,
-        ),
-    )?;
-    daemon.wait_ready()?;
-    // 常驻连接:完成握手后一直挂着(模拟常开的 TUI)。
-    let wire = SocketWire::connect(&daemon.socket).await?;
-    let resident = Client::from_wire(Box::new(wire), "resident", ClientConfig::default())
+    assert_eq!(client.playback_snapshot().volume_pct, 42);
+    let info = client
+        .service_info()
         .await
-        .map_err(color_eyre::Report::new)?;
-    // 常驻在线时 CLI 子进程照常服务(自己连、自己断)。
-    let out = daemon.action_output("e2e.ping")?;
-    assert!(
-        out.status.success(),
-        "常驻连接在线时 CLI 应照常服务,stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    // 常驻连接不受后来 client 影响:随后的请求仍正常应答。
-    let pid = resident.daemon_info().await;
-    assert!(
-        matches!(pid, Outcome::Applied(_)),
-        "常驻连接应不被顶掉,实得 {pid:?}"
-    );
+        .into_success()
+        .ok_or_else(|| color_eyre::eyre::eyre!("service info query failed"))?;
+    assert_eq!(info.queue_transforms, vec!["Keep current order"]);
+    assert!(info.play_counts.enabled);
     Ok(())
 }

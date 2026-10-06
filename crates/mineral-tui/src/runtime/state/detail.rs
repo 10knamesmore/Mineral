@@ -235,11 +235,8 @@ impl DetailFrame {
             self.list_len(),
             usize::from(list.height.saturating_sub(1)),
         );
-        self.title.dependencies(
-            inputs,
-            paint.frame.config.tui().animation(),
-            paint.frame.now,
-        );
+        self.title
+            .dependencies(inputs, paint.frame.config.animation(), paint.frame.now);
         let mut covers = vec![self.entity.cover().cloned()];
         let loading = match &self.data {
             None => true,

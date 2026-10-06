@@ -115,6 +115,9 @@ pub struct App {
     /// 首批可见时发起的起播意图；完整曲目到货后保留原始位置和过滤词兑现。
     pub(crate) pending_playlist_play: Option<crate::player_actions::PendingPlaylistPlay>,
 
+    /// 本 App 的 tui.lua 文件、配置覆盖与标题，不共享给其他 TUI 实例。
+    pub(crate) tui_script: crate::runtime::tui_script::TuiScript,
+
     /// 终端窗口标题管理器（任务栏 / tab 标题）。
     pub(crate) window_title: WindowTitle,
 }
@@ -127,42 +130,40 @@ impl App {
     ///   - `images`: 已完成 worker 与 terminal backend 接线的图片引擎
     ///   - `launch_anchor`: 进 alternate screen 前捕获的光标位置,作整屏 expand/collapse
     ///     的缩放锚点;`None`(无 TTY)时缩放退化回屏幕居中
-    ///   - `cfg`: 已加载的全局配置(`Arc` 共享只读)
+    ///   - `cfg`: 已加载的本地客户端配置(`Arc` 共享只读)
     ///   - `ui_prefs`: 已读回初值的 UI 偏好句柄(歌词副轨档在此落进 state)
     pub fn new(
         client: Arc<dyn Backend>,
         images: ImageEngine,
         launch_anchor: Option<Position>,
-        cfg: Arc<mineral_config::Config>,
+        cfg: Arc<crate::config::TuiConfig>,
         ui_prefs: UiPrefs,
     ) -> Self {
         let completions = Arc::clone(client.completions());
-        let tui_cfg = cfg.tui();
-        let theme_base = Theme::from_config(tui_cfg.theme());
+        let theme_base = Theme::from_config(cfg.theme());
         let theme = Arc::new(theme_base);
-        let mut keymap = Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
-        // 脚本 `mineral.bind` 的键合进查表(连接后一次拉齐的自举数据)。
+        let keymap = Keymap::from_config(cfg.keys(), cfg.behavior());
         let bootstrap = client.bootstrap();
-        keymap.append_script_binds(&bootstrap.script_binds);
-        let anim = tui_cfg.animation();
+        let anim = cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
         let accent_fade = crate::render::accent::AccentFade::new(
-            crate::render::anim::ticks32_from_ms(*tui_cfg.theme().dynamic().fade_ms(), tick_ms),
+            crate::render::anim::ticks32_from_ms(*cfg.theme().dynamic().fade_ms(), tick_ms),
         );
         let ambient = crate::render::ambient::AmbientGradient::new(
-            crate::render::anim::ticks32_from_ms(*tui_cfg.ambient().fade_ms(), tick_ms),
+            crate::render::anim::ticks32_from_ms(*cfg.ambient().fade_ms(), tick_ms),
             tick_ms,
         );
         let ambient_pulse = crate::render::ambient::LoudnessPulse::new(tick_ms);
         let overlays = OverlayStack::new(ticks16_from_ms(*anim.popup_anim_ms(), tick_ms));
         let notifications = Component::new(Notifications::new(
-            *tui_cfg.toast().flash_ttl_secs(),
+            *cfg.toast().flash_ttl_secs(),
             ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
         ));
-        let window_title = WindowTitle::new(tui_cfg.window_title());
+        let window_title = WindowTitle::new(cfg.window_title());
         let mut state = AppState::new(cfg, images);
         // 各源能力声明:连接后自举一次进镜像,UI 据此画入口。
         state.models.caps = bootstrap.channel_caps.into_iter().collect();
+        state.models.service_info = bootstrap.service_info;
         // 跨会话保留的歌词副轨档:即使当前歌缺该副轨,渲染端也会优雅回落原文。
         state.ui.browse.lyrics.extra = ui_prefs.initial_lyric_extra();
         // 跨会话保留的歌单位置记忆表:旋钮非 persist 档时灌了也只是闲置,
@@ -195,6 +196,7 @@ impl App {
             clipboard: None,
             pending_container: FxHashMap::default(),
             pending_playlist_play: None,
+            tui_script: crate::runtime::tui_script::TuiScript::default(),
             window_title,
         }
     }

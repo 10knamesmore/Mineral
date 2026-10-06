@@ -81,7 +81,7 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
         motion,
         state.ui.frame_now,
         state.ui.browse.nav.last_sel_change,
-        std::time::Duration::from_millis(*state.cfg.tui().cover().debounce_ms()),
+        std::time::Duration::from_millis(*state.cfg.cover().debounce_ms()),
     );
     let mut cx = PrepareCx {
         frame: FrameEnv {
@@ -137,7 +137,7 @@ pub(crate) struct BrowseView<'a> {
     switch: crate::runtime::state::ViewSwitch,
 
     /// 当前配置的横向过渡风格。
-    sweep: mineral_config::SweepStyle,
+    sweep: crate::config::SweepStyle,
 }
 
 /// 根视图借出浏览页的组件输入。
@@ -146,7 +146,7 @@ pub(crate) fn view<'a>(state: &'a AppState, theme: &'a Theme) -> BrowseView<'a> 
         playlists: playlists(state, theme),
         tracks: tracks(state, theme),
         switch: state.ui.browse.view,
-        sweep: *state.cfg.tui().animation().view_sweep(),
+        sweep: *state.cfg.animation().view_sweep(),
     }
 }
 

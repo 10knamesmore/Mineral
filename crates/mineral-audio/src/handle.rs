@@ -32,7 +32,7 @@ pub struct EngineParams {
     prefetch_bytes: u64,
 
     /// PCM tap ringbuf 容量(f32 样本)。**外键**:须 ≥ 2 × 频谱 FFT 窗大小
-    /// (配置 `tui.spectrum.fft_size`)——双窗余量,UI 卡一帧不丢样本。
+    /// (配置 `spectrum.fft_size`)——双窗余量,UI 卡一帧不丢样本。
     tap_capacity: usize,
 }
 
@@ -299,7 +299,8 @@ mod tests {
         )
     }
 
-    /// 测试基线参数(任意合理值;生产默认的唯一真相源是 mineral-config 的 default.lua)。
+    /// 测试基线使用任意合理值;生产默认只来自
+    /// `crates/mineral-server/src/config/lua/daemon-default.lua`。
     fn params(initial_volume: u8) -> EngineParams {
         EngineParams::builder()
             .initial_volume(initial_volume)

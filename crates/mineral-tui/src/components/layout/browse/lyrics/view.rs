@@ -71,12 +71,9 @@ impl LyricsView<'_> {
         inputs.observe(&self.panel.extra);
         inputs.observe(&self.panel.extra_press.strength());
         inputs.observe(&(self.manual_anchor(), self.manual_focus()));
-        self.panel.colors.dependencies(
-            inputs,
-            self.frame.config.tui().lyrics(),
-            motion,
-            self.frame.now,
-        );
+        self.panel
+            .colors
+            .dependencies(inputs, self.frame.config.lyrics(), motion, self.frame.now);
     }
 
     /// 当前曲目确实具备的副歌词档。

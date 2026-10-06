@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::config::CoverConfig;
 use isahc::HttpClient;
-use mineral_config::CoverConfig;
 use mineral_persist::CacheIndex;
 
 use super::decode::fetch_and_decode;

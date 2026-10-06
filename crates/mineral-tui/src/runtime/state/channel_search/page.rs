@@ -2,8 +2,8 @@
 
 use std::time::Instant;
 
+use crate::config::SearchFocusTransition;
 use mineral_channel_core::ChannelCaps;
-use mineral_config::SearchFocusTransition;
 use mineral_model::{SearchKind, SourceKind};
 use rustc_hash::FxHashMap;
 
@@ -134,7 +134,7 @@ impl SearchPage {
         }
     }
 
-    /// 注入下拉白名单(链式,构造点接 `tui.search.channel` 配置用;不设 = 不过滤)。
+    /// 注入下拉白名单(链式,构造点接 `search.channel` 配置用;不设 = 不过滤)。
     pub(crate) fn with_whitelist(mut self, whitelist: SearchWhitelist) -> Self {
         self.whitelist = whitelist;
         self

@@ -1,6 +1,6 @@
 //! 实时 PCM → 频谱条计算。caller 喂 mono f32 样本 + 期望条数,本 crate 出对应根数的高度
 //! (0..=[`RES`])。FFT 大小 / 窗函数 / 桶映射 / dB 标定经 [`SpectrumParams`] 注入
-//! (生产值来自用户配置 `tui.spectrum` 段),UI 端按 area.width 决定要几根条,
+//! (生产值来自用户配置 `spectrum` 段),UI 端按 area.width 决定要几根条,
 //! 本 crate 在 (sr, bar_count) 缓存桶映射,只在变化时重算。
 
 use std::sync::Arc;
@@ -15,7 +15,7 @@ pub const RES: u16 = 64;
 /// FFT 窗大小的下限(样本)。再小桶映射在低频区退化到无意义。
 const MIN_FFT_SIZE: usize = 64;
 
-/// DSP 计算参数(来自用户配置 `tui.spectrum` 段;本 crate 保持叶子,不依赖配置 crate)。
+/// DSP 计算参数(来自用户配置 `spectrum` 段;本 crate 保持叶子,不依赖配置 crate)。
 ///
 /// **外键提醒**(参数间/跨段耦合,改值时同步):
 /// - `fft_size` ↔ 音频侧 PCM tap 容量(配置 `audio.tap_capacity`):tap 须 ≥ 2 × `fft_size`,
@@ -99,7 +99,7 @@ impl SpectrumComputer {
     /// 构造空计算器。FFT plan + Hann 窗在这里按 `params.fft_size` 一次性 cache。
     ///
     /// # Params:
-    ///   - `params`: DSP 参数(配置 `tui.spectrum` 段派生;`fft_size` 钳到下限)
+    ///   - `params`: DSP 参数(配置 `spectrum` 段派生;`fft_size` 钳到下限)
     pub fn new(params: SpectrumParams) -> Self {
         let size = (*params.fft_size()).max(MIN_FFT_SIZE);
         let bins = size / 2 + 1;
@@ -327,7 +327,7 @@ mod tests {
     /// 测试窗大小(与测试基线参数一致)。
     const FFT_SIZE: usize = 4096;
 
-    /// 测试基线参数(任意合理值;生产默认的唯一真相源是 mineral-config 的 default.lua)。
+    /// 测试基线参数(任意合理值;生产默认的唯一来源是 mineral-tui/src/config/lua/tui-default.lua)。
     fn params() -> SpectrumParams {
         params_with_fft(FFT_SIZE)
     }

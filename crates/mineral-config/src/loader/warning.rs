@@ -1,10 +1,10 @@
-//! 加载过程中的非致命问题类型。出现即表示该层(或整份)用户配置回落了默认。
+//! 指定宿主配置文件读取、求值或落型失败的诊断。
 
 use std::io;
 use std::path::PathBuf;
 
-/// 加载过程中的非致命问题。仅针对**用户** `config.lua`;内置 `default.lua` 损坏
-/// 是程序员错误,由守卫测试拦截、启动期 fail,不进本类型。
+/// 用户配置的非致命问题;文件加载失败回落所属宿主的默认。
+/// 内置默认损坏由 [`crate::Error`] 表达。
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConfigWarning {
@@ -39,7 +39,7 @@ pub enum ConfigWarning {
     },
 
     /// 合并后的配置树无法落型。`path` 是出错字段路径,如 `audio.volume`。
-    #[error("config.lua {location}错误,已回落默认", location = warning_location(.path.as_deref()))]
+    #[error("配置{location}错误,已回落默认", location = warning_location(.path.as_deref()))]
     Deserialize {
         /// 出错字段路径；顶层错误或无法定位字段时为 `None`。
         path: Option<String>,

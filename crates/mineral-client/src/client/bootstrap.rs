@@ -1,18 +1,26 @@
-//! 查询启动所需的来源能力与脚本绑定。
+//! 查询启动所需的来源能力与 daemon 服务能力。
 
 use super::Client;
 use crate::connection::Bootstrap;
-use crate::operation::Outcome;
+use crate::operation::{Outcome, decode_query};
 
 impl Client {
-    /// 拉一次启动自举数据(能力表 + 脚本绑定),CLI / TUI 连接后调用。
+    /// 拉一次启动自举能力表,CLI / TUI 连接后调用。
     pub async fn bootstrap(&self) -> Bootstrap {
-        let channel_caps = bootstrap_value(self.channel_caps().await, "channel_caps");
-        let script_binds = bootstrap_value(self.script_binds().await, "script_binds");
-        Bootstrap {
-            channel_caps,
-            script_binds,
-        }
+        let caps = bootstrap_value(self.channel_caps().await, "channel_caps");
+        let service_info = bootstrap_value(self.service_info().await, "service_info");
+        Bootstrap { caps, service_info }
+    }
+
+    /// 查询当前 daemon 的队列变换与播放统计能力，不读取其配置。
+    pub async fn service_info(&self) -> Outcome<mineral_protocol::ServiceInfo> {
+        self.request(mineral_protocol::Request::ServiceInfo, |result, name| {
+            decode_query(result, name, |response| match response {
+                mineral_protocol::Response::ServiceInfo(info) => Some(info),
+                _ => None,
+            })
+        })
+        .await
     }
 }
 

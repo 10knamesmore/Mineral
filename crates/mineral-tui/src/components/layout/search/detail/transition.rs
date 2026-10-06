@@ -54,7 +54,7 @@ pub(super) fn draw_sweep(
     let advance = u16::try_from(u32::from(w) * u32::from(eased) / FULL)
         .unwrap_or(w)
         .min(w);
-    let style = *state.frame.config.tui().animation().view_sweep();
+    let style = *state.frame.config.animation().view_sweep();
     let buf = frame.buffer_mut();
     for c in 0..w {
         let (src, src_c) = match sweep_column(style, is_push, c, w, advance) {

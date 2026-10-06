@@ -46,25 +46,6 @@ pub enum PlayQueueError {
     },
 }
 
-/// 复制模板失败类别；展示层据变体生成提示，诊断详情只用于日志。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Error)]
-pub enum CopyTextFailure {
-    /// 没有启用脚本运行时。
-    #[error("脚本未启用")]
-    ScriptDisabled,
-
-    /// 脚本线程在返回渲染结果前退出。
-    #[error("脚本线程已退出")]
-    ScriptThreadExited,
-
-    /// 模板回调拒绝渲染；诊断详情不是 UI 文案。
-    #[error("模板回调失败: {detail}")]
-    CallbackFailed {
-        /// 脚本给出的诊断信息。
-        detail: String,
-    },
-}
-
 /// 队列语境的 wire 形态:client 告知一个队列「来自哪」,server 映射进埋点 `QueueContext`
 /// 后随该队列每个 plays 行继承(单一 origin 有归属漏洞:从歌单点第一首后连播 20 首,
 /// 后 19 行只知 AutoAdvance,「最常听的歌单」就断了)。id 用 mineral_model 类型,天然可序列化。
@@ -227,6 +208,9 @@ pub enum Request {
     /// 返回 [`Response::ChannelCaps`]。
     ChannelCaps,
 
+    /// 查询 daemon 当前提供的队列变换与播放统计能力。返回 [`Response::ServiceInfo`]。
+    ServiceInfo,
+
     /// `m` 键循环 PlayMode。返回 [`Response::Ok`]。
     CyclePlayMode,
 
@@ -263,34 +247,6 @@ pub enum Request {
     /// Stop 一个 Song download。已知 identity 返回 [`Response::Ok`]，未知 identity 返回结构化失败。
     StopDownload(DownloadId),
 
-    // ---- 脚本 ----
-    /// 触发脚本具名动作(`mineral.action` 注册)。成功返回 [`Response::Ok`];
-    /// 未注册 / 脚本未启用 / 回调失败返回结构化失败。
-    InvokeAction {
-        /// 动作注册名(config.lua 里 `mineral.action` 的第一个参数)。
-        name: String,
-
-        /// 按键瞬间的 client 上下文(TUI 采集;CLI 等无界面触发面为 `None`)。
-        ctx: Option<crate::KeyContext>,
-
-        /// 调用位置实参(CLI `mineral action <name> <args...>` 采集;
-        /// TUI 键位触发为空 `Vec`)。Lua 回调经 `ctx.args` 读取(恒为数组)。
-        args: Vec<String>,
-    },
-
-    /// 渲染一个用户复制模板(config.lua `copy.templates[index]` 的回调,daemon
-    /// 脚本运行时执行):函数收 `ctx` 投影成的 Lua 表,返回要进剪贴板的文本。
-    /// 返回 [`Response::CopyText`];无脚本运行时 / 下标越界 / 回调失败走其 `Err` 侧。
-    RenderCopyTemplate {
-        /// 模板在 `copy.templates` 数组中的下标(client 与 daemon eval 同一份
-        /// config,序号天然对位)。
-        index: usize,
-
-        /// 模板作用的实体(client 侧光标所指,数据随请求带过去,daemon 无需
-        /// 反查任何视图状态)。
-        ctx: CopyTemplateCtx,
-    },
-
     // ---- per-song 持久 KV ----
     /// 读 per-song 持久值(开放 key)。返回 [`Response::StoreValue`](未命中 `Nil`)。
     StoreGet {
@@ -313,14 +269,10 @@ pub enum Request {
         value: crate::StoreValue,
     },
 
-    /// 拉取脚本 `mineral.bind` 产生的键绑定表(client 启动 / 配置重载后调,
-    /// 合进自己的 keymap)。返回 [`Response::ScriptBinds`]，无脚本时为空。
-    ScriptBinds,
-
     // ---- UI 状态上报 ----
     /// client 上报终端 UI 状态(resize / 全屏切换时发)。daemon 按连接归属记录,
-    /// 灌属性树 `terminal` 复合属性供脚本 observe——多终端平等,属性取最近
-    /// 上报的那条,断开只清自己的。返回 [`Response::Ok`]。
+    /// 灌属性树 `terminal` 复合属性——多终端平等,属性取最近上报的那条,
+    /// 断开只清自己的。返回 [`Response::Ok`]。
     TerminalState {
         /// 终端行数。
         rows: u16,
@@ -383,33 +335,12 @@ pub enum Response {
     /// 对应 [`Request::ChannelCaps`]:每个已注册 channel 的能力声明。
     ChannelCaps(Vec<(mineral_model::SourceKind, mineral_channel_core::ChannelCaps)>),
 
+    /// 对应 [`Request::ServiceInfo`]：daemon 当前可用的服务能力。
+    ServiceInfo(crate::ServiceInfo),
+
     /// 对应 [`Request::StoreGet`]:标量值(未命中 `Nil`)。
     StoreValue(crate::StoreValue),
 
-    /// 对应 [`Request::ScriptBinds`]:脚本 bind 表(注册顺序;无脚本为空)。
-    ScriptBinds(Vec<crate::ScriptBind>),
-
-    /// 对应 [`Request::RenderCopyTemplate`]:`Ok` = 回调返回的剪贴板文本,
-    /// `Err` = 结构化渲染失败。
-    CopyText(Result<String, CopyTextFailure>),
-
     /// 服务端处理失败；诊断详情不用于 UI 展示。
     Error(crate::OperationFailure),
-}
-
-/// 复制模板回调作用的实体:client 侧光标所指,整体随请求传输
-/// (含已加载曲目等,daemon 端零状态反查)。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum CopyTemplateCtx {
-    /// 一首歌(`context = "song"` 的模板)。
-    Song(Box<mineral_model::Song>),
-
-    /// 一张歌单,`songs` 为 client 已加载的曲目(`context = "playlist"` 的模板)。
-    Playlist(Box<mineral_model::Playlist>),
-
-    /// 一张专辑(`context = "album"` 的模板)。
-    Album(Box<mineral_model::Album>),
-
-    /// 一个 artist(`context = "artist"` 的模板)。
-    Artist(Box<mineral_model::Artist>),
 }

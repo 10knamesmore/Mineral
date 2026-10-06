@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use mineral_config::SpectrumStyle;
+use crate::config::SpectrumStyle;
 use ratatui::style::Color;
 
 use crate::render::anim::{ticks16_from_ms, ticks32_from_ms};
@@ -238,7 +238,7 @@ impl Timing {
     /// # Params:
     ///   - `cfg`: 频谱旋钮(时间制)
     ///   - `tick_ms`: 主循环帧间隔(毫秒,配置 `animation.frame_tick_ms`)
-    fn derive(cfg: &mineral_config::SpectrumConfig, tick_ms: u64) -> Self {
+    fn derive(cfg: &crate::config::SpectrumConfig, tick_ms: u64) -> Self {
         Self {
             alpha_attack: alpha_from_t90(*cfg.attack_ms(), tick_ms),
             alpha_decay: alpha_from_t90(*cfg.decay_ms(), tick_ms),
@@ -318,7 +318,7 @@ pub struct SpectrumState {
     wave_carry: Vec<f32>,
 
     /// 频谱旋钮(平滑/衰减/peak 物理/观感开关),构造时由配置注入。
-    cfg: mineral_config::SpectrumConfig,
+    cfg: crate::config::SpectrumConfig,
 
     /// 时间制旋钮折算后的运行时拍数/系数(构造时由 `cfg` + 帧间隔派生)。
     timing: Timing,
@@ -359,10 +359,10 @@ impl SpectrumState {
     /// 初始静默状态。所有条都在 baseline,peak target/pos 同位,弹簧速度 0,色相 0。
     ///
     /// # Params:
-    ///   - `cfg`: 频谱旋钮(配置 `tui.spectrum` 段)
+    ///   - `cfg`: 频谱旋钮(配置 `spectrum` 段)
     ///   - `frame_tick_ms`: 主循环帧间隔(毫秒,配置 `animation.frame_tick_ms`);
     ///     时间制旋钮(`*_ms`)按它折算成拍数与每拍系数
-    pub fn new(cfg: mineral_config::SpectrumConfig, frame_tick_ms: u64) -> Self {
+    pub fn new(cfg: crate::config::SpectrumConfig, frame_tick_ms: u64) -> Self {
         let baseline = f32::from(*cfg.baseline_min());
         let timing = Timing::derive(&cfg, frame_tick_ms);
         Self {
@@ -388,9 +388,9 @@ impl SpectrumState {
     /// (频谱不因改配置闪断)。
     ///
     /// # Params:
-    ///   - `cfg`: 新频谱旋钮(配置 `tui.spectrum` 段)
+    ///   - `cfg`: 新频谱旋钮(配置 `spectrum` 段)
     ///   - `frame_tick_ms`: 主循环帧间隔(毫秒)
-    pub fn reconfigure(&mut self, cfg: mineral_config::SpectrumConfig, frame_tick_ms: u64) {
+    pub fn reconfigure(&mut self, cfg: crate::config::SpectrumConfig, frame_tick_ms: u64) {
         self.timing = Timing::derive(&cfg, frame_tick_ms);
         self.cfg = cfg;
     }
@@ -451,7 +451,7 @@ impl SpectrumState {
     }
 
     /// 渲染侧读:频谱旋钮(观感开关 / 风格)。
-    pub(super) fn cfg(&self) -> &mineral_config::SpectrumConfig {
+    pub(super) fn cfg(&self) -> &crate::config::SpectrumConfig {
         &self.cfg
     }
 
@@ -837,18 +837,18 @@ mod tests {
 
     /// 显式选择 bars，避免资源测试随默认样式变化。
     fn spectrum_state() -> color_eyre::Result<SpectrumState> {
-        spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+        spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "bars",
-        } } }))
+        }  }))
     }
 
     /// 以「defaults + overlay」合成配置构造频谱态(与 daemon 合成路径同构),
     /// 用于覆盖 `style` 及 per-style 子表旋钮。
     fn spectrum_state_with(overlay: serde_json::Value) -> color_eyre::Result<SpectrumState> {
-        let tree = mineral_config::merge_tree(mineral_config::default_tree()?, overlay);
-        let cfg = mineral_config::from_tree(&tree)
+        let tree = mineral_config::merge_tree(crate::config::default_tui_tree()?, overlay);
+        let cfg = crate::config::tui_from_tree(&tree)
             .map_err(|w| color_eyre::eyre::eyre!("overlay 落型失败: {w}"))?;
-        Ok(SpectrumState::new(cfg.tui().spectrum().clone(), TICK_MS))
+        Ok(SpectrumState::new(cfg.spectrum().clone(), TICK_MS))
     }
 
     /// bars 风格不推 waterfall / terrain 历史(不为用不上的画面攒内存)。
@@ -867,18 +867,18 @@ mod tests {
 
     /// style = waterfall 的频谱态。
     fn waterfall_state() -> color_eyre::Result<SpectrumState> {
-        spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+        spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "waterfall",
-        } } }))
+        }  }))
     }
 
     /// waterfall 按注入的 64ms 间隔聚合历史行，内容跟随输入音量。
     #[test]
     fn waterfall_pushes_rows_on_cadence() -> color_eyre::Result<()> {
-        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+        let mut s = spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "waterfall",
             "waterfall": { "push_ms": 64 },
-        } } }))?;
+        }  }))?;
         let n = s.target_bars;
         let bars = vec![40_u16; n];
         assert!(s.water_hist.is_empty(), "初始无历史");
@@ -918,9 +918,9 @@ mod tests {
     /// terrain 暂停后保留历史层，不追加来自旧 FFT 窗口的数据。
     #[test]
     fn terrain_pause_freezes_layers() -> color_eyre::Result<()> {
-        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+        let mut s = spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "terrain",
-        } } }))?;
+        }  }))?;
         let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..32 {
@@ -966,9 +966,9 @@ mod tests {
     /// terrain:层数封顶(环容量 = `terrain.layers`),不无界增长。
     #[test]
     fn terrain_layers_capped() -> color_eyre::Result<()> {
-        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+        let mut s = spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "terrain",
-        } } }))?;
+        }  }))?;
         let n = s.target_bars;
         let bars = vec![40_u16; n];
         for _ in 0..200 {
@@ -984,9 +984,9 @@ mod tests {
 
     /// style = scope 的频谱态。
     fn scope_state() -> color_eyre::Result<SpectrumState> {
-        spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+        spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "scope",
-        } } }))
+        }  }))
     }
 
     /// `s` 折算出的 scope 每列样本数([`SCOPE_TEST_SR`] 口径)。
@@ -1067,10 +1067,10 @@ mod tests {
     /// scope 历史环封顶,不无界增长。
     #[test]
     fn scope_history_capped() -> color_eyre::Result<()> {
-        let mut s = spectrum_state_with(serde_json::json!({ "tui": { "spectrum": {
+        let mut s = spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "scope",
             "scope": { "column_ms": 1 },
-        } } }))?;
+        }  }))?;
         let per = per_column(&s)?;
         let samples = vec![0.5_f32; per * (super::SCOPE_HIST_CAP + 100)];
         s.tick_scope(100 /*volume_pct*/, &samples, SCOPE_TEST_SR);
@@ -1090,12 +1090,12 @@ mod tests {
         }
         assert!(s.terrain.layers.is_empty(), "bars 态不该推层");
         let tree = mineral_config::merge_tree(
-            mineral_config::default_tree()?,
-            serde_json::json!({ "tui": { "spectrum": { "style": "terrain" } } }),
+            crate::config::default_tui_tree()?,
+            serde_json::json!({ "spectrum": { "style": "terrain" }  }),
         );
-        let cfg = mineral_config::from_tree(&tree)
+        let cfg = crate::config::tui_from_tree(&tree)
             .map_err(|w| color_eyre::eyre::eyre!("overlay 落型失败: {w}"))?;
-        s.reconfigure(cfg.tui().spectrum().clone(), TICK_MS);
+        s.reconfigure(cfg.spectrum().clone(), TICK_MS);
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }

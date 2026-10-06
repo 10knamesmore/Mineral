@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use mineral_channel_core::ChannelCaps;
 use mineral_client::operation::Outcome;
-use mineral_client::state::{PlaybackMirror, PlayerMirror, WindowTitleOverride};
+use mineral_client::state::{PlaybackMirror, PlayerMirror};
 use mineral_model::{
     MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
 use mineral_protocol::{
-    DownloadSummary, Event, FailureKind, KeyContext, QueueContextWire, QueueEditOutcome, QueueOp,
+    DownloadSummary, Event, FailureKind, QueueContextWire, QueueEditOutcome, QueueOp,
     SubscriptionTopic,
 };
 use mineral_task::{Priority, Snapshot, TaskKind};
@@ -36,10 +36,10 @@ pub(crate) use mineral_test::{
 /// 从内置默认配置构造测试主题。
 ///
 /// # Return:
-///   与生产启动相同配置路径生成的主题；`default.lua` 无法加载时返回错误。
+///   与生产启动相同配置路径生成的主题；`tui-default.lua` 无法加载时返回错误。
 pub(crate) fn default_theme() -> color_eyre::Result<Theme> {
-    let cfg = mineral_config::Config::defaults()?;
-    Ok(Theme::from_config(cfg.tui().theme()))
+    let cfg = crate::config::TuiConfig::defaults()?;
+    Ok(Theme::from_config(cfg.theme()))
 }
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。
@@ -222,9 +222,6 @@ pub(crate) struct TestClient {
     /// 每次队列请求的语境记录 `(操作名, 队列语境)`；批量请求只记录一次。
     pub(crate) queue_contexts: QueueContextLog,
 
-    /// `render_copy_template` 收到的模板下标记录(恒回 `Err`,避免测试真碰系统剪贴板)。
-    pub(crate) copy_template_calls: Arc<Mutex<Vec<usize>>>,
-
     /// `queue_edit` 收到的编辑操作序列(队列面板的删除 / 移动 / 清理路径断言用)。
     pub(crate) queue_edits: QueueEditLog,
 
@@ -304,8 +301,6 @@ impl Backend for TestClient {
         &self.completions
     }
 
-    fn refresh_script_binds(&self) {}
-
     fn connected(&self) -> bool {
         true
     }
@@ -339,10 +334,6 @@ impl Backend for TestClient {
 
     fn downloads_detail(&self) -> Option<mineral_client::state::DownloadsDetailMirror> {
         None
-    }
-
-    fn window_title_override(&self) -> WindowTitleOverride {
-        WindowTitleOverride::NotKnown
     }
 
     fn subscribe(&self, _topic: SubscriptionTopic) {}
@@ -506,20 +497,6 @@ impl Backend for TestClient {
         }
     }
 
-    fn invoke_action(&self, _name: &str, _ctx: Option<KeyContext>) {}
-
-    fn render_copy_template(&self, index: usize, _ctx: mineral_protocol::CopyTemplateCtx) {
-        if let Ok(mut v) = self.copy_template_calls.lock() {
-            v.push(index);
-        }
-        self.completions
-            .push(Completion::CopyTemplate(Outcome::Applied(Err(
-                mineral_protocol::CopyTextFailure::CallbackFailed {
-                    detail: "test stub".to_owned(),
-                },
-            ))));
-    }
-
     fn report_terminal_state(&self, _rows: u16, _cols: u16, _fullscreen: bool, _focused: bool) {}
 
     fn request_daemon_shutdown(&self) {
@@ -534,7 +511,7 @@ fn test_app() -> color_eyre::Result<App> {
 
 /// 同 [`test_app`],client 由调用方注入(需要探针 / 自定义剧本的测试用)。
 fn test_app_with(client: Arc<dyn Backend>) -> color_eyre::Result<App> {
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
     let images = ImageEngine::disabled(Arc::clone(&cfg));
     Ok(App::new(
         client,

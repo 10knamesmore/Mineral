@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use mineral_config::LyricsConfig;
+use crate::config::LyricsConfig;
 use mineral_model::{SongId, Word};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};

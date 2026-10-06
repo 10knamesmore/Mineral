@@ -1,7 +1,7 @@
 //! 使用上下半块字符绘制缓存的低分辨率 RGBA 图片。
 
+use crate::config::CoverCellFit;
 use image::{DynamicImage, Rgba, RgbaImage};
-use mineral_config::CoverCellFit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -235,7 +235,7 @@ mod tests {
                 &source,
                 PixelSize::from_cells(cells, cell_pixels),
                 cells,
-                mineral_config::CoverCellFit::Contain,
+                crate::config::CoverCellFit::Contain,
             );
             assert_eq!(image.pixels.dimensions(), (16, 16));
             assert_eq!(image.resident_bytes(), 16 * 16 * 4);
@@ -271,7 +271,7 @@ mod tests {
                 &source,
                 target,
                 cells,
-                mineral_config::CoverCellFit::Contain,
+                crate::config::CoverCellFit::Contain,
             );
             for blue in [40, 160] {
                 let mut buffer = Buffer::empty(area);

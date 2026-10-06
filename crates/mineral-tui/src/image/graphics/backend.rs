@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::config::CoverProtocolMode;
 use arc_swap::ArcSwap;
-use mineral_config::CoverProtocolMode;
 
 use super::protocol::{GraphicsProtocol, TerminalRelay};
 use super::query::DetectedGraphics;
@@ -254,7 +254,7 @@ impl TerminalGraphics {
                 target: "tui",
                 signal,
                 negotiated = ?self.negotiated,
-                "图协议自动档降级半块字符;确认该环境可穿透渲染时可强制 tui.cover.protocol"
+                "图协议自动档降级半块字符;确认该环境可穿透渲染时可强制 cover.protocol"
             );
         }
         self.protocol = desired;
@@ -388,7 +388,7 @@ fn window_cell_pixels() -> Option<(u16, u16)> {
 
 #[cfg(test)]
 mod tests {
-    use mineral_config::CoverProtocolMode;
+    use crate::config::CoverProtocolMode;
 
     use super::{GraphicsProtocol, TerminalGraphics, resolved_protocol};
 

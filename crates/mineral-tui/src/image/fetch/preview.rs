@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::config::CoverConfig;
 use image::DynamicImage;
 use isahc::HttpClient;
-use mineral_config::CoverConfig;
 use mineral_persist::CacheIndex;
 
 use crate::image::CoverFingerprint;

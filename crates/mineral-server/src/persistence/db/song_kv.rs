@@ -9,8 +9,8 @@ use crate::persistence::entity::{song_kv, song_stats};
 use mineral_log::trace;
 use mineral_model::SongId;
 use mineral_model::StoreValue;
-use sea_orm::sea_query::{self, Expr, ExprTrait, Iden, OnConflict};
-use sea_orm::{DbErr, EntityTrait, Set};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{EntityTrait, Set};
 
 use crate::persistence::db::namespace::NamespaceStore;
 
@@ -19,10 +19,6 @@ pub const RESERVED_KEYS: [&str; 3] = ["local_play_count", "rating", "last_played
 
 /// rating 合法上限(0..=5)。
 const RATING_MAX: u8 = 5;
-
-/// 冲突更新中本次待写入的记录。
-#[derive(Iden)]
-struct Excluded;
 
 impl NamespaceStore {
     /// 读一条开放 KV;降级 / 未命中返回 `Ok(StoreValue::Nil)`。
@@ -138,78 +134,6 @@ impl NamespaceStore {
             source,
         })?;
         Ok(())
-    }
-
-    /// 数值自增:读-改-写单语句完成(upsert + `int_val + delta`),返回自增后的值。
-    ///
-    /// 仅对 `Int` 类型值有意义;key 不存在视作 0 起步。现有值非 `Int`(`vtype != 'int'`)
-    /// 返回 `Err`。降级返回 `Ok(StoreValue::Nil)`。
-    ///
-    /// # Params:
-    ///   - `id`: 歌曲 id
-    ///   - `key`: 开放键(保留键同 [`Self::kv_set`] 拒绝)
-    ///   - `delta`: 增量(可负)
-    ///
-    /// # Return:
-    ///   自增后的 `StoreValue::Int`。
-    pub async fn kv_inc(
-        &self,
-        id: &SongId,
-        key: &str,
-        delta: i64,
-    ) -> crate::persistence::Result<StoreValue> {
-        self.check_source(id.namespace())?;
-        if RESERVED_KEYS.contains(&key) {
-            return Err(Error::ReservedKey {
-                key: key.to_owned(),
-            });
-        }
-        let Some(db) = self.pool() else {
-            return Ok(StoreValue::Nil);
-        };
-        trace!(target: "persist", song = id.value(), key, delta, "kv_inc");
-        let result = song_kv::Entity::insert(song_kv::ActiveModel {
-            namespace: Set(self.namespace().to_owned()),
-            song_value: Set(id.value().to_owned()),
-            key: Set(key.to_owned()),
-            vtype: Set("int".to_owned()),
-            int_val: Set(Some(delta)),
-            real_val: Set(None),
-            text_val: Set(None),
-        })
-        .on_conflict(
-            OnConflict::columns([
-                song_kv::Column::Namespace,
-                song_kv::Column::SongValue,
-                song_kv::Column::Key,
-            ])
-            .value(
-                song_kv::Column::IntVal,
-                Expr::col((song_kv::Entity, song_kv::Column::IntVal))
-                    .add(Expr::col((Excluded, song_kv::Column::IntVal))),
-            )
-            .action_and_where(Expr::col((song_kv::Entity, song_kv::Column::Vtype)).eq("int"))
-            .to_owned(),
-        )
-        .exec_with_returning(db)
-        .await;
-        let row = match result {
-            Err(DbErr::RecordNotFound(_)) => {
-                return Err(Error::NotInteger {
-                    key: key.to_owned(),
-                });
-            }
-            other => other.map_err(|source| Error::Key {
-                operation: "increment song_kv",
-                song: id.value().to_owned(),
-                key: key.to_owned(),
-                source,
-            })?,
-        };
-        let value = row.int_val.ok_or_else(|| Error::MissingInteger {
-            key: key.to_owned(),
-        })?;
-        Ok(StoreValue::Int(value))
     }
 
     /// 设/清 rating(一等字段,落 `song_stats.rating`;`None` 清空)。降级 no-op。
@@ -373,32 +297,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kv_inc_starts_from_zero_and_accumulates() -> color_eyre::Result<()> {
-        let (_dir, s) = open_scope().await?;
-        let id = SongId::new(SourceKind::NETEASE, "9");
-        assert_eq!(
-            s.kv_inc(&id, "plugin.n", /*delta*/ 3).await?,
-            StoreValue::Int(3),
-            "不存在的 key 以 delta 起步"
-        );
-        assert_eq!(
-            s.kv_inc(&id, "plugin.n", /*delta*/ -1).await?,
-            StoreValue::Int(2)
-        );
-        // 非整数值拒绝自增
-        s.kv_set(&id, "plugin.s", &StoreValue::Text("x".to_owned()))
-            .await?;
-        assert!(
-            matches!(s.kv_inc(&id, "plugin.s", /*delta*/ 1).await, Err(crate::persistence::Error::NotInteger { key }) if key == "plugin.s")
-        );
-        assert_eq!(
-            s.kv_get(&id, "plugin.s").await?,
-            StoreValue::Text("x".to_owned())
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn rating_set_query_clear_and_bounds() -> color_eyre::Result<()> {
         let (_dir, s) = open_scope().await?;
         let id = SongId::new(SourceKind::NETEASE, "5");
@@ -425,10 +323,6 @@ mod tests {
             assert!(
                 matches!(s.kv_set(&id, key, &StoreValue::Int(1)).await, Err(crate::persistence::Error::ReservedKey { key: rejected }) if rejected == key),
                 "保留键 {key} 必须拒写"
-            );
-            assert!(
-                matches!(s.kv_inc(&id, key, /*delta*/ 1).await, Err(crate::persistence::Error::ReservedKey { key: rejected }) if rejected == key),
-                "保留键 {key} 必须拒自增"
             );
         }
         Ok(())

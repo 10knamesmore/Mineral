@@ -1,4 +1,4 @@
-//! Client 端终端图片编码器。
+//! TUI 端终端图片编码器。
 //!
 //! 渲染线程只提交缓存未命中的请求；worker 在 blocking pool 中完成格边适配与编码。
 //! Kitty 原样模式复用原图，截边和拉伸按目标像素编码；行内封面仍使用低清像素。主循环按 terminal backend
@@ -48,7 +48,7 @@ pub(crate) struct EncodeResult {
 /// 就绪 buffer:worker 端 push、主循环 `drain_ready` 端取走。
 type ReadyBuf = Arc<Mutex<Vec<EncodeResult>>>;
 
-/// Client 端封面编码器。`spawn` 起 worker、`request` 投递、`drain_ready` 收成品。
+/// TUI 端封面编码器。`spawn` 起 worker、`request` 投递、`drain_ready` 收成品。
 pub(crate) struct CoverEncoder {
     /// 编码请求队列发送端。
     req_tx: mpsc::UnboundedSender<EncodeRequest>,
@@ -177,7 +177,7 @@ async fn encode_blocking(req: EncodeRequest, backend: &TerminalBackend) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use mineral_config::CoverProtocolMode;
+    use crate::config::CoverProtocolMode;
     use ratatui::layout::Rect;
 
     use super::{CoverEncoder, EncodeRequest};
@@ -205,7 +205,7 @@ mod tests {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells((target.width, target.height), (8, 16)),
-            mineral_config::CoverCellFit::Contain,
+            crate::config::CoverCellFit::Contain,
         );
         encoder.request(EncodeRequest {
             key: key.clone(),

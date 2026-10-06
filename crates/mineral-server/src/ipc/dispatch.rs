@@ -4,9 +4,7 @@
 //! 不依赖 spawn 调度碰巧有序;查询与脚本 / 数据库慢操作并发执行,结果经 id 配对。
 //! 跨 client 以 daemon 的接受次序仲裁(各自 read loop 串行)。
 
-use mineral_protocol::{
-    CopyTextFailure, FailureKind, OperationFailure, OperationResult, Request, Response,
-};
+use mineral_protocol::{FailureKind, OperationFailure, OperationResult, Request, Response};
 
 use crate::client::ClientHandle;
 
@@ -14,27 +12,6 @@ use crate::client::ClientHandle;
 pub(crate) enum AsyncRequest {
     /// Output enumeration may call the system audio service.
     AudioOutputs,
-
-    /// 脚本具名动作。
-    InvokeAction {
-        /// 动作名。
-        name: String,
-
-        /// 按键上下文。
-        ctx: Option<mineral_protocol::KeyContext>,
-
-        /// 位置实参。
-        args: Vec<String>,
-    },
-
-    /// 复制模板渲染。
-    RenderCopyTemplate {
-        /// 模板下标。
-        index: usize,
-
-        /// 模板实体。
-        ctx: mineral_protocol::CopyTemplateCtx,
-    },
 
     /// 读 per-song 持久值。
     StoreGet {
@@ -62,9 +39,6 @@ pub(crate) enum AsyncRequest {
 
     /// 本地播放统计查询。
     QuerySongStats(mineral_model::SongId),
-
-    /// 脚本绑定表查询(脚本线程交互,可能阻塞)。
-    ScriptBinds,
 }
 
 /// 把请求归入并发慢路径;返回 `None` 表示走同步有序路径。
@@ -74,15 +48,6 @@ pub(crate) enum AsyncRequest {
 pub(crate) fn async_request(request: &Request) -> Option<AsyncRequest> {
     match request {
         Request::AudioOutputs => Some(AsyncRequest::AudioOutputs),
-        Request::InvokeAction { name, ctx, args } => Some(AsyncRequest::InvokeAction {
-            name: name.clone(),
-            ctx: ctx.clone(),
-            args: args.clone(),
-        }),
-        Request::RenderCopyTemplate { index, ctx } => Some(AsyncRequest::RenderCopyTemplate {
-            index: *index,
-            ctx: ctx.clone(),
-        }),
         Request::StoreGet { song, key } => Some(AsyncRequest::StoreGet {
             song: song.clone(),
             key: key.clone(),
@@ -94,7 +59,6 @@ pub(crate) fn async_request(request: &Request) -> Option<AsyncRequest> {
         }),
         Request::ToggleLove(song) => Some(AsyncRequest::ToggleLove(song.clone())),
         Request::QuerySongStats(id) => Some(AsyncRequest::QuerySongStats(id.clone())),
-        Request::ScriptBinds => Some(AsyncRequest::ScriptBinds),
         _ => None,
     }
 }
@@ -177,6 +141,7 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
             Err(error) => failure(&error, FailureKind::NotFound),
         },
         Request::ChannelCaps => query(Response::ChannelCaps(client.channel_caps())),
+        Request::ServiceInfo => query(Response::ServiceInfo(client.service_info())),
         Request::DaemonInfo => query(Response::DaemonInfo {
             pid: std::process::id(),
         }),
@@ -214,28 +179,6 @@ pub(crate) async fn execute_async(client: &ClientHandle, request: AsyncRequest) 
             Ok(devices) => query(Response::AudioOutputs(devices)),
             Err(error) => failure(&error, audio_failure_kind(&error)),
         },
-        AsyncRequest::InvokeAction { name, ctx, args } => {
-            match client.invoke_action_async(&name, ctx, args).await {
-                Ok(()) => OperationResult::Applied,
-                Err(error) => failure(&error, action_failure_kind(&error)),
-            }
-        }
-        AsyncRequest::RenderCopyTemplate { index, ctx } => {
-            let text = client.render_copy_template_async(index, ctx).await.map_err(|error| {
-                let detail = mineral_log::chain(&error);
-                mineral_log::warn!(target: "ipc", error = detail.as_str(), "copy template failed");
-                match error {
-                    crate::notify::ScriptError::Disabled => CopyTextFailure::ScriptDisabled,
-                    crate::notify::ScriptError::ThreadExited
-                    | crate::notify::ScriptError::Callback(mineral_script::Error::Unavailable) => {
-                        CopyTextFailure::ScriptThreadExited
-                    }
-                    crate::notify::ScriptError::ActionNotFound(_)
-                    | crate::notify::ScriptError::Callback(_) => CopyTextFailure::CallbackFailed { detail },
-                }
-            });
-            query(Response::CopyText(text))
-        }
         AsyncRequest::StoreGet { song, key } => match client.store_get_async(&song, &key).await {
             Ok(value) => query(Response::StoreValue(value)),
             Err(error) => failure(&error, store_failure_kind(&error)),
@@ -254,9 +197,6 @@ pub(crate) async fn execute_async(client: &ClientHandle, request: AsyncRequest) 
             Ok(stats) => query(Response::SongStats(stats)),
             Err(error) => failure(&error, FailureKind::Internal),
         },
-        AsyncRequest::ScriptBinds => {
-            query(Response::ScriptBinds(client.script_binds_async().await))
-        }
     }
 }
 
@@ -295,36 +235,11 @@ pub(crate) fn failure(
     })
 }
 
-/// Classifies a script action without inspecting its display text.
-fn action_failure_kind(error: &crate::notify::ScriptError) -> FailureKind {
-    match error {
-        crate::notify::ScriptError::Disabled
-        | crate::notify::ScriptError::ThreadExited
-        | crate::notify::ScriptError::Callback(mineral_script::Error::Unavailable) => {
-            FailureKind::Unavailable
-        }
-        crate::notify::ScriptError::ActionNotFound(_)
-        | crate::notify::ScriptError::Callback(mineral_script::Error::MissingFunction { .. }) => {
-            FailureKind::NotFound
-        }
-        crate::notify::ScriptError::Callback(
-            mineral_script::Error::InvalidSongId { .. }
-            | mineral_script::Error::InvalidSongEntry { .. },
-        ) => FailureKind::Invalid,
-        crate::notify::ScriptError::Callback(
-            mineral_script::Error::Lua { .. }
-            | mineral_script::Error::Child { .. }
-            | mineral_script::Error::Thread(_),
-        ) => FailureKind::Internal,
-    }
-}
-
 /// Classifies persistent KV validation separately from storage failures.
 fn store_failure_kind(error: &crate::persistence::Error) -> FailureKind {
     match error {
         crate::persistence::Error::ReservedKey { .. }
-        | crate::persistence::Error::NamespaceMismatch { .. }
-        | crate::persistence::Error::NotInteger { .. } => FailureKind::Invalid,
+        | crate::persistence::Error::NamespaceMismatch { .. } => FailureKind::Invalid,
         _ => FailureKind::Internal,
     }
 }

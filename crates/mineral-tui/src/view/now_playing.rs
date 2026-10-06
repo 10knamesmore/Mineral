@@ -20,7 +20,7 @@ fn input<'a>(
     browse: &BrowsePage,
     library: &'a LibraryData,
     playback: &'a Playback,
-    cfg: &'a mineral_config::Config,
+    cfg: &'a crate::config::TuiConfig,
     images: ReadyImages<'_>,
 ) -> NowPlayingInput<'a> {
     let model = BrowseModel { library, cfg };

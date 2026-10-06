@@ -18,18 +18,18 @@ mod download;
 mod event;
 mod failure_notice;
 mod handshake;
-mod key;
 mod message;
 mod player;
 mod playlist;
 mod queue_edit;
+mod service;
 mod session;
 mod wire;
 
 pub use codec::{CodecError, Framed, decode, encode, framed, recv, send};
 pub use download::{
     DownloadFailure, DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary, DownloadTarget,
-    DownloadWave, SongDownloadView,
+    DownloadWave, PlaylistRef, SongDownloadView,
 };
 pub use event::{
     BusValue, Event, FinishReason, PropName, PropValue, SpanAlign, SpanFg, TextSpan, ToastKind,
@@ -38,11 +38,7 @@ pub use failure_notice::FailureNotice;
 pub use handshake::{
     ClientInfo, HandshakeRejected, PkgVersion, RejectReason, ServerHello, Subscription,
 };
-pub use key::{KeyContext, PlaylistRef, ScriptBind, ViewKind};
-pub use message::{
-    CopyTemplateCtx, CopyTextFailure, PlayQueueError, QueueContextWire, Request, Response,
-    SongStatsWire,
-};
+pub use message::{PlayQueueError, QueueContextWire, Request, Response, SongStatsWire};
 pub use mineral_model::StoreValue;
 pub use mineral_task::ChannelFetchKindTag;
 pub use player::{
@@ -51,6 +47,7 @@ pub use player::{
 };
 pub use playlist::PlaylistOp;
 pub use queue_edit::{QueueAnchor, QueueEditOutcome, QueueOp, QueuePos};
+pub use service::{PlayCountAvailability, ServiceInfo};
 pub use session::{
     CloseReason, DOWNLOAD_DETAIL_PART_ROWS, DownloadDetailDelta, DownloadDetailUpdate, FailureKind,
     MessageBatch, OperationFailure, OperationResult, PLAYER_QUEUE_PART_ROWS, PcmChunk, RequestId,

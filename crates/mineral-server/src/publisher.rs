@@ -55,7 +55,7 @@ pub(crate) struct DomainPublishers {
     /// PCM 中继。
     pcm: PcmRelay,
 
-    /// 事件 hub(Toast / Lifecycle / Config / WindowTitle / Task / Bus / Property)。
+    /// 事件 hub(Toast / Lifecycle / Config / Task / Property)。
     events: broadcast::Sender<Event>,
 }
 
@@ -373,7 +373,8 @@ mod tests {
     /// 上限 50ms 小于采样节拍 100ms:少了快照写入信号必然超时。
     #[tokio::test]
     async fn volume_change_publishes_without_waiting_for_sample_tick() -> color_eyre::Result<()> {
-        let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
+        let cfg =
+            crate::config::ServerConfig::from_config(&crate::config::DaemonConfig::defaults()?);
         let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull, cfg.engine().clone())?;
         let mut rx = spawn_playback_publisher(audio.clone());
         // 先让发布器把首帧发掉,后面只认音量那一次推送。

@@ -331,15 +331,10 @@ mod tests {
     use super::HookKind;
 
     #[test]
-    fn meta_stub_hook_name_alias_matches_rust() -> color_eyre::Result<()> {
-        use color_eyre::eyre::WrapErr;
-        // meta/mineral.lua 的 `mineral.HookName` 字符串枚举必须与
+    fn meta_stub_hook_name_alias_matches_rust() {
+        // meta/types.lua 的 `mineral.HookName` 字符串枚举必须与
         // Rust 侧 `as_str` 的全部取值逐字一致(顺序也钉死)。
-        let meta_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../mineral-config/src/lua/meta/mineral.lua"
-        );
-        let meta = std::fs::read_to_string(meta_path).wrap_err("read meta/mineral.lua")?;
+        let meta = crate::TYPES_META;
         let literals = HookKind::ALL
             .map(|kind| format!("\"{}\"", kind.as_str()))
             .join("|");
@@ -348,6 +343,5 @@ mod tests {
             meta.contains(&alias),
             "meta stub 缺少与 Rust 一致的别名行:`{alias}`"
         );
-        Ok(())
     }
 }

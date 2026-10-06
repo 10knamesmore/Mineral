@@ -68,7 +68,7 @@ pub(crate) fn draw(
         .unwrap_or_default();
     let title_line = MarqueeCtx::new(
         &state.panel.title,
-        state.frame.config.tui().animation(),
+        state.frame.config.animation(),
         state.frame.now,
         theme,
         /*fade_to*/ theme.base,

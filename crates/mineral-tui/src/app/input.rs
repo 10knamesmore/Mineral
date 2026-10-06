@@ -15,7 +15,7 @@ use super::{App, menus};
 
 impl App {
     /// 处理一个 crossterm 事件:KeyEvent 的按下边沿走按键分发;Resize / focus
-    /// 变化上报 daemon(脚本经 `terminal` 属性观察终端尺寸与焦点)。
+    /// 变化上报 daemon 的终端状态。
     pub(super) fn handle_event(&mut self, ev: &Event) {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
@@ -141,7 +141,6 @@ impl App {
             Action::DismissNotice => self.dismiss_notice(),
             Action::OpenActionMenu => self.open_menu(menus::MenuKind::Action),
             Action::OpenCopyMenu => self.open_menu(menus::MenuKind::Copy),
-            Action::InvokeScript(slot) => self.invoke_script_action(slot),
             Action::OpenHelp => self.open_help(),
             // 仅 search 面板内有意义(由 handle_search_panel_key 拦截消费);其它布局态落此 = no-op。
             Action::DrillIntoSelection | Action::CycleDetailSection => {}
@@ -156,7 +155,7 @@ impl App {
         self.state.ui.transport.on_action(
             action,
             self.state.models.playback.mode,
-            self.state.cfg.tui().animation(),
+            self.state.cfg.animation(),
             std::time::Instant::now(),
         );
     }
@@ -309,8 +308,8 @@ impl App {
         self.overlays.push(AppOverlay::downloads());
     }
 
-    /// 打开键位 cheatsheet:目录与关闭提示在打开瞬间从 keymap 快照(重映射 /
-    /// 脚本绑定自动跟随)。已开在顶时按同键由浮层自身收敛为关闭(toggle),
+    /// 打开键位 cheatsheet:目录与关闭提示在打开瞬间从当前 keymap 取值。
+    /// 已开在顶时按同键由浮层自身收敛为关闭(toggle),
     /// 不经此路径,无双开之虞。
     fn open_help(&mut self) {
         let close_hint = self
@@ -353,10 +352,10 @@ mod tests {
         let mut app = app_with_queue(1, 0)?;
         app.state = crate::test_support::state_with_lyrics(LyricExtra::None, true)?;
         let config = mineral_config::merge_tree(
-            mineral_config::default_tree()?,
-            serde_json::json!({ "tui": { "keys": { "cycle_lyric": "w" } } }),
+            crate::config::default_tui_tree()?,
+            serde_json::json!({ "keys": { "cycle_lyric": "w" }  }),
         );
-        app.apply_pushed_config(mineral_protocol::BusValue::from_json(config));
+        app.apply_config(std::sync::Arc::new(crate::config::tui_from_tree(&config)?));
         press(&mut app, KeyCode::Char('t'));
         assert_eq!(app.state.ui.browse.lyrics.extra, LyricExtra::None);
 
@@ -1562,16 +1561,16 @@ mod tests {
         /// 热更为可区分的滚动步长，验证按键处理现读配置。
         fn configure_scroll(app: &mut App) -> color_eyre::Result<()> {
             let tree = mineral_config::merge_tree(
-                mineral_config::default_tree()?,
-                serde_json::json!({ "tui": { "behavior": {
+                crate::config::default_tui_tree()?,
+                serde_json::json!({ "behavior": {
                     "line_scroll_rows": 3,
                     "page_scroll_rows": 11,
                     "search_prefetch_rows": 2
-                } } }),
+                }  }),
             );
-            app.apply_pushed_config(mineral_protocol::BusValue::from_json(tree));
-            assert_eq!(*app.state.cfg.tui().behavior().line_scroll_rows(), 3);
-            assert_eq!(*app.state.cfg.tui().behavior().page_scroll_rows(), 11);
+            app.apply_config(std::sync::Arc::new(crate::config::tui_from_tree(&tree)?));
+            assert_eq!(*app.state.cfg.behavior().line_scroll_rows(), 3);
+            assert_eq!(*app.state.cfg.behavior().page_scroll_rows(), 11);
             Ok(())
         }
 

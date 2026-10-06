@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use mineral_protocol::{BusValue, PlayMode, PlayerSync};
+use mineral_protocol::{PlayMode, PlayerSync};
 
 use super::App;
 use crate::test_support::{TestClient, app_with_queue};
@@ -86,10 +86,10 @@ fn remapped_actions_and_consumed_text_follow_existing_routing() -> color_eyre::R
         ..TestClient::default()
     });
     let config = mineral_config::merge_tree(
-        mineral_config::default_tree()?,
-        serde_json::json!({"tui": {"keys": {"cycle_mode": "w"}}}),
+        crate::config::default_tui_tree()?,
+        serde_json::json!({"keys": {"cycle_mode": "w"}}),
     );
-    app.apply_pushed_config(BusValue::from_json(config));
+    app.apply_config(std::sync::Arc::new(crate::config::tui_from_tree(&config)?));
     for key in ['m', '+', 'j'] {
         press(&mut app, key);
     }

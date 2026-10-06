@@ -1,6 +1,6 @@
 //! 频谱面板呈现：绘制外框，并按配置风格选择内区画法。
 
-use mineral_config::SpectrumStyle;
+use crate::config::SpectrumStyle;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -29,8 +29,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Th
         SpectrumStyle::Scope => scope::paint(frame, inner, state, theme),
         SpectrumStyle::Waterfall => waterfall::paint(frame, inner, state, theme),
         SpectrumStyle::Terrain => terrain::paint(frame, inner, state, theme),
-        // 枚举在上游 non_exhaustive,wildcard 必需:未知新风格回落默认条形。
-        _ => bars::paint(frame, inner, state, theme),
+        SpectrumStyle::Bars => bars::paint(frame, inner, state, theme),
     }
 }
 

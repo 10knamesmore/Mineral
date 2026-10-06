@@ -197,7 +197,7 @@ impl crate::components::lifecycle::Prepare for TrackList {
             playing.into_iter(),
             motion,
             ticks,
-            frame.config.tui().minimap(),
+            frame.config.minimap(),
             advance,
         );
         if matches!(motion, ScrollMotion::Advancing { .. }) {
@@ -254,11 +254,7 @@ impl crate::components::lifecycle::Prepare for TrackList {
                     minimap: Some(PreparedMinimap {
                         area: super::super::preparation::minimap_track(area),
                         total,
-                        cursor: MinimapCursor::new(
-                            &self.scroll,
-                            total,
-                            frame.config.tui().minimap(),
-                        ),
+                        cursor: MinimapCursor::new(&self.scroll, total, frame.config.minimap()),
                         entries,
                         theme: *theme,
                     }),
@@ -319,11 +315,8 @@ impl TrackView<'_> {
                 }),
             );
         }
-        let cursor = MinimapCursor::new(
-            &view.list.scroll,
-            tracks.len(),
-            view.frame.config.tui().minimap(),
-        );
+        let cursor =
+            MinimapCursor::new(&view.list.scroll, tracks.len(), view.frame.config.minimap());
         let entries = tracks
             .iter()
             .enumerate()
@@ -387,7 +380,7 @@ fn table(
             format!(" {}", src.label()),
             Style::new().fg(crate::render::theme::resolve_source_color(
                 theme,
-                view.frame.config.sources(),
+                view.frame.config.source_colors(),
                 src,
             )),
         ));
@@ -428,7 +421,7 @@ fn table(
     // accent,见 MarqueeCtx::fade_to 注);fade_to 仍按其底色给,不误导插值方向。
     let marquee_ctx = MarqueeCtx::new(
         &view.list.title,
-        view.frame.config.tui().animation(),
+        view.frame.config.animation(),
         view.frame.now,
         theme,
         /*fade_to*/ theme.surface0,
@@ -551,7 +544,7 @@ fn build_row(
                 src.label(),
                 Style::new().fg(crate::render::theme::resolve_source_color(
                     theme,
-                    view.frame.config.sources(),
+                    view.frame.config.source_colors(),
                     src,
                 )),
             )));

@@ -52,6 +52,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::QueueEdit { .. } => Recorded("queue_ops"),
         Request::Playlist { .. } => Recorded("playlist_ops"),
         Request::ChannelCaps => NotAnEvent("读:channel 能力查询"),
+        Request::ServiceInfo => NotAnEvent("读:daemon 服务能力查询"),
         Request::CyclePlayMode => Recorded("mode_changes"),
         Request::SetPlayMode(..) => Recorded("mode_changes"),
         // 切上首=skip 记 plays;回曲首(超阈值)分支另记 seeks,主归属取 plays。
@@ -62,11 +63,8 @@ fn audit_request(req: &Request) -> TrackingDecision {
         Request::QuerySongStats(..) => NotAnEvent("读:单曲统计查询，事实来自 stats.db"),
         Request::Download(..) => Recorded("downloads"),
         Request::StopDownload(..) => NotAnEvent("session control:只写 structured log"),
-        Request::InvokeAction { .. } => Recorded("action_invocations"),
-        Request::RenderCopyTemplate { .. } => Recorded("copy_renders"),
         Request::StoreGet { .. } => NotAnEvent("读:per-song KV 读"),
         Request::StoreSet { .. } => Recorded("store_writes"),
-        Request::ScriptBinds => NotAnEvent("读:脚本键位绑定查询"),
         Request::TerminalState { .. } => Recorded("fullscreen_changes"),
         Request::Shutdown => Recorded("app_lifecycle"),
     }
@@ -89,7 +87,6 @@ fn audit_script_cmd(cmd: &ScriptCmd) -> TrackingDecision {
         ScriptCmd::Download(..) => Recorded("downloads"),
         ScriptCmd::StoreGet { .. } => NotAnEvent("读:脚本 KV 读"),
         ScriptCmd::StoreSet { .. } => Recorded("store_writes"),
-        ScriptCmd::StoreInc { .. } => Recorded("store_writes"),
         ScriptCmd::QueueList { .. } => NotAnEvent("读:队列查询"),
         ScriptCmd::QueueSet { .. } => Recorded("queue_ops"),
         ScriptCmd::LibraryPlaylists { .. } => {
@@ -103,12 +100,7 @@ fn audit_script_cmd(cmd: &ScriptCmd) -> TrackingDecision {
             NotAnEvent("查询 direct media capability;stream_resolutions 在 provider resolve 终态记")
         }
         ScriptCmd::SetLoved { .. } => Recorded("love_changes"),
-        ScriptCmd::Spawn { .. } => Recorded("spawns"),
-        ScriptCmd::SpawnKill { .. } => {
-            NotAnEvent("请求杀子进程;spawns 行在进程收束回调记(outcome=killed)")
-        }
         ScriptCmd::ConfigOverride { .. } => Recorded("config_overrides"),
-        ScriptCmd::WindowTitle { .. } => NotAnEvent("设置终端窗口标题,纯 UI 副作用,非事件"),
     }
 }
 
@@ -140,8 +132,8 @@ fn audit_playlist_op(op: &PlaylistWriteOp) -> TrackingDecision {
     }
 }
 
-/// 行为域事件的发射点账本(穷尽)。新增 [`BehaviorEvent`] 变体不补此处即编译失败——
-/// 声明「谁发它」;串值是给读者的站点索引,漂移由触发链集成测试兜。
+/// 行为域事件的发射点账本(穷尽)。新增 [`BehaviorEvent`] 变体不补此处即编译失败。
+/// 保留历史表示的已撤销能力明确标为「仅历史数据」,其余条目索引当前发射点。
 fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
     match event {
         BehaviorEvent::Search { .. } => "channel_fetch 终态 + script_bridge library.search",
@@ -162,14 +154,14 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
         }
         BehaviorEvent::Fetch { .. } => "channel_fetch 终态(events.rs)",
         BehaviorEvent::Download { .. } => "download.rs record_download(三种结局)",
-        BehaviorEvent::CopyRender { .. } => "ipc dispatch 的 RenderCopyTemplate 慢路径",
-        BehaviorEvent::ActionInvocation { .. } => "ipc dispatch 的 InvokeAction 慢路径",
+        BehaviorEvent::CopyRender { .. } => "仅历史数据:复制模板在 client 本地执行",
+        BehaviorEvent::ActionInvocation { .. } => "仅历史数据:具名脚本动作入口已删除",
         BehaviorEvent::ConfigOverride { .. } => "script_bridge ConfigOverride",
         BehaviorEvent::StoreWrite { .. } => {
-            "ipc dispatch 的 StoreSet / script_bridge 的 StoreSet / StoreInc"
+            "ipc dispatch 的 StoreSet / script_bridge 的 StoreSet(Inc 仅历史数据)"
         }
-        BehaviorEvent::Spawn { .. } => "script_bridge 子进程收束回调",
-        BehaviorEvent::BusMessage { .. } => "script_bridge 事件总线",
+        BehaviorEvent::Spawn { .. } => "仅历史数据:脚本子进程能力已删除",
+        BehaviorEvent::BusMessage { .. } => "仅历史数据:脚本事件总线已删除",
         BehaviorEvent::FullscreenChange { .. } => "ipc dispatch 的 TerminalState",
         BehaviorEvent::ConnectionReject { .. } => "ipc::handshake record_connection_reject",
         BehaviorEvent::ClientConnection { .. } => "ipc::ConnGuard drop",

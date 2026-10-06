@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::config::{CoverConfig, CoverDecodePixelsConfig};
 use image::DynamicImage;
 use isahc::HttpClient;
-use mineral_config::{CoverConfig, CoverDecodePixelsConfig};
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::CacheIndex;
 

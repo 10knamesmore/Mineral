@@ -5,7 +5,6 @@
 //! 整体替换),一致性由共享向量测试钉住(同一组向量分别过两个实现)。
 
 use crate::loader::warning::ConfigWarning;
-use crate::schema::Config;
 
 /// 深合并两棵 JSON 树:`overlay` 的键覆盖 `base`。
 ///
@@ -34,8 +33,8 @@ pub fn merge_tree(base: serde_json::Value, overlay: serde_json::Value) -> serde_
     }
 }
 
-/// 把点分路径折成嵌套单键树:`"tui.lyrics.gap"` + `4` →
-/// `{"tui":{"lyrics":{"gap":4}}}`,供逐条 overlay 经 [`merge_tree`] 叠加。
+/// 把点分路径折成嵌套单键树:`"lyrics.gap"` + `4` →
+/// `{"lyrics":{"gap":4}}`,供逐条 overlay 经 [`merge_tree`] 叠加。
 ///
 /// # Params:
 ///   - `path`: 点分配置路径(非空;段不校验,拼错的段由落型报 unknown field)
@@ -51,19 +50,13 @@ pub fn nest_path(path: &str, value: serde_json::Value) -> serde_json::Value {
     })
 }
 
-/// 把配置树落成强类型 [`Config`](经 `serde_path_to_error` 报精确字段路径)。
-///
-/// # Params:
-///   - `tree`: 配置树(须是完整合成树,不是增量片段)
-///
-/// # Return:
-///   `Config`;失败给带路径的 [`ConfigWarning::Deserialize`](供 overlay 剔除定位)
-pub fn from_tree(tree: &serde_json::Value) -> Result<Config, ConfigWarning> {
-    serde_path_to_error::deserialize::<_, Config>(tree).map_err(|error| {
-        ConfigWarning::Deserialize {
-            path: error.path().iter().next().map(|_| error.path().to_string()),
-            source: error.into_inner(),
-        }
+/// 按指定 schema 落型并保留错误路径,供文件加载和运行期覆盖共用。
+pub fn deserialize_tree<T: serde::de::DeserializeOwned>(
+    tree: &serde_json::Value,
+) -> Result<T, ConfigWarning> {
+    serde_path_to_error::deserialize::<_, T>(tree).map_err(|error| ConfigWarning::Deserialize {
+        path: error.path().iter().next().map(|_| error.path().to_string()),
+        source: error.into_inner(),
     })
 }
 
@@ -71,7 +64,7 @@ pub fn from_tree(tree: &serde_json::Value) -> Result<Config, ConfigWarning> {
 mod tests {
     use serde_json::json;
 
-    use super::{from_tree, merge_tree, nest_path};
+    use super::{deserialize_tree, merge_tree, nest_path};
     use crate::loader::warning::ConfigWarning;
 
     /// 合并语义共享向量:同一组 (base, overlay, expected) 同时过 Rust 实现与
@@ -164,30 +157,40 @@ mod tests {
         Ok(serde_json::to_value(mlua::Value::Table(merged))?)
     }
 
-    /// 点分路径折成嵌套单键树:`"tui.lyrics.gap"` + 4 → `{"tui":{"lyrics":{"gap":4}}}`。
+    /// 点分路径折成嵌套单键树:`"lyrics.gap"` + 4 → `{"lyrics":{"gap":4}}`。
     #[test]
     fn nest_path_builds_singleton_tree() {
         assert_eq!(
-            nest_path("tui.lyrics.gap", json!(4)),
-            json!({"tui": {"lyrics": {"gap": 4}}})
+            nest_path("lyrics.gap", json!(4)),
+            json!({"lyrics": {"gap": 4}})
         );
         assert_eq!(nest_path("volume", json!(50)), json!({"volume": 50}));
     }
 
-    /// 落型:合法树成 Config;非法值报精确字段路径(供 overlay 剔除定位)。
+    /// 落型失败报告精确字段路径,供宿主定位非法配置或覆盖。
     #[test]
     fn from_tree_types_and_reports_precise_path() -> color_eyre::Result<()> {
-        // 默认树(无用户文件的 load_with_vm 产物)必落型成功。
-        let absent = std::env::temp_dir().join("mineral-cfg-tree-absent.lua");
-        let loaded = crate::loader::pipeline::load_with_vm(&absent, |_lua| Ok(()))?;
-        let cfg = from_tree(&loaded.tree).map_err(|w| color_eyre::eyre::eyre!("{w}"))?;
-        assert_eq!(*cfg.audio().volume(), 100);
+        /// 用独立测试 schema 验证机械落型的字段路径,不依赖宿主。
+        #[derive(Debug, serde::Deserialize)]
+        struct Config {
+            /// 待落型的嵌套表。
+            audio: Audio,
+        }
+        /// 含受类型约束叶子的测试子表。
+        #[derive(Debug, serde::Deserialize)]
+        struct Audio {
+            /// 用于制造错误路径的整数字段。
+            volume: u8,
+        }
+        let tree = json!({"audio": {"volume": 100}});
+        let cfg: Config = deserialize_tree(&tree).map_err(|w| color_eyre::eyre::eyre!("{w}"))?;
+        assert_eq!(cfg.audio.volume, 100);
         // 坏值:路径精确到字段。
-        let mut bad = loaded.tree.clone();
+        let mut bad = tree;
         if let Some(v) = bad.pointer_mut("/audio/volume") {
             *v = serde_json::Value::String("loud".to_owned());
         }
-        match from_tree(&bad) {
+        match deserialize_tree::<Config>(&bad) {
             Err(ConfigWarning::Deserialize { path, .. }) => {
                 assert_eq!(path.as_deref(), Some("audio.volume"), "路径应精确到字段");
             }

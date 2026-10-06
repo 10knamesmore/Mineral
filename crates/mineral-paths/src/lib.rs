@@ -106,7 +106,7 @@ pub fn cover_cache_dir() -> Result<PathBuf> {
 /// `$XDG_MUSIC_DIR` 或 `~/Music`)。永久保存的「下载的音乐」落这里,
 /// 可被其他播放器 / 文件管理器直接使用,**不**受缓存 LRU 驱逐。
 ///
-/// 用户改目录走 `config.lua` 的 `download.dir`(单一真相源,由 server
+/// 用户改目录走 `daemon.lua` 的 `download.dir`(单一真相源,由 server
 /// 在本默认值之上覆盖),不设环境变量逃逸口。
 ///
 /// # Return:

@@ -42,7 +42,7 @@ impl PlaylistList {
     pub(crate) fn rows<'a>(
         &self,
         library: &'a LibraryData,
-        config: &mineral_config::Config,
+        config: &crate::config::TuiConfig,
     ) -> Vec<&'a PlaylistView> {
         let search = &self.search;
         if search.query().is_empty() {

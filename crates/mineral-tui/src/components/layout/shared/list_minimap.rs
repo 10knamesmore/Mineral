@@ -40,11 +40,11 @@ impl MinimapCursor {
     /// # Params:
     ///   - `list`: 该列表的滚动 / 动画态；光标位置与吸附进度都从它取。
     ///   - `len`: 当前显示列表长度。
-    ///   - `minimap`: 当前 `tui.minimap` 段（现读，热更即生效）。
+    ///   - `minimap`: 当前 `minimap` 段（现读，热更即生效）。
     pub(crate) fn new(
         list: &ScrollList,
         len: usize,
-        minimap: &mineral_config::MinimapConfig,
+        minimap: &crate::config::MinimapConfig,
     ) -> Self {
         Self {
             position: list.position(len),
@@ -64,7 +64,7 @@ pub(crate) fn prepare_minimap(
     playing: impl Iterator<Item = usize>,
     motion: ScrollMotion,
     ticks: u16,
-    cfg: &mineral_config::MinimapConfig,
+    cfg: &crate::config::MinimapConfig,
     advance: bool,
 ) {
     if track.is_empty() || matches!(motion, ScrollMotion::Frozen) {
@@ -111,7 +111,7 @@ struct RowMarkers {
 /// 首尾曲目分别贴住轨道首末盲文点，单曲列表贴顶。右列四点是轨道，按相邻条目的中点
 /// 划分 per-item 平分区间：喜欢标记染红条目所属区间，光晕按区间计算半径，并至少扩展
 /// 配置指定的行数；左列只归光标。
-/// 在播格显示 `◆`：没被吸住时保持主题绿；光标点进入 `tui.minimap.magnet_dots` 个点内
+/// 在播格显示 `◆`：没被吸住时保持主题绿；光标点进入 `minimap.magnet_dots` 个点内
 /// 就被吸走——光标点不显示，`◆` 按 [`MagnetProgress`] 缓动淡向光标色，光晕同步淡出。
 /// 空列表保留淡色盲文轨道。
 ///

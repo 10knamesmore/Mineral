@@ -2,7 +2,7 @@
 //!
 //! `mineral` 直接启动(无 flag)走这里:优先 attach 已有 daemon,没有就 spawn 一个
 //! 独立的 `mineral serve` 子进程再 attach。client 退出时是否连带 kill 掉「本次亲手
-//! spawn 的」daemon,由配置 `tui.behavior.kill_spawned_daemon_on_exit` 决定。
+//! spawn 的」daemon,由配置 `behavior.kill_spawned_daemon_on_exit` 决定。
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -87,7 +87,7 @@ pub enum Error {
 /// # Params:
 ///   - `socket`: daemon 监听的 unix socket 路径(见 `mineral_paths::socket_path`)。
 ///   - `kill_on_exit`: client 退出时是否 kill 本次亲手 spawn 的 daemon
-///     (配置 `tui.behavior.kill_spawned_daemon_on_exit`;`false` = 续命后台播放)。
+///     (配置 `behavior.kill_spawned_daemon_on_exit`;`false` = 续命后台播放)。
 ///
 /// # Return:
 ///   连好的 [`Client`] + 可选的 [`DaemonHandle`](仅自己 spawn 时 `Some`)。
@@ -142,7 +142,7 @@ fn unreachable_socket(e: &ConnectError) -> bool {
 /// 退出时是否应当结束 daemon:仅「本次亲手 spawn」且配置开关为 true。
 ///
 /// # Params:
-///   - `kill_on_exit`: 配置开关(`tui.behavior.kill_spawned_daemon_on_exit`)
+///   - `kill_on_exit`: 配置开关(`behavior.kill_spawned_daemon_on_exit`)
 ///   - `spawned`: 本次是否亲手 spawn(attach 已有 daemon 为 false)
 ///
 /// # Return:
@@ -224,7 +224,7 @@ pub(crate) struct DaemonHandle {
     /// spawn 出来的 `mineral serve` 子进程。
     child: Child,
 
-    /// client 退出时是否 kill(配置 `tui.behavior.kill_spawned_daemon_on_exit`)。
+    /// client 退出时是否 kill(配置 `behavior.kill_spawned_daemon_on_exit`)。
     kill_on_exit: bool,
 }
 

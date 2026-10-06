@@ -31,7 +31,7 @@ impl QueueOverlay {
     ) {
         let visible = self.visible(ctx);
         let current = ctx.current;
-        let cursor = MinimapCursor::new(&self.list, visible.len(), ctx.cfg.tui().minimap());
+        let cursor = MinimapCursor::new(&self.list, visible.len(), ctx.cfg.minimap());
         let entries = visible.iter().enumerate().filter_map(|(index, &raw)| {
             ctx.queue.get(raw).map(|song| MinimapEntry {
                 index,

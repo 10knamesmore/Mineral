@@ -3,10 +3,10 @@
 use std::fmt::Write as _;
 use std::io::Cursor;
 
+use crate::config::CoverCellFit;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use image::DynamicImage;
-use mineral_config::CoverCellFit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

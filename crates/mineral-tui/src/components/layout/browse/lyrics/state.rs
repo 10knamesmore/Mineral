@@ -44,7 +44,7 @@ impl LyricsPanel {
     pub(crate) fn cycle_extra(
         &mut self,
         input: super::LyricsInput<'_>,
-        animation: &mineral_config::AnimationConfig,
+        animation: &crate::config::AnimationConfig,
     ) {
         let has_trans = input
             .lyrics

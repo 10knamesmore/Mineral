@@ -5,9 +5,9 @@
 
 use std::borrow::Cow;
 
-use mineral_config::keys::KeyChord;
+use crate::config::key_syntax::KeyChord;
 
-/// cheatsheet 分组。渲染顺序 = 声明顺序;`Scripts`(脚本绑定)恒排在内建组之后。
+/// cheatsheet 分组，渲染顺序与声明顺序一致。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HelpGroup {
     /// 播放控制(暂停 / 切歌 / 音量 / seek)。
@@ -24,9 +24,6 @@ pub enum HelpGroup {
 
     /// 视口滚动(逐行 / 翻页)。
     Scroll,
-
-    /// 脚本具名动作(`keys.script` 与 `mineral.bind`),label = 注册名。
-    Scripts,
 }
 
 impl HelpGroup {
@@ -38,7 +35,6 @@ impl HelpGroup {
             Self::Actions => "Actions",
             Self::View => "View",
             Self::Scroll => "Scroll",
-            Self::Scripts => "Scripts",
         }
     }
 }
@@ -49,7 +45,7 @@ pub struct HelpEntry {
     /// 所属分组。
     group: HelpGroup,
 
-    /// 英文短描述(渲染层直接展示;带步长的动作内嵌 behavior 实值,脚本条目 = 注册名)。
+    /// 英文短描述(渲染层直接展示;带步长的动作内嵌 behavior 实值)。
     label: Cow<'static, str>,
 
     /// 全部绑定键,**显示优先序**:合并条目各动作的首键在前、同义余键靠后,
@@ -124,17 +120,5 @@ impl CatalogBuilder {
     /// 收尾,交出目录。
     pub(crate) fn finish(self) -> Vec<HelpEntry> {
         self.entries
-    }
-}
-
-impl HelpEntry {
-    /// 脚本绑定条目([`super::Keymap::append_script_binds`] 运行期追加用;
-    /// 内建条目一律经 [`CatalogBuilder`] 产出)。
-    pub(crate) fn script(name: &str, chord: KeyChord) -> Self {
-        Self {
-            group: HelpGroup::Scripts,
-            label: Cow::Owned(name.to_owned()),
-            chords: vec![chord],
-        }
     }
 }

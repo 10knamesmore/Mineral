@@ -92,7 +92,7 @@ impl OverlayStack<AppOverlay> {
         let inputs = super::input::all(ctx);
         self.prepare(
             area,
-            ctx.cfg.tui().layout(),
+            ctx.cfg.layout(),
             ctx.ui.browse.fullscreen.on(),
             |content, layout| {
                 let inner = content

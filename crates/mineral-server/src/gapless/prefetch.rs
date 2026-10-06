@@ -57,7 +57,7 @@ pub(crate) fn prefetch_source(local_path: Option<&Path>) -> mineral_stats::Prefe
 ///   - `engine_duration_ms`: decoder 实测总时长(探不出为 `None`)
 ///   - `metadata_duration_ms`: 当前曲元数据时长(未知为 `None`)
 ///   - `position_ms`: 当前播放位置(ms)
-///   - `window_ms`: 预排提前量(配置 `daemon.gapless_prefetch_ms`)
+///   - `window_ms`: 预排提前量(配置 `gapless_prefetch_ms`)
 ///
 /// # Return:
 ///   窗口是否已开。

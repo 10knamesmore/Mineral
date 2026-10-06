@@ -81,30 +81,14 @@ mineral channel netease login    # 扫码登录
 
 播放核心跑在独立 daemon 进程,TUI 只是它的一个 client:
 
-| 用法             | 行为                                                                                       |
-| ---------------- | ------------------------------------------------------------------------------------------ |
-| `mineral`(默认)  | 没有 daemon 就自动拉起一个;**退出 TUI 时带走自己拉起的 daemon**                            |
-| 后台常住进程     | 配置 `tui.behavior.kill_spawned_daemon_on_exit = false` 后,退出 TUI 不会停止daemon继续模仿 |
-| `mineral serve`  | 手动起常驻 daemon                                                                          |
-| `mineral status` | 命令行查看当前播放状态                                                                     |
-| `mineral stop`   | 让 daemon 优雅退出;没在跑时也算成功(幂等)                                                  |
+| 用法             | 行为                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `mineral`(默认)  | 没有 daemon 就自动拉起一个;**退出 TUI 时带走自己拉起的 daemon**                              |
+| `mineral serve`  | 手动起常驻 daemon                                                                            |
+| `mineral status` | 命令行查看当前播放状态                                                                       |
+| `mineral stop`   | 让 daemon 优雅退出;没在跑时也算成功(幂等)                                                    |
 
 </details>
-
-## 配置
-
-> [!WARNING]
-> Mineral 仍在积极开发中,每次版本迭代都可能新增 / 调整 / 移除配置项,字段名与默认值也可能变。
-> mineral 默认配置足够开箱即用， 建议暂不要依赖过多配置项
->
-> ```bash
-> mineral config init    # init lua lsp things
-> mineral config check   # 离线校验现有 config.lua 在新版本下是否还合法
-> ```
->
-> `config init` 不会覆盖你已有的 `config.lua`,只更新类型注解与 `default.lua` 参考
-
-参考 [文档](/docs/configuration.md)
 
 ## 快捷键
 
@@ -181,7 +165,8 @@ mineral channel netease login    # 扫码登录
 
 | 用途                          | 路径                                                |
 | ----------------------------- | --------------------------------------------------- |
-| 配置                          | `~/.config/mineral/config.lua`                      |
+| Daemon 配置与音乐脚本         | `~/.config/mineral/daemon.lua`                      |
+| TUI 配置与本地界面脚本        | `~/.config/mineral/tui.lua`                         |
 | 数据(凭证、统计、per-song KV) | `~/.local/share/mineral`                            |
 | 缓存(封面、音频流缓存)        | `~/.cache/mineral`                                  |
 | 下载导出                      | `~/Music/mineral`                                   |

@@ -1,13 +1,12 @@
-//! 配置加载器:eval default / eval user / 深合并 / 反序列化 / 降级。
+//! 宿主无关的配置求值、合并、落型和字段诊断。
 
 mod lua_util;
 mod merge;
 mod pipeline;
-mod stub;
 mod tree;
 mod warning;
 
-pub use pipeline::{DaemonLoad, default_tree, load, load_with_vm};
-pub use stub::inject_noop_host;
-pub use tree::{from_tree, merge_tree, nest_path};
+pub use lua_util::{extract_setup, table_path};
+pub use pipeline::{FileLoad, defaults, from_source, load_file};
+pub use tree::{deserialize_tree, merge_tree, nest_path};
 pub use warning::ConfigWarning;

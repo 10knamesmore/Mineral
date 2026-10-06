@@ -49,8 +49,8 @@ pub struct Areas {
 ///
 /// # Params:
 ///   - `area`: 可用区域
-///   - `cfg`: 布局段(完整布局门槛与播放栏高度，配置 `tui.layout`)
-pub fn compute(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
+///   - `cfg`: 布局段(完整布局门槛与播放栏高度，配置 `layout`)
+pub fn compute(area: Rect, cfg: &crate::config::LayoutConfig) -> Areas {
     if area.width < *cfg.min_full_width() || area.height < *cfg.min_full_height() {
         compute_compact(area, cfg)
     } else {
@@ -59,7 +59,7 @@ pub fn compute(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
 }
 
 /// Full 布局:顶部 1 行状态 + 中部 60/40 主-下,主区 68/32 左-右,下方 50/50 歌词-(频谱+transport)。
-fn compute_full(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
+fn compute_full(area: Rect, cfg: &crate::config::LayoutConfig) -> Areas {
     let [top_status, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
@@ -97,7 +97,7 @@ fn compute_full(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
 }
 
 /// Compact 布局(窄/矮终端):顶部 1 行，播放栏从底部占配置高度，其余归左栏。
-fn compute_compact(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
+fn compute_compact(area: Rect, cfg: &crate::config::LayoutConfig) -> Areas {
     let [top_status, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
@@ -129,7 +129,7 @@ fn compute_compact(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
 /// [ transport][        ]
 /// [     spectrum       ]
 /// ```
-pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
+pub fn compute_fullscreen(area: Rect, cfg: &crate::config::LayoutConfig) -> Areas {
     let [body, spectrum] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(cfg.fs_spectrum().resolve(area.height)),
@@ -171,7 +171,7 @@ pub fn compute_fullscreen(area: Rect, cfg: &mineral_config::LayoutConfig) -> Are
 /// # Params:
 ///   - `area`: 可用区域
 ///   - `cfg`: 布局段，播放栏高度与其他布局计算函数共用
-pub fn compute_search(area: Rect, cfg: &mineral_config::LayoutConfig) -> Areas {
+pub fn compute_search(area: Rect, cfg: &crate::config::LayoutConfig) -> Areas {
     // search 态顶行被 prompt 接管:不留 status bar,prompt 紧贴 area 顶。
     let [search_prompt, body] =
         Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
@@ -211,9 +211,9 @@ mod tests {
         Rect::new(0, 0, w, h)
     }
 
-    /// default.lua 的布局段。
-    fn layout_cfg() -> color_eyre::Result<mineral_config::LayoutConfig> {
-        Ok(mineral_config::Config::defaults()?.tui().layout().clone())
+    /// tui-default.lua 的布局段。
+    fn layout_cfg() -> color_eyre::Result<crate::config::LayoutConfig> {
+        Ok(crate::config::TuiConfig::defaults()?.layout().clone())
     }
 
     /// 可用面积不足时播放栏收缩，各端点的矩形不越界也不 panic。

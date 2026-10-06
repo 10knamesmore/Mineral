@@ -10,8 +10,7 @@ use mineral_client::Client;
 use mineral_client::connection::{ClientConfig, ConnectError};
 use mineral_client::operation::Outcome;
 use mineral_protocol::{
-    Event, QueueEditOutcome, QueueOp, SocketWire, Subscription, SubscriptionId, SubscriptionTopic,
-    WireError,
+    QueueEditOutcome, QueueOp, SocketWire, SubscriptionId, SubscriptionTopic, WireError,
 };
 
 use crate::error::Result;
@@ -24,7 +23,7 @@ use super::outcome::{
 };
 use super::render::{Payload, Report};
 
-/// 控制命令提交前的连接、订阅或配置故障。
+/// 控制命令提交前的连接或订阅故障。
 #[derive(Debug, thiserror::Error)]
 enum CtlError {
     /// Socket 连接失败。
@@ -48,14 +47,6 @@ enum CtlError {
         /// 等待的订阅主题。
         topic: SubscriptionTopic,
     },
-
-    /// daemon 没有下发有效配置。
-    #[error("daemon config subscription returned no configuration")]
-    MissingConfig,
-
-    /// daemon 下发的配置无法落型。
-    #[error("daemon configuration invalid")]
-    InvalidConfig(#[source] mineral_config::ConfigWarning),
 }
 
 impl CtlError {
@@ -70,8 +61,6 @@ impl CtlError {
                 | ConnectError::MissingWelcome => "与 daemon 握手失败".to_owned(),
             },
             Self::Subscription { topic } => format!("等 {topic:?} 首帧超时"),
-            Self::MissingConfig => "没收到 daemon 的有效配置".to_owned(),
-            Self::InvalidConfig(_) => "daemon 下发的配置无效".to_owned(),
         }
     }
 }
@@ -284,66 +273,49 @@ async fn dispatch_queue(client: &Client, cmd: QueueCommand) -> Report {
                 }
             }
         }
-        QueueCommand::Transform { label, at } => queue_transform(client, path, &label, at).await,
+        QueueCommand::Transform { name, at } => queue_transform(client, path, &name, at).await,
         QueueCommand::Undo => queue_edit_report(path, client.queue_edit(QueueOp::Undo).await),
     }
 }
 
-/// 具名队列变换:从 daemon 推送的有效配置解析 label,提交一次 `ApplyTransform`。
-///
-/// label 必须唯一命中:没有这个 label 或多条同名都明确失败,不静默取第一个。
+/// 查询 daemon 可用操作并按稳定名称提交队列变换，不读取 daemon 配置。
 ///
 /// # Params:
 ///   - `client`: 会话 client
 ///   - `path`: 子命令路径
-///   - `label`: 有效配置里的变换 label
+///   - `name`: 服务能力中的队列变换名称
 ///   - `at`: 变换的光标上下文(0-based 队列下标)
 async fn queue_transform(
     client: &Client,
     path: &'static str,
-    label: &str,
+    name: &str,
     at: Option<usize>,
 ) -> Report {
-    if let Err(error) = await_topic(client, SubscriptionTopic::Events(Subscription::Config)).await {
-        return not_executed(path, &error);
-    }
-    let Some(tree) = latest_config(client) else {
-        return not_executed(path, &CtlError::MissingConfig);
-    };
-    let config = match mineral_config::from_tree(&tree.into_json()) {
-        Ok(config) => config,
-        Err(warning) => {
-            return not_executed(path, &CtlError::InvalidConfig(warning));
+    let info = match client.service_info().await {
+        Outcome::Applied(info) | Outcome::Accepted(info) => info,
+        Outcome::Failed { kind, detail } => {
+            return Report::new(path, String::new(), failed_state(kind, &detail));
+        }
+        Outcome::Unknown { reason } => {
+            return Report::new(path, String::new(), unknown_state(reason));
         }
     };
-    let labels = config
-        .queue()
-        .transforms()
+    if !info
+        .queue_transforms
         .iter()
-        .map(|spec| spec.label().clone())
-        .collect::<Vec<String>>();
-    let index = match transform_index(&labels, label) {
-        TransformLookup::Found(index) => index,
-        TransformLookup::Unknown => {
-            return Report::failed(
-                path,
-                FailureReason::UnknownTransform,
-                Some(available_detail(&labels)),
-            );
-        }
-        TransformLookup::Ambiguous => {
-            return Report::failed(
-                path,
-                FailureReason::AmbiguousTransform,
-                Some(duplicate_detail(&labels, label)),
-            );
-        }
-    };
+        .any(|operation| operation == name)
+    {
+        return Report::failed(
+            path,
+            FailureReason::UnknownTransform,
+            Some(available_detail(&info.queue_transforms)),
+        );
+    }
     queue_edit_report(
         path,
         client
             .queue_edit(QueueOp::ApplyTransform {
-                index,
+                name: name.to_owned(),
                 selected: at,
             })
             .await,
@@ -403,78 +375,12 @@ async fn await_topic(
     }
 }
 
-/// 取事件流里最后一条有效配置树(订阅 Config 时握手后会先收到一帧)。
-///
-/// # Params:
-///   - `client`: 会话 client
-fn latest_config(client: &Client) -> Option<mineral_protocol::BusValue> {
-    client
-        .mirror()
-        .drain_events()
-        .into_iter()
-        .rev()
-        .find_map(|event| match event {
-            Event::ConfigChanged { config } => Some(config),
-            _ => None,
-        })
-}
-
-/// 按 label 在有效配置的变换表里定位下标。
-///
-/// # Params:
-///   - `labels`: 有效配置里的变换 label(数组序即下标)
-///   - `want`: 命令行给的 label
-fn transform_index(labels: &[String], want: &str) -> TransformLookup {
-    let mut found = None;
-    for (index, label) in labels.iter().enumerate() {
-        if label != want {
-            continue;
-        }
-        if found.is_some() {
-            return TransformLookup::Ambiguous;
-        }
-        found = Some(index);
+/// 未命中时列出 daemon 当前可用的队列变换名称。
+fn available_detail(names: &[String]) -> String {
+    if names.is_empty() {
+        return "daemon 没有可用的队列变换".to_owned();
     }
-    found.map_or(TransformLookup::Unknown, TransformLookup::Found)
-}
-
-/// 按 label 定位变换下标的结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TransformLookup {
-    /// 恰好一条命中。
-    Found(usize),
-
-    /// 有效配置里没有这个 label。
-    Unknown,
-
-    /// 有效配置里有多条同名 label。
-    Ambiguous,
-}
-
-/// 未命中时的补充信息:列出可用 label。
-///
-/// # Params:
-///   - `labels`: 有效配置里的变换 label
-fn available_detail(labels: &[String]) -> String {
-    if labels.is_empty() {
-        return "有效配置里没有注册任何队列变换".to_owned();
-    }
-    format!("可用变换:{}", labels.join(", "))
-}
-
-/// 同名命中时的补充信息:列出冲突下标。
-///
-/// # Params:
-///   - `labels`: 有效配置里的变换 label
-///   - `want`: 命令行给的 label
-fn duplicate_detail(labels: &[String], want: &str) -> String {
-    let indices = labels
-        .iter()
-        .enumerate()
-        .filter(|(_, label)| label.as_str() == want)
-        .map(|(index, _)| index.to_string())
-        .collect::<Vec<String>>();
-    format!("同名 label `{want}` 出现在下标 {}", indices.join(", "))
+    format!("可用变换:{}", names.join(", "))
 }
 
 /// 「当前位置 + 偏移」钳到 `[0, duration]`。

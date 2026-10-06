@@ -1,6 +1,6 @@
 //! 统一绘制普通进度线与波形：轨道按列混入当前背景，强调色只停留在播放头附近。
 
-use mineral_config::ProgressConfig;
+use crate::config::ProgressConfig;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -19,11 +19,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, playback: &Playback, env: 
     }
     let width = usize::from(area.width);
     let position = TrackPosition::new(playback, area.width);
-    let columns = waveform::columns(playback, env.config.tui().waveform(), width);
+    let columns = waveform::columns(playback, env.config.waveform(), width);
     for col in 0..area.width {
         let index = usize::from(col);
         let bg = column_bg(frame, area, index);
-        let color = color_at(col, bg, &position, env.config.tui().progress(), env.theme);
+        let color = color_at(col, bg, &position, env.config.progress(), env.theme);
         let wave = columns.as_ref().and_then(|columns| columns.get(index));
         let (glyph, style) = match wave.and_then(|wave| wave.glyph.map(|glyph| (glyph, wave.glow)))
         {

@@ -1,4 +1,4 @@
-//! Client 端的封面源数据预取与按需解码 worker。
+//! TUI 端的封面源数据预取与按需解码 worker。
 
 #[cfg(test)]
 mod test_util;

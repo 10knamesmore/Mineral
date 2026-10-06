@@ -12,7 +12,7 @@ use ratatui::text::Span;
 use crate::render::theme::Theme;
 
 /// 主字段(歌名 / 艺人 / 专辑 / 歌单名)的命中高亮:命中段换成主题的 `search_hit`
-/// 前景色并叠字体效果(Lua `tui.theme.search_hit` 可配)。
+/// 前景色并叠字体效果(Lua `theme.search_hit` 可配)。
 ///
 /// `hits` 为空 → 整段 `base` 样式。连续同类段合并 —— 减少 ratatui Span 数量,渲染更快。
 pub fn highlight_indices<'a>(

@@ -4,10 +4,8 @@
 //! 不需要 TUI / pty —— 只起 `mineral serve` 子进程,用 unix socket 探测;每个测试
 //! 隔离一套临时 XDG 目录,互不干扰、可并行。
 //!
-//! 注:audio engine 拿不到设备时**降级到 null 模式**(引擎空跑、daemon 照常 bind /
-//! serve / graceful shutdown),所以这些用例在 headless CI 上也稳跑,不依赖真音频栈。
-//! `daemon_status_reports_null_backend` 进一步用 `MINERAL_AUDIO_NULL` 强制降级,
-//! 在有声卡的开发机上也能确定性验证「engine null → IPC → CLI status 感知」整条链。
+//! 所有 daemon 子进程都使用 `MINERAL_AUDIO_NULL=1`,不打开真实声卡。
+//! IPC、持久化与 graceful shutdown 仍走真实进程路径。
 
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -35,20 +33,8 @@ struct Daemon {
 }
 
 impl Daemon {
-    /// 起一个隔离环境的 daemon 子进程(不等它 ready)。
-    fn spawn(tag: &str) -> color_eyre::Result<Self> {
-        Self::spawn_inner(tag, /*force_null*/ false)
-    }
-
-    /// 起一个**强制 null 音频后端**的 daemon(无视本机有无声卡),用于确定性验证降级。
-    fn spawn_null(tag: &str) -> color_eyre::Result<Self> {
-        Self::spawn_inner(tag, /*force_null*/ true)
-    }
-
-    /// 起一个**注定启动失败**的 daemon:预埋一份旧透明格式的网易云凭证
-    /// (`user_id` 是裸字符串),结构化后的 `UserId` 解不出来 → daemon 在 build channels
-    /// 阶段就 `Err` 退出。用于验证「启动失败被写进日志 / 被 client 看见」。
-    fn spawn_failing_credential(tag: &str) -> color_eyre::Result<Self> {
+    /// 预埋无法解析的网易云凭证,验证坏 channel 不阻止 daemon 提供服务。
+    fn spawn_corrupt_credential(tag: &str) -> color_eyre::Result<Self> {
         let root = std::env::temp_dir().join(format!(
             "mineral-e2e-{}-{}-{}",
             tag,
@@ -66,7 +52,7 @@ impl Daemon {
         .wrap_err("seed legacy credential")?;
         let child = serve_command(&root, &sock_dir)
             .spawn()
-            .wrap_err("spawn failing `mineral serve`")?;
+            .wrap_err("spawn `mineral serve` with corrupt credential")?;
         let socket = sock_dir.join("mineral.sock");
         Ok(Self {
             child,
@@ -76,8 +62,8 @@ impl Daemon {
         })
     }
 
-    /// `spawn` / `spawn_null` 的共同实现。
-    fn spawn_inner(tag: &str, force_null: bool) -> color_eyre::Result<Self> {
+    /// 起一个隔离环境、强制 null 音频的 daemon 子进程,不等它 ready。
+    fn spawn(tag: &str) -> color_eyre::Result<Self> {
         let root = std::env::temp_dir().join(format!(
             "mineral-e2e-{}-{}-{}",
             tag,
@@ -86,11 +72,9 @@ impl Daemon {
         ));
         let sock_dir = short_sock_dir();
         std::fs::create_dir_all(&root).wrap_err("create isolated root dir")?;
-        let mut cmd = serve_command(&root, &sock_dir);
-        if force_null {
-            cmd.env("MINERAL_AUDIO_NULL", "1");
-        }
-        let child = cmd.spawn().wrap_err("spawn `mineral serve`")?;
+        let child = serve_command(&root, &sock_dir)
+            .spawn()
+            .wrap_err("spawn `mineral serve`")?;
         let socket = sock_dir.join("mineral.sock");
         Ok(Self {
             child,
@@ -178,6 +162,7 @@ fn serve_command(root: &std::path::Path, sock_dir: &std::path::Path) -> Command 
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_DATA_HOME", root.join("data"))
         .env("MINERAL_SOCKET_DIR", sock_dir)
+        .env("MINERAL_AUDIO_NULL", "1")
         .env("RUST_LOG", "info")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -250,7 +235,7 @@ fn second_daemon_is_refused() -> color_eyre::Result<()> {
 /// 单个 channel 凭证损坏时，daemon 仍能 bind / serve。
 #[test]
 fn daemon_survives_corrupt_netease_credential() -> color_eyre::Result<()> {
-    let daemon = Daemon::spawn_failing_credential("badcred")?;
+    let daemon = Daemon::spawn_corrupt_credential("badcred")?;
 
     // 直接把 status 作为就绪探测，成功即证明坏凭证没有阻止 daemon bind / serve。
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -270,7 +255,7 @@ fn daemon_survives_corrupt_netease_credential() -> color_eyre::Result<()> {
 /// `mineral stop` 经 IPC 请求 daemon 优雅退出：进程退出且 socket 被清理。
 #[test]
 fn daemon_stops_on_ipc_shutdown() -> color_eyre::Result<()> {
-    let mut daemon = Daemon::spawn_null("ipcstop")?;
+    let mut daemon = Daemon::spawn("ipcstop")?;
 
     // stop **必须**先 wait_ready:它对「连不上」是幂等成功
     // (确保不在跑的语义),daemon 未 bind 时拿它当就绪探测会假阳性通过。
@@ -334,7 +319,7 @@ fn stop_without_daemon_succeeds_idempotently() -> color_eyre::Result<()> {
 /// 强制 null 后端时，`mineral status` 仍能完成 daemon 会话。
 #[test]
 fn daemon_status_succeeds_with_null_backend() -> color_eyre::Result<()> {
-    let daemon = Daemon::spawn_null("nullstatus")?;
+    let daemon = Daemon::spawn("nullstatus")?;
 
     // 直接把 status 作为就绪探测，避免为同一断言额外建立探测连接。
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -367,7 +352,7 @@ fn parse_events(stdout: &str) -> Option<i64> {
 /// 增长(证停机 flush 把末尾事件真落了盘,没被进程退出截断)。
 #[test]
 fn daemon_records_app_lifecycle_around_run() -> color_eyre::Result<()> {
-    let mut daemon = Daemon::spawn_null("applifecycle")?;
+    let mut daemon = Daemon::spawn("applifecycle")?;
     // 直读 stats.db(离线,不占 busy):poll 到 start 事件落库(events≥1)。
     let deadline = Instant::now() + Duration::from_secs(10);
     let running = loop {

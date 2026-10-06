@@ -203,8 +203,8 @@ pub enum QueueCommand {
 
     /// apply a named transform registered in `queue.transforms`
     Transform {
-        /// transform label from the effective config
-        label: String,
+        /// stable transform name advertised by the daemon
+        name: String,
 
         /// 0-based queue index the transform treats as the cursor
         #[arg(long)]
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(QueueCommand::Undo.path(), "queue undo");
         assert_eq!(
             QueueCommand::Transform {
-                label: "dedupe".to_owned(),
+                name: "dedupe".to_owned(),
                 at: None,
             }
             .path(),

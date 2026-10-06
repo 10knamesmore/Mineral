@@ -1,6 +1,6 @@
 //! 控制键按压底色：短暂保持后淡出，连按重新开始。
 
-use mineral_config::AnimationConfig;
+use crate::config::AnimationConfig;
 use ratatui::style::Color;
 
 use super::anim::{Transition, ease_in_out, ticks16_from_ms};

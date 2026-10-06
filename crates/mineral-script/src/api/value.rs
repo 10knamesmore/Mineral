@@ -1,40 +1,10 @@
-//! Lua 值 ↔ 结构化 Rust 类型的共享转换:属性值、歌曲 id、store 标量。
-//! 各 API 文件(player / store / observe / queue / library)共用,
-//! 出了 api 模块全是强类型。
+//! 音乐实体 id、per-song store 标量与配置覆盖值的共享 Lua 转换。
 
 use mineral_model::{SongId, SourceKind};
 use mineral_protocol::StoreValue;
 use mlua::{IntoLua, Lua};
 
-use crate::message::{PropKey, PropValue};
-
-/// 把属性值转成 Lua 值:`Int` → integer、`Str` → string、`Bool` → boolean、
-/// `Table` → table(递归)、`None` → nil。
-///
-/// # Params:
-///   - `lua`: 目标 VM(string / table 需要在 VM 里分配)
-///   - `value`: 属性值
-///
-/// # Return:
-///   对应的 Lua 值;VM 分配失败时为 `Err`。
-pub(crate) fn prop_to_lua(lua: &Lua, value: &PropValue) -> mlua::Result<mlua::Value> {
-    match value {
-        PropValue::Bool(b) => Ok(mlua::Value::Boolean(*b)),
-        PropValue::Int(n) => (*n).into_lua(lua),
-        PropValue::Str(s) => s.as_str().into_lua(lua),
-        PropValue::Table(entries) => {
-            let table = lua.create_table()?;
-            for (key, item) in entries {
-                table.set(key.as_str(), prop_to_lua(lua, item)?)?;
-            }
-            Ok(mlua::Value::Table(table))
-        }
-        PropValue::None => Ok(mlua::Value::Nil),
-    }
-}
-
-/// 解析 qualified 形式的歌曲 id(`"namespace:value"`,即事件回调里
-/// `args.song.id` 给出的格式)。
+/// 解析 qualified 形式的歌曲 id(`"namespace:value"`)，与音乐 hook 和查询投影一致。
 ///
 /// # Params:
 ///   - `raw`: 脚本侧输入
@@ -53,19 +23,6 @@ pub(crate) fn parse_song_id(raw: &str) -> mlua::Result<SongId> {
     }
     // namespace 开放(插件源),未知名经 intern 铸造 —— 与模型层哲学一致。
     Ok(SongId::new(SourceKind::from_name(namespace), value))
-}
-
-/// 解析属性名;未知名报 Lua 错并列出全部合法名(`observe` / `get` 共用)。
-///
-/// # Params:
-///   - `prop`: 脚本侧输入
-pub(crate) fn parse_prop(prop: &str) -> mlua::Result<PropKey> {
-    PropKey::from_name(prop).ok_or_else(|| {
-        let expected = PropKey::ALL.map(PropKey::as_str).join("\" | \"");
-        mlua::Error::RuntimeError(format!(
-            "unknown property {prop:?}, expected \"{expected}\""
-        ))
-    })
 }
 
 /// 解析 qualified 形式的歌单 id(`"namespace:value"`,`library.tracks` 用)。
@@ -89,7 +46,7 @@ pub(crate) fn parse_playlist_id(raw: &str) -> mlua::Result<mineral_model::Playli
 }
 
 /// 开放 store key 推荐使用带 `.` 分隔的命名空间前缀(如 `plugin.skipcount`)。
-/// 未分隔命名空间只 warn 不拒；`store.set` 与 `store.inc` 共用此约定。
+/// `store.set` 遇到未分隔的命名空间只 warn，不拒绝。
 ///
 /// # Params:
 ///   - `key`: 脚本侧输入的开放键
@@ -124,7 +81,7 @@ pub(crate) fn lua_to_store(value: &mlua::Value) -> mlua::Result<StoreValue> {
     }
 }
 
-/// [`StoreValue`] → Lua 值(`store.get` / `store.inc` 回调实参)。
+/// [`StoreValue`] → Lua 值(`store.get` 回调实参)。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
@@ -139,10 +96,10 @@ pub(crate) fn store_to_lua(lua: &Lua, value: &StoreValue) -> mlua::Result<mlua::
     }
 }
 
-/// 总线载荷的嵌套深度上限(防循环引用 table 栈爆;够日常结构余量)。
-const BUS_MAX_DEPTH: u8 = 8;
+/// 配置值的嵌套深度上限，循环引用表在边界报错。
+const CONFIG_MAX_DEPTH: u8 = 8;
 
-/// Lua 值 → [`mineral_protocol::BusValue`](`mineral.emit` 的载荷转换)。
+/// Lua 配置值 → [`mineral_protocol::BusValue`]，由两侧配置覆盖共用。
 ///
 /// table 判形:键全为 `1..=n` 连续整数 → `Array`;键全为字符串 → `Map`
 /// (保留遍历顺序);混合 / 其他键型报错。function / userdata 等不可
@@ -156,9 +113,9 @@ pub(crate) fn lua_to_bus(
     depth: u8,
 ) -> mlua::Result<mineral_protocol::BusValue> {
     use mineral_protocol::BusValue;
-    if depth > BUS_MAX_DEPTH {
+    if depth > CONFIG_MAX_DEPTH {
         return Err(mlua::Error::RuntimeError(format!(
-            "payload 嵌套超过 {BUS_MAX_DEPTH} 层(循环引用?)"
+            "配置值嵌套超过 {CONFIG_MAX_DEPTH} 层(循环引用?)"
         )));
     }
     match value {
@@ -195,7 +152,7 @@ fn lua_table_to_bus(table: &mlua::Table, depth: u8) -> mlua::Result<mineral_prot
         }
     }
     match (ints.is_empty(), strs.is_empty()) {
-        // 空 table:形不可辨,按空 Map(接收端 JSON 视角的 `{}`)。
+        // 空表无法判定数组形，按空配置映射处理。
         (true, true) => Ok(BusValue::Map(Vec::new())),
         (false, true) => {
             ints.sort_unstable_by_key(|&(i, _)| i);
@@ -219,12 +176,11 @@ fn lua_table_to_bus(table: &mlua::Table, depth: u8) -> mlua::Result<mineral_prot
     }
 }
 
-/// [`mineral_protocol::BusValue`] → Lua 值(round-trip 守卫用;client 上行
-/// emit 落地后总线消息投回脚本回调也走这里,届时去掉 `cfg(test)`)。
+/// 配置覆盖值 → Lua 值，仅用于验证解析往返。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `value`: 总线载荷
+///   - `value`: 配置覆盖值
 #[cfg(test)]
 pub(crate) fn bus_to_lua(
     lua: &Lua,
@@ -261,10 +217,10 @@ mod tests {
 
     use super::{bus_to_lua, lua_to_bus};
 
-    /// 任意总线载荷(深度 ≤3;数组 / 映射非空——空 table 在 Lua 形不可辨,
+    /// 任意配置覆盖值(深度 ≤3;数组 / 映射非空——空 table 在 Lua 形不可辨,
     /// 单独用例覆盖)。浮点取有限值(NaN 无自反等价,round-trip 断言无意义);
     /// **容器内不出 Nil**:Lua 的 `{nil}` / `{k=nil}` 即键缺席,语义上
-    /// 不可保真(Nil 只在顶层标量位成立,见 `emit` 无 payload 路径)。
+    /// 不可保真，Nil 只在顶层标量位成立。
     fn arb_bus() -> impl Strategy<Value = BusValue> {
         let leaf = prop_oneof![
             proptest::prelude::any::<bool>().prop_map(BusValue::Bool),

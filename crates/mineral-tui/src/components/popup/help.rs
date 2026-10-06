@@ -1,11 +1,11 @@
 //! 键位 cheatsheet 浮层:全量键位按功能分组,多列瀑布一屏可览。
 //!
-//! 目录来自 keymap 的 help 快照(用户重映射 / 脚本绑定自动跟随),行形是
+//! 目录来自 keymap 的 help 快照(跟随用户重映射),行形是
 //! 「label 左对齐 · 点线牵引 · chip 键帽收右缘」;列数由内容最小宽自适应,
 //! 放不下时整张表随滚动键上下平移(右缘滚动条指示)。
 
+use crate::config::key_syntax::KeyChord;
 use crossterm::event::KeyEvent;
-use mineral_config::keys::KeyChord;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -129,11 +129,11 @@ impl HelpOverlay {
 }
 
 impl Overlay for HelpOverlay {
-    type Input<'a> = mineral_config::BehaviorConfig;
+    type Input<'a> = crate::config::BehaviorConfig;
 
     fn dependencies(
         &self,
-        _ctx: &mineral_config::BehaviorConfig,
+        _ctx: &crate::config::BehaviorConfig,
         _env: crate::components::frame::FrameEnv<'_>,
         inputs: &mut crate::render::memo::Dependencies<'_>,
     ) {
@@ -160,7 +160,7 @@ impl Overlay for HelpOverlay {
 
     fn block(
         &self,
-        _ctx: &mineral_config::BehaviorConfig,
+        _ctx: &crate::config::BehaviorConfig,
         theme: &Theme,
         focused: bool,
     ) -> Block<'static> {
@@ -185,7 +185,7 @@ impl Overlay for HelpOverlay {
     fn prepare(
         &mut self,
         inner: Rect,
-        _ctx: &mineral_config::BehaviorConfig,
+        _ctx: &crate::config::BehaviorConfig,
         cx: &mut crate::components::frame::PrepareCx<'_>,
         _reveal: crate::runtime::state::OverlayReveal,
     ) {
@@ -208,7 +208,7 @@ impl Overlay for HelpOverlay {
         &self,
         buf: &mut Buffer,
         inner: Rect,
-        _ctx: &mineral_config::BehaviorConfig,
+        _ctx: &crate::config::BehaviorConfig,
         theme: &Theme,
     ) {
         // 左缘留 1 格边距;右缘固定留 1 格滚动条道(不溢出时是空白边距,
@@ -251,11 +251,7 @@ impl Overlay for HelpOverlay {
         }
     }
 
-    fn on_key(
-        &mut self,
-        _key: &KeyEvent,
-        _ctx: &mineral_config::BehaviorConfig,
-    ) -> OverlayResponse {
+    fn on_key(&mut self, _key: &KeyEvent, _ctx: &crate::config::BehaviorConfig) -> OverlayResponse {
         // 未映射裸键半穿透给全局(播放控制族白名单在 App::passes_overlay)。
         OverlayResponse::Pass
     }
@@ -263,7 +259,7 @@ impl Overlay for HelpOverlay {
     fn on_action(
         &mut self,
         action: Action,
-        ctx: &mineral_config::BehaviorConfig,
+        ctx: &crate::config::BehaviorConfig,
     ) -> Option<OverlayResponse> {
         match action {
             // 开关键语义:help 已开,open_help(toggle)/ back / quit 都收敛为关闭。
@@ -312,8 +308,7 @@ impl Overlay for HelpOverlay {
             | Action::OpenActionMenu
             | Action::OpenCopyMenu
             | Action::ReorderSelection(_)
-            | Action::JumpToCurrent
-            | Action::InvokeScript(_) => Some(OverlayResponse::Consumed),
+            | Action::JumpToCurrent => Some(OverlayResponse::Consumed),
         }
     }
 }

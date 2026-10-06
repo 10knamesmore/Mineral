@@ -1,11 +1,11 @@
-//! 事件通知出口:wire(event hub 给订阅 client)与脚本线程双路投递。
+//! 事件通知出口:event hub 给订阅 client 下发 wire 状态与生命周期事件。
 //!
 //! 生命周期事件(曲终 / 下载完成)与属性变更都从这里出去 —— 业务代码只调
 //! [`Notifier`] 的具名方法,不直接摸 broadcast / channel。
 
 use mineral_model::Song;
-use mineral_protocol::{Event, FinishReason, TextSpan};
-use mineral_script::{PropKey, PropValue, ScriptEvent, ScriptSender, TrackFinishedReason};
+use mineral_protocol::{Event, FinishReason, PropName, PropValue, TextSpan};
+use mineral_script::ScriptSender;
 use tokio::sync::broadcast;
 
 use crate::player::PlayerCore;
@@ -17,10 +17,6 @@ pub(crate) enum ScriptError {
     #[error("script is disabled")]
     Disabled,
 
-    /// The requested action is not registered.
-    #[error("script action {0:?} is not registered")]
-    ActionNotFound(String),
-
     /// The script callback failed; retain its original cause.
     #[error("script callback failed")]
     Callback(#[source] mineral_script::Error),
@@ -30,19 +26,18 @@ pub(crate) enum ScriptError {
     ThreadExited,
 }
 
-/// 双路事件出口。wire 路无订阅者 send 失败即丢(advisory);脚本路未启用
-/// (无用户脚本)为 `None`,fire-and-forget。
+/// Wire 事件出口与 daemon 音乐回调句柄。无订阅者时事件 send 失败即丢(advisory)。
 #[derive(Clone)]
 pub(crate) struct Notifier {
     /// wire 路:event hub 发送端,serve 层按握手订阅集过滤下发。
     events: broadcast::Sender<Event>,
 
-    /// 脚本路:daemon → 脚本线程的投递句柄;未启用脚本为 `None`。
+    /// Daemon 音乐查询与 hook 的投递句柄;未启用脚本为 `None`。
     script: Option<ScriptSender>,
 }
 
 impl Notifier {
-    /// 构造双路出口。
+    /// 构造 wire 出口并保留音乐回调句柄。
     ///
     /// # Params:
     ///   - `events`: event hub 发送端
@@ -56,63 +51,26 @@ impl Notifier {
         self.script.clone()
     }
 
-    /// 在播曲目变更:仅脚本路(wire 侧 client 经 `PlayerSync` / 属性订阅
-    /// 自取,无需事件)。触发面在属性采样处,远端 / 本地命中 / gapless
-    /// 推进全覆盖。
+    /// 一首歌结束:向订阅 client 下发 `TrackFinished`。
     ///
     /// # Params:
-    ///   - `song`: 开始播放的歌(脚本路携带整首做投影)
-    pub(crate) fn track_started(&self, song: &Song) {
-        if let Some(script) = &self.script {
-            script.send(ScriptEvent::TrackStarted {
-                song: Box::new(song.clone()),
-            });
-        }
-    }
-
-    /// 一首歌结束:wire `TrackFinished` + 脚本 `track_finished`。
-    ///
-    /// # Params:
-    ///   - `song`: 结束的歌(脚本路携带整首做投影)
-    ///   - `reason`: 结束原因(wire 形;脚本形由 [`to_script_reason`] 映射)
+    ///   - `song`: 结束的歌
+    ///   - `reason`: 结束原因
     pub(crate) fn track_finished(&self, song: &Song, reason: FinishReason) {
         let _ = self.events.send(Event::TrackFinished {
             song_id: song.id.clone(),
             reason,
         });
-        if let Some(script) = &self.script {
-            script.send(ScriptEvent::TrackFinished {
-                song: Box::new(song.clone()),
-                reason: to_script_reason(reason),
-            });
-        }
     }
 
     /// 一首歌下载完成(永久导出落盘;已存在跳过不调用)。
     ///
     /// # Params:
     ///   - `song`: 下载完成的歌
-    ///   - `path`: 落盘路径
-    ///   - `quality`: 下载请求档位；hook 改写时为脚本声明的目录档位。
-    ///   - `format`: 容器格式(channel 实际提供;拿不到为 `None`)
-    pub(crate) fn download_completed(
-        &self,
-        song: &Song,
-        path: &std::path::Path,
-        quality: mineral_model::BitRate,
-        format: Option<&mineral_model::AudioFormat>,
-    ) {
+    pub(crate) fn download_completed(&self, song: &Song) {
         let _ = self.events.send(Event::DownloadCompleted {
             song_id: song.id.clone(),
         });
-        if let Some(script) = &self.script {
-            script.send(ScriptEvent::DownloadCompleted {
-                song: Box::new(song.clone()),
-                path: path.to_path_buf(),
-                quality,
-                format: format.cloned(),
-            });
-        }
     }
 
     /// 订阅 wire 路 event hub(测试直收推送断言用;订阅须先于触发动作,
@@ -136,7 +94,7 @@ impl Notifier {
         let _ = self.events.send(Event::Failure(failure));
     }
 
-    /// 推送脚本主动提供的提示文本。
+    /// 推送后台或音乐 hook 的诊断提示文本。
     ///
     /// # Params:
     ///   - `kind`: 视觉级别
@@ -152,9 +110,6 @@ impl Notifier {
 
     /// per-song 持久 KV 某键变更:wire `StoreChanged`(粗粒度,只报歌 + 键)。
     ///
-    /// 脚本路不投递 —— store 写本就发自脚本 / client,变更方已知值;
-    /// 真有跨方观察需求时再议(避免脚本自己写自己收的回声)。
-    ///
     /// # Params:
     ///   - `song_id`: 变更的歌
     ///   - `key`: 变更的键
@@ -165,64 +120,21 @@ impl Notifier {
         });
     }
 
-    /// 广播有效配置变更(脚本路不投递:配置变更由脚本 / 文件驱动,变更方已知)。
-    ///
-    /// # Params:
-    ///   - `config`: 合成后的有效配置树
-    pub(crate) fn config_changed(&self, config: mineral_protocol::BusValue) {
-        let _ = self.events.send(Event::ConfigChanged { config });
+    /// 广播 daemon 当前可用的队列操作与统计能力，不包含私有配置。
+    pub(crate) fn service_info_changed(&self, info: mineral_protocol::ServiceInfo) {
+        let _ = self.events.send(Event::ServiceInfoChanged { info });
     }
 
-    /// 广播窗口标题覆盖(高频直通;脚本路不投递,覆盖发自脚本)。
+    /// 属性树某项变更:向订阅 client 下发 `PropertyChanged`。
     ///
     /// # Params:
-    ///   - `text`: 覆盖文本;`None` = 撤销
-    pub(crate) fn window_title_override(&self, text: Option<String>) {
-        let _ = self.events.send(Event::WindowTitleOverride { text });
-    }
-
-    /// 属性树某项变更:wire `PropertyChanged` + 脚本 `PropertyChanged`。
-    ///
-    /// # Params:
-    ///   - `key`: 属性键(内部形;wire 形按名映射)
+    ///   - `prop`: 协议属性键
     ///   - `value`: 新值
-    pub(crate) fn property_changed(&self, key: PropKey, value: &PropValue) {
+    pub(crate) fn property_changed(&self, prop: PropName, value: &PropValue) {
         let _ = self.events.send(Event::PropertyChanged {
-            prop: mineral_protocol::PropName::from_name(key.as_str()),
-            value: to_wire_value(value),
+            prop,
+            value: value.clone(),
         });
-        if let Some(script) = &self.script {
-            script.send(ScriptEvent::PropertyChanged {
-                key,
-                value: value.clone(),
-            });
-        }
-    }
-}
-
-/// wire 结束原因 → 脚本内部形(同构映射)。
-fn to_script_reason(reason: FinishReason) -> TrackFinishedReason {
-    match reason {
-        FinishReason::Eof => TrackFinishedReason::Eof,
-        FinishReason::Skip => TrackFinishedReason::Skip,
-        FinishReason::Error => TrackFinishedReason::Error,
-        FinishReason::Stop => TrackFinishedReason::Stop,
-    }
-}
-
-/// 脚本内部属性值 → wire 形(同构映射,`Table` 递归)。
-fn to_wire_value(value: &PropValue) -> mineral_protocol::PropValue {
-    match value {
-        PropValue::Bool(b) => mineral_protocol::PropValue::Bool(*b),
-        PropValue::Int(n) => mineral_protocol::PropValue::Int(*n),
-        PropValue::Str(s) => mineral_protocol::PropValue::Str(s.clone()),
-        PropValue::Table(entries) => mineral_protocol::PropValue::Table(
-            entries
-                .iter()
-                .map(|(key, item)| (key.clone(), to_wire_value(item)))
-                .collect(),
-        ),
-        PropValue::None => mineral_protocol::PropValue::None,
     }
 }
 
@@ -254,66 +166,10 @@ impl PlayerCore {
         self.inner.notify.script.clone()
     }
 
-    /// 触发脚本具名动作并等待结果(daemon 处理 `Request::InvokeAction` 用)。
-    ///
-    /// # Params:
-    ///   - `name`: 动作注册名
-    ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面为 `None`)
-    ///
-    /// # Return:
-    ///   回调执行完成为 `Ok`;脚本未启用 / 未注册 / 执行失败为 [`ScriptError`]。
-    pub(crate) async fn invoke_script_action(
-        &self,
-        name: &str,
-        ctx: Option<mineral_protocol::KeyContext>,
-        args: Vec<String>,
-    ) -> Result<(), ScriptError> {
-        let Some(script) = &self.inner.notify.script else {
-            return Err(ScriptError::Disabled);
-        };
-        if !script.is_attached() {
-            return Err(ScriptError::Disabled);
-        }
-        match script.invoke_action(name.to_owned(), ctx, args).await {
-            Ok(mineral_script::ActionOutcome::Done) => Ok(()),
-            Ok(mineral_script::ActionOutcome::NotFound) => {
-                Err(ScriptError::ActionNotFound(name.to_owned()))
-            }
-            Ok(mineral_script::ActionOutcome::Failed(e)) => Err(ScriptError::Callback(e)),
-            Err(_recv) => Err(ScriptError::ThreadExited),
-        }
-    }
-
-    /// 渲染一个复制模板并等待结果(daemon 处理 `Request::RenderCopyTemplate` 用)。
-    ///
-    /// # Params:
-    ///   - `index`: 模板下标(0-based,对位 config `copy.templates` 数组序)
-    ///   - `ctx`: 模板作用的实体
-    ///
-    /// # Return:
-    ///   `Ok(text)` = 剪贴板文本;`Err` = 脚本不可用或回调失败。
-    pub(crate) async fn render_copy_template(
-        &self,
-        index: usize,
-        ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> Result<String, ScriptError> {
-        let Some(script) = &self.inner.notify.script else {
-            return Err(ScriptError::Disabled);
-        };
-        if !script.is_attached() {
-            return Err(ScriptError::Disabled);
-        }
-        script
-            .render_copy_template(index, ctx)
-            .await
-            .map_err(|_recv| ScriptError::ThreadExited)?
-            .map_err(ScriptError::Callback)
-    }
-
     /// 跑一个具名队列变换,拿回新的队列顺序(脚本未启用 / 线程已退出即错误)。
     ///
     /// # Params:
-    ///   - `index`: 变换下标(0-based,对位 config 数组序)
+    ///   - `name`: daemon 注册的稳定变换名称
     ///   - `queue`: 当前队列(有序)
     ///   - `current`: 在播条目下标(0-based)
     ///   - `selected`: 光标下标(0-based),无则 `None`
@@ -322,7 +178,7 @@ impl PlayerCore {
     ///   `Ok(ids)` = 新顺序;`Err` = 脚本不可用或回调失败。
     pub(crate) async fn queue_transform(
         &self,
-        index: usize,
+        name: String,
         queue: Vec<mineral_model::Song>,
         current: usize,
         selected: Option<usize>,
@@ -334,7 +190,7 @@ impl PlayerCore {
             return Err(ScriptError::Disabled);
         }
         script
-            .queue_transform(index, queue, current, selected)
+            .queue_transform(name, queue, current, selected)
             .await
             .map_err(|_recv| ScriptError::ThreadExited)?
             .map_err(ScriptError::Callback)
@@ -343,14 +199,10 @@ impl PlayerCore {
 
 #[cfg(test)]
 mod tests {
-    use mineral_protocol::{Event, FinishReason, TextSpan};
-    use mineral_script::{PropKey, PropValue, TrackFinishedReason};
+    use mineral_protocol::{Event, FinishReason, PropName, PropValue, TextSpan};
     use mineral_test::song;
 
     use super::Notifier;
-
-    // 脚本路的真实投递由 mineral-script 的 runtime 测试与 daemon e2e 覆盖;
-    // 这里验 wire 路事件形状与同构映射。
 
     #[test]
     fn wire_lane_carries_events_in_order() -> color_eyre::Result<()> {
@@ -359,7 +211,7 @@ mod tests {
         let notifier = Notifier::new(events_tx, /*script*/ None);
         let s = song("1");
         notifier.track_finished(&s, FinishReason::Eof);
-        notifier.property_changed(PropKey::PlayerVolume, &PropValue::Int(42));
+        notifier.property_changed(PropName::PLAYER_VOLUME, &PropValue::Int(42));
         notifier.toast(ToastKind::Warn, "下载不可用".to_owned());
         assert_eq!(
             events_rx.try_recv()?,
@@ -385,26 +237,5 @@ mod tests {
             }
         );
         Ok(())
-    }
-
-    #[test]
-    fn reason_and_value_mappings_are_isomorphic() {
-        let pairs = [
-            (FinishReason::Eof, TrackFinishedReason::Eof),
-            (FinishReason::Skip, TrackFinishedReason::Skip),
-            (FinishReason::Error, TrackFinishedReason::Error),
-            (FinishReason::Stop, TrackFinishedReason::Stop),
-        ];
-        for (wire, script) in pairs {
-            assert_eq!(super::to_script_reason(wire), script);
-        }
-        assert_eq!(
-            super::to_wire_value(&PropValue::Str("x".to_owned())),
-            mineral_protocol::PropValue::Str("x".to_owned())
-        );
-        assert_eq!(
-            super::to_wire_value(&PropValue::None),
-            mineral_protocol::PropValue::None
-        );
     }
 }

@@ -3,7 +3,7 @@
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
-use mineral_config::AnimationConfig;
+use crate::config::AnimationConfig;
 use mineral_protocol::PlayMode;
 
 use crate::components::layout::shared::text::display_width;

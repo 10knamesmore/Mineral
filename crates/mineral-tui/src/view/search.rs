@@ -37,11 +37,11 @@ pub(crate) fn detail_view<'a>(state: &'a AppState, theme: &'a Theme) -> DetailVi
         paint: DetailPaint {
             liked: &state.models.library.liked_ids,
             focus: state.ui.channel_search.focus_permille(
-                *state.cfg.tui().animation().search_focus_transition(),
+                *state.cfg.animation().search_focus_transition(),
                 SearchFocus::Detail,
             ),
             loading: spinner::glyph(
-                state.cfg.tui().animation().spinner_frames(),
+                state.cfg.animation().spinner_frames(),
                 state.ui.channel_search.spinner_counter(),
             ),
             frame: FrameEnv {

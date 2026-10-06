@@ -1,6 +1,6 @@
 //! 将当前歌曲的响度包络映射为单行块字符，并逐列揭示；配色由进度条统一处理。
 
-use mineral_config::WaveformConfig;
+use crate::config::WaveformConfig;
 
 use crate::render::anim::ease_out;
 use crate::render::theme::permille_of;

@@ -21,7 +21,7 @@ pub(crate) const DEFER_REGISTRY_KEY: &str = "mineral.hook.defer";
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
+///   - `mineral`: `mineral.daemon` 模块表
 ///   - `host`: 宿主句柄(注册表)
 pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
     let defer = lua.create_table()?;
@@ -39,7 +39,7 @@ pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Re
                 )));
             };
             let key = Arc::new(lua.create_registry_value(callback)?);
-            h.events.lock().hooks.entry(kind).or_default().push(key);
+            h.hooks.lock().entry(kind).or_default().push(key);
             Ok(())
         })?,
     )

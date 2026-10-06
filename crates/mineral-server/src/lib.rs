@@ -10,8 +10,7 @@
 //! - **ClientHandle**:`Clone`,只暴露命令、snapshot 与事件接口,不泄漏 server 内部句柄。
 
 mod client;
-mod config;
-mod config_host;
+pub mod config;
 mod download;
 mod envelope;
 mod error;

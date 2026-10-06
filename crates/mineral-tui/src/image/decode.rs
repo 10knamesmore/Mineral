@@ -46,7 +46,7 @@ pub(super) enum Error {
 ///   达到目标或原始分辨率的图片；无效图片返回解码错误
 pub(super) fn display(
     bytes: &[u8],
-    target: &mineral_config::CoverDecodePixelsConfig,
+    target: &crate::config::CoverDecodePixelsConfig,
 ) -> Result<DynamicImage, Error> {
     let required = PixelSize::new(target.width().get(), target.height().get());
     if image::guess_format(bytes)? == ImageFormat::Jpeg {
@@ -223,12 +223,12 @@ mod tests {
     #[test]
     fn display_uses_configured_jpeg_dimensions() -> color_eyre::Result<()> {
         use crate::image::key::PixelSize;
-        let cfg = mineral_config::Config::defaults()?;
+        let cfg = crate::config::TuiConfig::defaults()?;
         for (size, expected) in [((2050, 2050), (1025, 1025)), ((300, 200), (300, 200))] {
             let source = DynamicImage::ImageRgb8(RgbImage::new(size.0, size.1));
             let mut bytes = Cursor::new(Vec::new());
             source.write_to(&mut bytes, ImageFormat::Jpeg)?;
-            let decoded = super::display(bytes.get_ref(), cfg.tui().cover().decode_pixels())?;
+            let decoded = super::display(bytes.get_ref(), cfg.cover().decode_pixels())?;
             assert_eq!(decoded.dimensions(), expected);
         }
         assert_eq!(
@@ -255,7 +255,7 @@ mod tests {
         ));
         let mut bytes = Cursor::new(Vec::new());
         source.write_to(&mut bytes, ImageFormat::Png)?;
-        let target = mineral_config::CoverDecodePixelsConfig::builder()
+        let target = crate::config::CoverDecodePixelsConfig::builder()
             .width(
                 std::num::NonZeroU32::new(/*n*/ 96)
                     .ok_or_else(|| color_eyre::eyre::eyre!("positive width"))?,

@@ -3,16 +3,20 @@
 use mlua::{Lua, Table};
 
 use super::override_;
-use crate::host::ScriptHost;
+use crate::message::ConfigOverrideOp;
 
 /// 组装 `config` 子表并挂到 `mineral` 表上。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
-///   - `host`: 宿主句柄
-pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
+///   - `mineral`: 宿主模块表
+///   - `send`: 接收已解析覆盖操作的宿主出口
+pub(crate) fn install(
+    lua: &Lua,
+    mineral: &Table,
+    send: impl Fn(Vec<ConfigOverrideOp>) + Send + 'static,
+) -> mlua::Result<()> {
     let config = lua.create_table()?;
-    override_::install(lua, &config, host)?;
+    override_::install(lua, &config, send)?;
     mineral.set("config", config)
 }

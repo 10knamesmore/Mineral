@@ -15,6 +15,10 @@ pub(crate) enum SongStatsError {
 /// Server startup, media integration, or IPC accept failure.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The daemon configuration tree did not pass typed validation.
+    #[error("daemon configuration invalid")]
+    Config(#[from] mineral_config::ConfigWarning),
+
     /// The audio engine could not start.
     #[error("audio engine startup failed")]
     Audio(#[from] mineral_audio::Error),

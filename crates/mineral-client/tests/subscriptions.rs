@@ -234,7 +234,7 @@ async fn playback_anchor_advances_locally() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 摘要更新写入镜像;配置进入事件队列,窗口标题同时更新覆盖状态。
+/// 摘要与服务能力更新进入镜像，能力事件同时交给消费方。
 #[tokio::test]
 async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
     for transport in TestTransport::ALL {
@@ -271,17 +271,14 @@ async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
                 &mut wire,
                 subscription,
                 3,
-                UpdatePayload::Event(Box::new(mineral_protocol::Event::ConfigChanged {
-                    config: mineral_protocol::BusValue::Nil,
-                })),
-            )
-            .await?;
-            send_update(
-                &mut wire,
-                subscription,
-                4,
-                UpdatePayload::Event(Box::new(mineral_protocol::Event::WindowTitleOverride {
-                    text: Some("title".to_owned()),
+                UpdatePayload::Event(Box::new(mineral_protocol::Event::ServiceInfoChanged {
+                    info: mineral_protocol::ServiceInfo {
+                        queue_transforms: vec!["dedupe".to_owned()],
+                        play_counts: mineral_protocol::PlayCountAvailability {
+                            enabled: true,
+                            excluded_sources: vec!["local".to_owned()],
+                        },
+                    },
                 })),
             )
             .await?;
@@ -289,23 +286,20 @@ async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
         client.subscribe(SubscriptionTopic::Tasks);
-        // 配置由事件队列交给消费方,镜像不保存配置树。
-        let mut config_seen = false;
+        let mut service_info_seen = false;
         timeout(Duration::from_secs(5), async {
             loop {
                 for event in client.mirror().drain_events() {
                     match event {
-                        mineral_protocol::Event::ConfigChanged { .. } => config_seen = true,
+                        mineral_protocol::Event::ServiceInfoChanged { .. } => {
+                            service_info_seen = true
+                        }
                         mineral_protocol::Event::Toast { .. }
                         | mineral_protocol::Event::Failure(_)
-                        | mineral_protocol::Event::Card { .. }
                         | mineral_protocol::Event::PropertyChanged { .. }
                         | mineral_protocol::Event::TrackFinished { .. }
                         | mineral_protocol::Event::DownloadCompleted { .. }
                         | mineral_protocol::Event::StoreChanged { .. }
-                        | mineral_protocol::Event::ScriptReloaded
-                        | mineral_protocol::Event::BusMessage { .. }
-                        | mineral_protocol::Event::WindowTitleOverride { .. }
                         | mineral_protocol::Event::DismissToast { .. }
                         | mineral_protocol::Event::Task(_) => {}
                     }
@@ -316,11 +310,12 @@ async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
                     && client
                         .mirror()
                         .read_downloads_summary(|summary| summary.active == 2)
-                    && config_seen
-                    && matches!(
-                        client.mirror().window_title_override(),
-                        mineral_client::state::WindowTitleOverride::Set(Some(text)) if text == "title"
-                    );
+                    && service_info_seen
+                    && client.mirror().service_info_snapshot().is_some_and(|info| {
+                        info.queue_transforms == ["dedupe"]
+                            && info.play_counts.enabled
+                            && info.play_counts.excluded_sources == ["local"]
+                    });
                 if ready {
                     return;
                 }

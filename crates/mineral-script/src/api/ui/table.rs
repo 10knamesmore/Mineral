@@ -3,15 +3,15 @@
 use mlua::{Lua, Table};
 
 use super::{card, toast, window_title};
-use crate::host::ScriptHost;
+use crate::tui::TuiHost;
 
 /// 组装 `ui` 子表并挂到 `mineral` 表上。
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
-///   - `host`: 宿主句柄
-pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
+///   - `mineral`: `mineral.tui` 模块表
+///   - `host`: 本地配置、setup 与复制回调的效果收集器
+pub(crate) fn install(lua: &Lua, mineral: &Table, host: &TuiHost) -> mlua::Result<()> {
     let ui = lua.create_table()?;
     toast::install(lua, &ui, host)?;
     card::install(lua, &ui, host)?;

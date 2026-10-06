@@ -42,7 +42,7 @@ impl SearchView<'_> {
             );
             results
                 .title
-                .dependencies(inputs, self.frame.config.tui().animation(), self.frame.now);
+                .dependencies(inputs, self.frame.config.animation(), self.frame.now);
         }
         inputs.observe(detail.paint.liked);
         inputs.observe(&(detail.paint.focus, detail.paint.phase));

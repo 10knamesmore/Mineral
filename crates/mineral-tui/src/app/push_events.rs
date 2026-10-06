@@ -15,12 +15,8 @@ impl App {
                     // apply 落数据后，容器播放意图在此兑现；入队需要 client，state 碰不到。
                     self.fulfill_pending_container(&task);
                 }
-                mineral_protocol::Event::ScriptReloaded => self.refresh_script_binds(),
-                mineral_protocol::Event::ConfigChanged { config } => {
-                    self.apply_pushed_config(config);
-                }
-                mineral_protocol::Event::WindowTitleOverride { text } => {
-                    self.state.models.window_title_override = text;
+                mineral_protocol::Event::ServiceInfoChanged { info } => {
+                    self.apply_service_info(info);
                 }
                 mineral_protocol::Event::TrackFinished { song_id, reason } => {
                     self.state.apply_track_finished(&song_id, reason);

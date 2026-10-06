@@ -67,8 +67,7 @@ impl Server {
     ///   - `audio_mode`: 音频后端选择(env / config resolve 后的最终值);无设备时 `Auto` 降级而非失败。
     ///   - `persist`: 持久化句柄,透传给 `PlayerCore::spawn`(收藏 / 歌曲元数据等经它落库)。
     ///   - `config`: daemon 配置切片(引擎参数 / 音质 / 缓存容量 / 各间隔)。
-    ///   - `config_tree`: 有效配置底树(加载管线产物;配置宿主初始状态,握手
-    ///     订阅 `Config` 的 client 重放它)。
+    ///   - `config_tree`: 已校验的 daemon 私有配置底树，供 session 覆盖与重载使用。
     ///   - `script`: 脚本线程投递句柄(daemon 启用脚本时传 `Some`,其余 `None`)。
     pub async fn spawn(
         sources: SourceBackends,
@@ -103,7 +102,7 @@ impl Server {
                 tree: config_tree,
             },
             crate::player::Sinks { notify, stats },
-        );
+        )?;
         // 读回上次会话:恢复播放模式(其余字段仅打日志,不自动恢复队列/进度)。
         // 同步 await:保证在 serve / 首次 PlayerSync 之前生效,client 一连上看到的就是恢复后的模式。
         let session_restored = restore_last_session(&player).await;
@@ -125,7 +124,7 @@ impl Server {
         tokio::spawn(heartbeat(
             player.clone(),
             Arc::clone(&connections),
-            *config.daemon().heartbeat_secs(),
+            *config.timing().heartbeat_secs(),
         ));
         mineral_log::debug!(target: "server", "server components ready");
         Ok(Self {
@@ -272,7 +271,7 @@ async fn restore_last_session(player: &PlayerCore) -> bool {
 /// (出问题时往往没提前开 debug,有心跳就能看到那个时间点系统在干嘛)。
 ///
 /// # Params:
-///   - `interval_secs`: 心跳间隔(秒,配置 `daemon.heartbeat_secs`)
+///   - `interval_secs`: 心跳间隔(秒,配置 `heartbeat_secs`)
 async fn heartbeat(player: PlayerCore, connections: Arc<ConnRegistry>, interval_secs: u64) {
     let start = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));

@@ -65,7 +65,7 @@ impl Report {
         Self::new(command, String::new(), State::Unknown { detail })
     }
 
-    /// CLI 本地判定的失败(如配置里找不到变换 label)。
+    /// CLI 本地判定的失败(如 daemon 能力中找不到队列变换名称)。
     ///
     /// # Params:
     ///   - `command`: 子命令路径
@@ -229,8 +229,8 @@ mod tests {
                 "queue transform",
                 String::new(),
                 State::Failed {
-                    reason: FailureReason::AmbiguousTransform,
-                    detail: Some("同名 label `x` 出现在下标 0, 1".to_owned()),
+                    reason: FailureReason::UnknownTransform,
+                    detail: None,
                 },
             ),
             Report::not_executed("pause", "连不上 daemon".to_owned()),

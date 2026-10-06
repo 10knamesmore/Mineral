@@ -1,11 +1,11 @@
 //! 连接 daemon 所需的容量配置、连接错误，以及会话启动数据和运行指标。
 //!
-//! 建立连接时选择容量并处理连接失败；来源能力和脚本键绑定按需在连接后查询。
+//! 建立连接时选择容量并处理连接失败；来源能力在连接后查询。
 //! 指标记录当前会话的发送量和更新丢弃量，供调用方诊断连接。
 
 use mineral_channel_core::ChannelCaps;
 use mineral_model::SourceKind;
-use mineral_protocol::{HandshakeRejected, ScriptBind, WireError};
+use mineral_protocol::{HandshakeRejected, WireError};
 use thiserror::Error;
 
 /// 会话容量参数(默认值面向 TUI;CLI 可用 [`Self::cli`])。
@@ -93,8 +93,8 @@ pub struct SessionMetrics {
 #[derive(Clone, Debug, Default)]
 pub struct Bootstrap {
     /// 各源能力声明。
-    pub channel_caps: Vec<(SourceKind, ChannelCaps)>,
+    pub caps: Vec<(SourceKind, ChannelCaps)>,
 
-    /// 脚本键绑定表。
-    pub script_binds: Vec<ScriptBind>,
+    /// Daemon 当前可用的队列变换与播放统计采集策略。
+    pub service_info: mineral_protocol::ServiceInfo,
 }

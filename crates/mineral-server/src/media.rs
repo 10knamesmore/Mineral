@@ -129,7 +129,7 @@ impl LyricsPresence {
 /// 实际位置偏离「线性外推预期」超过 `threshold_ms` → 判定为 seek 跳变。
 ///
 /// 正常播放时预期 = 上次位置 + 流逝时间(速率恒 1),实际≈预期;暂停时预期不前进。
-/// seek / `SetPosition` 让位置非线性跳变,偏差远超阈值(配置 `daemon.seek_threshold_ms`)。
+/// seek / `SetPosition` 让位置非线性跳变,偏差远超阈值(配置 `seek_threshold_ms`)。
 fn looks_like_seek(
     prev_ms: u64,
     actual_ms: u64,

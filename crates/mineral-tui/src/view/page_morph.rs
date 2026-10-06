@@ -31,7 +31,7 @@ pub(super) fn search(frame: &mut Frame<'_>, normal: &Areas, search: &Areas, app:
                 endpoint,
                 app.search.page,
                 app.env.theme,
-                app.env.config.sources(),
+                app.env.config.source_colors(),
                 app.search.page.focus == SearchFocus::Prompt,
             );
         });

@@ -58,6 +58,9 @@ impl PlayerCore {
     ///   - `storage`: Local persistence, playback cache, and permanent download root.
     ///   - `spawn_config`: 配置侧参数包(切片 + 有效配置底树)。
     ///   - `sinks`: 事件通知 + 埋点 recorder 两个 fire-and-forget 出口。
+    ///
+    /// # Error:
+    ///   私有 daemon 配置树未通过落型校验时，不启动维护任务。
     pub(crate) fn spawn(
         audio: AudioHandle,
         scheduler: Scheduler,
@@ -65,12 +68,18 @@ impl PlayerCore {
         storage: PlayerStorage,
         spawn_config: SpawnConfig<'_>,
         sinks: Sinks,
-    ) -> Self {
+    ) -> Result<Self, mineral_config::ConfigWarning> {
         let SpawnConfig {
             slices: config,
             tree: config_tree,
         } = spawn_config;
         let Sinks { notify, stats } = sinks;
+        let config_host = crate::config::ConfigHost::new(
+            config_tree,
+            notify
+                .script_sender()
+                .is_some_and(|sender| sender.is_attached()),
+        )?;
         let PlayerStorage {
             persist,
             media_cache,
@@ -106,7 +115,7 @@ impl PlayerCore {
                 tagging: tagging.clone(),
                 notify: notify.clone(),
                 stats: stats.clone(),
-                speed_tick: Duration::from_millis(*config.daemon().download_speed_tick_ms()),
+                speed_tick: Duration::from_millis(*config.timing().download_speed_tick_ms()),
             },
             *config.download().quality(),
             *config.download().max_concurrent(),
@@ -126,7 +135,7 @@ impl PlayerCore {
             stats,
             props: crate::props::PropsWatch::default(),
             ui_state: Mutex::new(crate::props::TerminalStates::default()),
-            config_host: crate::config_host::ConfigHost::new(config_tree),
+            config_host,
             state: Mutex::new(State::empty()),
             state_changes,
             last_seen_finished_seq: AtomicU64::new(0),
@@ -137,14 +146,13 @@ impl PlayerCore {
             playback_quality: *config.playback_quality(),
             playback_prefetch_bytes: *config.engine().prefetch_bytes(),
             envelope_params: config.envelope().clone(),
-            gapless_prefetch_ms: *config.daemon().gapless_prefetch_ms(),
-            prev_restart_threshold_ms: *config.daemon().prev_restart_threshold_ms(),
-            player_tick_ms: *config.daemon().player_tick_ms(),
-            session_save: Duration::from_secs(*config.daemon().session_save_secs()),
-            media_report_interval_ms: *config.daemon().report_interval_ms(),
-            media_seek_threshold_ms: *config.daemon().seek_threshold_ms(),
+            gapless_prefetch_ms: *config.timing().gapless_prefetch_ms(),
+            prev_restart_threshold_ms: *config.timing().prev_restart_threshold_ms(),
+            player_tick_ms: *config.timing().player_tick_ms(),
+            session_save: Duration::from_secs(*config.timing().session_save_secs()),
+            media_report_interval_ms: *config.timing().report_interval_ms(),
+            media_seek_threshold_ms: *config.timing().seek_threshold_ms(),
             hook_timeout: Duration::from_millis(*config.hook_timeout_ms()),
-            spawn_max_concurrent: *config.spawn_max_concurrent(),
             backfill: crate::favorites::Backfill::new(
                 *config.favorites_backfill_chunk_size(),
                 *config.favorites_backfill_max_concurrent(),
@@ -154,6 +162,6 @@ impl PlayerCore {
         let me = Self { inner };
         let bg = me.clone();
         tokio::spawn(async move { bg.background_loop().await });
-        me
+        Ok(me)
     }
 }

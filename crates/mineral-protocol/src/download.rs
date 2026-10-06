@@ -3,7 +3,15 @@
 use mineral_model::{BitRate, PlaylistId, Song};
 use serde::{Deserialize, Serialize};
 
-use crate::PlaylistRef;
+/// Download provenance: playlist identity and its display name at admission.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlaylistRef {
+    /// Playlist identity.
+    pub id: PlaylistId,
+
+    /// Display name.
+    pub name: String,
+}
 
 /// Stable identity of one Song download during the current daemon session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

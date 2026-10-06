@@ -2,9 +2,9 @@
 //!
 //! 两个视图各渲染到一块和左栏等大的离屏 [`Buffer`],再按过渡进度把列搬运 / 拼接进目标
 //! 区域。`Push` 让两块一起平移、`Cover` 让新视图从右覆盖旧视图。过渡风格由配置
-//! `tui.animation.view_sweep` 选定([`SweepStyle`],调用方从 `state.cfg` 取传入)。
+//! `animation.view_sweep` 选定([`SweepStyle`],调用方从 `state.cfg` 取传入)。
 
-use mineral_config::SweepStyle;
+use crate::config::SweepStyle;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -55,8 +55,7 @@ pub fn draw(
                 }
             }
             // 旧视图整体左移 advance,新视图从右补入。
-            // SweepStyle 是 #[non_exhaustive];本接线不识别的变体按 Push 处理。
-            SweepStyle::Push | _ => {
+            SweepStyle::Push => {
                 if c + advance < w {
                     (&pl, c + advance)
                 } else {

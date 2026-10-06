@@ -4,13 +4,10 @@ use std::sync::Arc;
 
 use mineral_client::Client;
 use mineral_client::operation::{Outcome, Pending, SubmitError, UnknownReason};
-use mineral_client::state::{
-    DownloadsDetailMirror, PlaybackMirror, PlayerMirror, WindowTitleOverride,
-};
+use mineral_client::state::{DownloadsDetailMirror, PlaybackMirror, PlayerMirror};
 use mineral_model::{Song, SongId};
 use mineral_protocol::{
-    CopyTemplateCtx, DownloadId, DownloadTarget, Event, KeyContext, QueueContextWire, QueueOp,
-    Request, SubscriptionTopic,
+    DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp, Request, SubscriptionTopic,
 };
 use mineral_task::{Priority, Snapshot, TaskKind};
 
@@ -118,18 +115,6 @@ impl Backend for ClientBackend {
         self.bootstrap.clone()
     }
 
-    fn refresh_script_binds(&self) {
-        let queue = Arc::clone(&self.completions);
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let client = Arc::clone(&self.client);
-            handle.spawn(async move {
-                if let Some(binds) = client.script_binds().await.into_success() {
-                    queue.push(Completion::ScriptBinds(binds));
-                }
-            });
-        }
-    }
-
     fn completions(&self) -> &Arc<CompletionQueue> {
         &self.completions
     }
@@ -166,10 +151,6 @@ impl Backend for ClientBackend {
 
     fn downloads_detail(&self) -> Option<DownloadsDetailMirror> {
         self.client.mirror().downloads_detail_snapshot()
-    }
-
-    fn window_title_override(&self) -> WindowTitleOverride {
-        self.client.mirror().window_title_override()
     }
 
     fn subscribe(&self, topic: SubscriptionTopic) {
@@ -282,22 +263,6 @@ impl Backend for ClientBackend {
 
     fn request_song_stats(&self, id: SongId) {
         self.client.request_song_stats(id);
-    }
-
-    fn invoke_action(&self, name: &str, ctx: Option<KeyContext>) {
-        let name = name.to_owned();
-        let pending = self.client.invoke_action_pending(&name, ctx, Vec::new());
-        self.spawn_pending(pending, move |outcome| Completion::ScriptAction {
-            name,
-            outcome,
-        });
-    }
-
-    fn render_copy_template(&self, index: usize, ctx: CopyTemplateCtx) {
-        self.spawn_pending(
-            self.client.render_copy_template_pending(index, ctx),
-            Completion::CopyTemplate,
-        );
     }
 
     fn report_terminal_state(&self, rows: u16, cols: u16, fullscreen: bool, focused: bool) {

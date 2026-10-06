@@ -9,7 +9,7 @@ use crate::host::ScriptHost;
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
+///   - `mineral`: `mineral.daemon` 模块表
 ///   - `host`: 宿主句柄
 pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
     let queue = lua.create_table()?;

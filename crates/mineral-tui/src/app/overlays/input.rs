@@ -31,7 +31,7 @@ pub(crate) fn queue(state: &AppState) -> QueueInput<'_> {
         frame_now: state.ui.frame_now,
         panel_area: dock_full_rect(
             state.ui.frame_area,
-            state.cfg.tui().layout(),
+            state.cfg.layout(),
             state.ui.browse.fullscreen.on(),
         ),
         images: state.resources.images.ready(),
@@ -60,7 +60,7 @@ pub(crate) struct OverlayInputs<'a> {
     pub(crate) output: Option<&'a mineral_audio::AudioOutput>,
 
     /// 当前行为配置。
-    pub(crate) behavior: &'a mineral_config::BehaviorConfig,
+    pub(crate) behavior: &'a crate::config::BehaviorConfig,
 }
 
 /// 为浮层事件或绘制建立只读输入集合。
@@ -69,6 +69,6 @@ pub(crate) fn all(state: &AppState) -> OverlayInputs<'_> {
         queue: queue(state),
         downloads: downloads(state),
         output: state.models.playback.output.as_deref(),
-        behavior: state.cfg.tui().behavior(),
+        behavior: state.cfg.behavior(),
     }
 }

@@ -14,29 +14,10 @@ pub enum View {
     Library,
 }
 
-/// 当前活跃的布局层(浮层栈之下)。`handle_key` 路由与 `collect_key_context` 共用
-/// [`AppState::active_layer`] 算它——「在哪层」只一处真相,杜绝两处漂移。浮层栈叠在其上,
-/// 由调用方各自裁决(路由对所有浮层一视同仁;脚本 ctx 只认 queue 浮层光标)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ActiveLayer {
-    /// channel 搜索布局态。
-    SearchSession,
-
-    /// 本地 `/` 模糊搜索输入态。
-    DeepSearch,
-
-    /// 全屏播放态。
-    Fullscreen,
-
-    /// 默认浏览态。
-    Browse,
-}
-
 /// 当前激活的页(浮层栈之下),供按键路由分流到对应 [`Page`](crate::app) 实现。
 ///
 /// 只两页:`Search` 是模态(独立输入树),其余一律 `Browse`——fullscreen / `/` 过滤都是
-/// Browse 同一套导航面上的子模式,不另起页。比 [`ActiveLayer`] 粗一档(后者细分子模式供
-/// 渲染 / 上下文裁决)。
+/// Browse 同一套导航面上的子模式,不另起页。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageKind {
     /// channel 搜索模态页。
@@ -75,7 +56,7 @@ impl AppState {
     }
 
     /// 当前激活的页(见 [`PageKind`]):Search 模态优先,否则归 Browse。供 `handle_key` 顶层
-    /// 路由分流到对应 Page 实现;子模式细分仍读 [`Self::active_layer`]。
+    /// 路由分流到对应 Page 实现。
     pub(crate) fn page_kind(&self) -> PageKind {
         if self.ui.channel_search.active.on() {
             PageKind::Search
@@ -84,20 +65,7 @@ impl AppState {
         }
     }
 
-    /// 当前活跃的布局层(见 [`ActiveLayer`])。浮层栈在其之上,由调用方单独裁决。
-    pub(crate) fn active_layer(&self) -> ActiveLayer {
-        if self.ui.channel_search.active.on() {
-            ActiveLayer::SearchSession
-        } else if self.ui.browse.active_search().typing {
-            ActiveLayer::DeepSearch
-        } else if self.ui.browse.fullscreen.on() {
-            ActiveLayer::Fullscreen
-        } else {
-            ActiveLayer::Browse
-        }
-    }
-
-    /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `tui.cover.debounce_ms`)。
+    /// 距上次选中变化是否仍在封面 debounce 防抖窗口内(配置 `cover.debounce_ms`)。
     ///
     /// 时间戳按活跃 surface 取:search 布局态看搜索面板的选中变化,否则看 browse 列表的
     /// ——两边各自维护,防抖只对当前正在滚的那个面板生效。
@@ -108,6 +76,6 @@ impl AppState {
             self.ui.browse.nav.last_sel_change
         };
         self.ui.frame_now.saturating_duration_since(last_sel_change)
-            < Duration::from_millis(*self.cfg.tui().cover().debounce_ms())
+            < Duration::from_millis(*self.cfg.cover().debounce_ms())
     }
 }

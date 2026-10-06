@@ -1,7 +1,7 @@
 //! 将终端按键归一为可查表的语义和弦。
 
+use crate::config::key_syntax::{Key, KeyChord};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mineral_config::keys::{Key, KeyChord};
 
 /// 把一个 crossterm 按键事件归一到 [`KeyChord`]:只保留 SHIFT / CONTROL 修饰
 /// (其余视为终端噪声丢弃),字符键的 SHIFT 由 [`KeyChord`] 的构造不变量吸收。
@@ -37,8 +37,8 @@ pub fn chord_from_event(key: &KeyEvent) -> Option<KeyChord> {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::key_syntax::KeyChord;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use mineral_config::keys::KeyChord;
 
     use super::chord_from_event;
 

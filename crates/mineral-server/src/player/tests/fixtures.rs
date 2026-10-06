@@ -174,13 +174,16 @@ fn core_with_script_playback_persist(
     direct: bool,
     persist: ServerStore,
 ) -> color_eyre::Result<(PlayerCore, mineral_script::ScriptRuntime)> {
-    use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_api};
+    use mineral_script::{ScriptHost, ScriptRuntime, ScriptSender, install_daemon_api};
     let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (push_tx, _push_rx) = tokio::sync::mpsc::unbounded_channel();
     let host = ScriptHost::new(cmd_tx, push_tx);
     let lua = mineral_script::mlua::Lua::new();
-    install_api(&lua, &host)?;
-    lua.load(script).exec()?;
+    install_daemon_api(&lua, &host)?;
+    lua.load(format!(
+        "local mineral = require(\"mineral.daemon\")\n{script}"
+    ))
+    .exec()?;
     let sender = ScriptSender::detached();
     let watchdog = mineral_script::WatchdogConfig::builder()
         .instruction_interval(10_000)
@@ -285,7 +288,7 @@ pub(super) fn core_with_events_stats_playback(
     stats: crate::StatsRecorder,
 ) -> color_eyre::Result<PlayerCore> {
     // fixture 从唯一默认配置源派生 server 切片。
-    let cfg = crate::config::ServerConfig::from_config(&mineral_config::Config::defaults()?);
+    let cfg = crate::config::ServerConfig::from_config(&crate::config::DaemonConfig::defaults()?);
     let scheduler = Scheduler::new(&channels, *cfg.channel_workers_per());
     let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull, cfg.engine().clone())?;
     let library = crate::library::Library::new(
@@ -311,7 +314,7 @@ pub(super) fn core_with_events_stats_playback(
             tagging: tagging.clone(),
             notify: notify.clone(),
             stats: stats.clone(),
-            speed_tick: Duration::from_millis(*cfg.daemon().download_speed_tick_ms()),
+            speed_tick: Duration::from_millis(*cfg.timing().download_speed_tick_ms()),
         },
         *cfg.download().quality(),
         *cfg.download().max_concurrent(),
@@ -333,7 +336,7 @@ pub(super) fn core_with_events_stats_playback(
         props: crate::props::PropsWatch::default(),
         ui_state: Mutex::new(crate::props::TerminalStates::default()),
         // 真实默认树:覆盖类测试要经它过落型校验,空树会把一切覆盖判坏。
-        config_host: crate::config_host::ConfigHost::new(mineral_config::default_tree()?),
+        config_host: crate::config::ConfigHost::new(crate::config::default_daemon_tree()?, false)?,
         state: Mutex::new(State::empty()),
         last_seen_finished_seq: AtomicU64::new(0),
         envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
@@ -343,14 +346,13 @@ pub(super) fn core_with_events_stats_playback(
         playback_quality: *cfg.playback_quality(),
         playback_prefetch_bytes: *cfg.engine().prefetch_bytes(),
         envelope_params: cfg.envelope().clone(),
-        gapless_prefetch_ms: *cfg.daemon().gapless_prefetch_ms(),
-        prev_restart_threshold_ms: *cfg.daemon().prev_restart_threshold_ms(),
-        player_tick_ms: *cfg.daemon().player_tick_ms(),
-        session_save: Duration::from_secs(*cfg.daemon().session_save_secs()),
-        media_report_interval_ms: *cfg.daemon().report_interval_ms(),
-        media_seek_threshold_ms: *cfg.daemon().seek_threshold_ms(),
+        gapless_prefetch_ms: *cfg.timing().gapless_prefetch_ms(),
+        prev_restart_threshold_ms: *cfg.timing().prev_restart_threshold_ms(),
+        player_tick_ms: *cfg.timing().player_tick_ms(),
+        session_save: Duration::from_secs(*cfg.timing().session_save_secs()),
+        media_report_interval_ms: *cfg.timing().report_interval_ms(),
+        media_seek_threshold_ms: *cfg.timing().seek_threshold_ms(),
         hook_timeout: Duration::from_millis(*cfg.hook_timeout_ms()),
-        spawn_max_concurrent: *cfg.spawn_max_concurrent(),
         backfill: crate::favorites::Backfill::new(
             *cfg.favorites_backfill_chunk_size(),
             *cfg.favorites_backfill_max_concurrent(),

@@ -60,7 +60,7 @@ fn idle_frames_are_reused_until_input_model_or_config_changes() -> color_eyre::R
     assert!(crate::view::plan(area, &app.frame_view()).changed_since(&previous));
     let previous = paint_prepared(&app, &mut terminal, area)?;
 
-    let cfg = Arc::new(mineral_config::Config::defaults()?);
+    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
     app.apply_config(cfg);
     app.prepare_view(area, start + Duration::from_secs(2), false);
     assert!(crate::view::plan(area, &app.frame_view()).changed_since(&previous));

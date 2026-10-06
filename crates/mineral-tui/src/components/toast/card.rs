@@ -547,7 +547,7 @@ mod tests {
     use super::{Card, plain_body, plain_line};
     use crate::components::toast::notifications::TextTint;
 
-    /// 与 default.lua 默认一致的动画拍数(96ms ÷ 16ms)。
+    /// 与 tui-default.lua 默认一致的动画拍数(96ms ÷ 16ms)。
     const ANIM_TICKS: u16 = 6;
 
     /// 一张 warn 卡(标题 + 两行纯文本 body)。

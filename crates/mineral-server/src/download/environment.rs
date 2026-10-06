@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 /// 只 warn 不阻断启动)。
 ///
 /// 导出目录优先级:config(`download.dir`)> 平台默认(`~/Music/mineral`)。
-/// config.lua 是唯一用户真相源,不设环境变量逃逸口。
+/// 下载目录由 daemon.lua 配置，不设环境变量逃逸口。
 ///
 /// # Params:
 ///   - `config_dir`: 配置的下载目录(`download.dir`;`None` = 未配置)

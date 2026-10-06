@@ -75,7 +75,6 @@ async fn channel_writes_reject_foreign_identities() -> color_eyre::Result<()> {
                 .kv_set(&foreign.id, "key", &StoreValue::Int(7))
                 .await,
         );
-        assert_foreign(&channel.kv_inc(&foreign.id, "key", 1).await);
         assert_foreign(&channel.set_rating(&foreign.id, Some(5)).await);
         assert_foreign(
             &channel

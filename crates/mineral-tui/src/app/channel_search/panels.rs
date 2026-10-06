@@ -145,7 +145,7 @@ impl SearchPage {
     fn scroll_search_panel(
         &mut self,
         step: ScrollStep,
-        behavior: &mineral_config::BehaviorConfig,
+        behavior: &crate::config::BehaviorConfig,
     ) -> SearchEffect {
         let delta = step_delta(step, behavior);
         mineral_log::debug!(
@@ -836,7 +836,7 @@ mod tests {
             ),
         });
         app.state.ui.channel_search.set_focus(SearchFocus::Detail);
-        let page = u16::try_from(*app.state.cfg.tui().behavior().page_scroll_rows())?;
+        let page = u16::try_from(*app.state.cfg.behavior().page_scroll_rows())?;
         // C-f 翻页下滚简介(平移 page_scroll_rows)。
         app.handle_channel_search_key(&KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert_eq!(

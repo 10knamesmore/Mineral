@@ -21,6 +21,10 @@ pub enum Error {
     #[error(transparent)]
     Config(#[from] mineral_config::Error),
 
+    /// 配置文件工作所在的阻塞任务未能正常完成。
+    #[error("configuration task failed")]
+    ConfigTask(#[source] tokio::task::JoinError),
+
     /// 缓存或用户数据存储失败。
     #[error(transparent)]
     Persist(#[from] mineral_persist::Error),

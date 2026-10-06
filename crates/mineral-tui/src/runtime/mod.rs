@@ -12,8 +12,10 @@ pub(crate) mod marquee;
 pub mod playback;
 pub mod prefetch;
 pub(crate) mod reload;
+pub(crate) mod tui_script;
 
 pub(crate) mod scroll;
+mod service_info;
 pub mod signal;
 pub mod state;
 pub mod track_pos;

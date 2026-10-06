@@ -8,7 +8,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 
-use mineral_config::SearchFocusTransition;
+use crate::config::SearchFocusTransition;
 
 use super::layers::{RootLayer, SearchLayer};
 use super::preparation::FrameView;
@@ -40,7 +40,7 @@ pub(crate) fn plan<'a>(
         plan.moving(move |frame| draw_uncached(frame, app));
         return plan;
     }
-    let layout_cfg = app.env.config.tui().layout();
+    let layout_cfg = app.env.config.layout();
     let normal = compute(area, layout_cfg);
     let full = app.fullscreen.at_max();
     let search = app.search.page.active.at_max();
@@ -115,7 +115,7 @@ pub(crate) fn plan<'a>(
 /// 跨页面形变按照既有合成路径绘制，两端内容与几何在同一帧交接。
 fn draw_uncached(frame: &mut Frame<'_>, app: &FrameView<'_>) {
     let theme = app.env.theme;
-    let layout_cfg = app.env.config.tui().layout();
+    let layout_cfg = app.env.config.layout();
     let normal = compute(frame.area(), layout_cfg);
 
     // 整屏背景底(在任何布局面板之下):先铺 `theme.background`(普通页也有底色,消除进退
@@ -215,7 +215,7 @@ pub(super) fn paint_search(
     let theme = app.env.theme;
     let rs = app.search.page;
     let sliding = matches!(
-        app.env.config.tui().animation().search_focus_transition(),
+        app.env.config.animation().search_focus_transition(),
         SearchFocusTransition::Slide
     ) && !rs.focus_ring.settled();
     // 滑动期所有面板边框压暗,高亮交给浮动环;否则当前焦点面板边框高亮。
@@ -227,7 +227,7 @@ pub(super) fn paint_search(
             prompt,
             rs,
             theme,
-            app.env.config.sources(),
+            app.env.config.source_colors(),
             border_focused(SearchFocus::Prompt),
         );
     }
@@ -313,7 +313,7 @@ pub(super) fn paint_backdrop(
     frame: &mut Frame<'_>,
     app: &FrameView<'_>,
     normal: &Areas,
-    layout_cfg: &mineral_config::LayoutConfig,
+    layout_cfg: &crate::config::LayoutConfig,
 ) {
     let area = frame.area();
     let skip = backdrop_skip(app, area, normal, layout_cfg);
@@ -329,7 +329,7 @@ fn backdrop_skip(
     app: &FrameView<'_>,
     area: Rect,
     normal: &Areas,
-    layout_cfg: &mineral_config::LayoutConfig,
+    layout_cfg: &crate::config::LayoutConfig,
 ) -> Option<Rect> {
     let fullscreen = app.fullscreen;
     if fullscreen.at_max() {
@@ -384,7 +384,7 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>, skip: Option<Rect>) 
     if !app.ambient_reveal.active() {
         return;
     }
-    let cfg = app.env.config.tui().ambient();
+    let cfg = app.env.config.ambient();
     if !*cfg.enabled() && app.ambient.settled_at_base() {
         return;
     }
@@ -428,7 +428,7 @@ pub(super) fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &Fra
         // 切歌转场窗口:新旧两图像素级合成 halfblock(纯 cell,逐帧重画安全),恰好盖住
         // 新图的离线编码期，推满后使用准备阶段已预热的终端成品。缺图时显示已就绪的一端。
         if let Some(transition) = app.cover_transition {
-            let style = BlendStyle::from(*app.env.config.tui().cover_transition().style());
+            let style = BlendStyle::from(*app.env.config.cover_transition().style());
             app.images.render(
                 ImageContent::Blend {
                     from: &transition.from_url,

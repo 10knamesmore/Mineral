@@ -14,10 +14,10 @@ pub(crate) struct ClientResources {
 
 impl ClientResources {
     /// 连接既有图片管线，并初始化当前配置所需的 FFT。
-    pub(crate) fn new(images: ImageEngine, config: &mineral_config::Config) -> Self {
+    pub(crate) fn new(images: ImageEngine, config: &crate::config::TuiConfig) -> Self {
         Self {
             images,
-            fft: SpectrumComputer::new(super::spectrum_params(config.tui().spectrum())),
+            fft: SpectrumComputer::new(super::spectrum_params(config.spectrum())),
         }
     }
 }

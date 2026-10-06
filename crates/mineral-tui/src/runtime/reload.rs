@@ -1,8 +1,6 @@
-//! 有效配置的应用单入口:daemon 托管配置,client 不看文件。
+//! 本地客户端配置的应用单入口。
 //!
-//! daemon 是唯一 watcher / 合成者(文件重载 + 脚本覆盖都在 daemon 侧合成),
-//! client 经 `Event::ConfigChanged` 收有效配置树,落型后走 [`App::apply_config`]
-//! 应用——与启动自举同一套 from_config / retempo,不存在第二条应用路径。
+//! 启动、tui.lua 重载与本地回调覆盖都经 [`App::apply_config`] 应用。
 //!
 //! 应用语义分两类:**现读型**字段(布局 / 行距 / 步长等)随 `state.cfg` 换 Arc
 //! 下一帧天然生效;**固化型**(拍数折算 / FFT 预计算 / 缓存预算)在这里统一
@@ -11,36 +9,30 @@
 
 use std::sync::Arc;
 
-/// daemon 推送的配置落型失败时的驻留错误卡顶替键(下一帧好配置到来主动撤)。
-const PUSH_CARD_ID: &str = "config.push";
-
 impl crate::app::App {
     /// 应用一份新的有效配置:换 `state.cfg` Arc + 全部固化型消费点就地重设。
     ///
-    /// 启动自举(`App::new` 的构造参数)与 daemon 推送(`Event::ConfigChanged`)
+    /// 启动(`App::new` 的构造参数)与本地 tui.lua 重载
     /// 共用此入口的 from_config / retempo 集合;运行态(动画相位 / 存活通知 /
     /// 封面缓存 / 搜索会话)一律保留。
     ///
     /// # Params:
     ///   - `cfg`: 新有效配置(`Arc` 共享只读)
-    pub(crate) fn apply_config(&mut self, cfg: Arc<mineral_config::Config>) {
-        // stats 策略可能从记录切到 off / 排除来源；先清旧装饰。重新启用时当前选中曲会
-        // 经驻留查询补回，绝不展示停采前的陈旧缓存。
-        self.state.clear_local_play_counts();
+    pub(crate) fn apply_config(&mut self, cfg: Arc<crate::config::TuiConfig>) {
         self.state.cfg = cfg;
         let cfg = Arc::clone(&self.state.cfg);
         self.state.resources.images.apply_config(Arc::clone(&cfg));
-        let tui_cfg = cfg.tui();
-        let anim = tui_cfg.animation();
+        self.tui_script.apply_config(cfg.script());
+        let anim = cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
         // 固化型(重建即换,无运行态):主题色 token / 窗口标题模板 / keymap 查表。
-        self.theme_base = crate::render::theme::Theme::from_config(tui_cfg.theme());
-        self.window_title = crate::runtime::window_title::WindowTitle::new(tui_cfg.window_title());
-        let binds = self.client.bootstrap().script_binds;
-        self.apply_script_binds(&binds);
+        self.theme_base = crate::render::theme::Theme::from_config(cfg.theme());
+        self.window_title = crate::runtime::window_title::WindowTitle::new(cfg.window_title());
+        self.keymap = crate::runtime::keymap::Keymap::from_config(cfg.keys(), cfg.behavior());
+        self.notice_hint = Self::compose_notice_hint(&self.keymap);
         // 固化型(携带运行态):动态 accent 渐变 retempo 保相位;开关与目标就地重算——
         // 开着按当前已应用封面重投(同目标空操作,刚打开则渐变过去),关了渐变回 base。
-        let dynamic = tui_cfg.theme().dynamic();
+        let dynamic = cfg.theme().dynamic();
         self.accent_fade
             .retempo(crate::render::anim::ticks32_from_ms(
                 *dynamic.fade_ms(),
@@ -62,7 +54,7 @@ impl crate::app::App {
         // 重投(开着且色板在则渐变过去,关了渐变回底色场)。`current_palette` 是随封面
         // 身份维护的稳定拷贝,对原图 LRU 逐出免疫。
         self.ambient.retempo(
-            crate::render::anim::ticks32_from_ms(*tui_cfg.ambient().fade_ms(), tick_ms),
+            crate::render::anim::ticks32_from_ms(*cfg.ambient().fade_ms(), tick_ms),
             tick_ms,
         );
         let ambient_palette = self.state.resources.images.current_palette.clone();
@@ -72,7 +64,7 @@ impl crate::app::App {
         // 固化型(携带运行态):在途的切歌封面转场 retempo 保相位(新转场现场折算,不在此列)。
         if let Some(active) = self.state.resources.images.transition.as_mut() {
             active.anim.retempo(crate::render::anim::ticks16_from_ms(
-                *tui_cfg.cover_transition().duration_ms(),
+                *cfg.cover_transition().duration_ms(),
                 tick_ms,
             ));
         }
@@ -92,7 +84,7 @@ impl crate::app::App {
                 tick_ms,
             ));
         self.notifications.retempo(
-            *tui_cfg.toast().flash_ttl_secs(),
+            *cfg.toast().flash_ttl_secs(),
             crate::render::anim::ticks16_from_ms(*anim.toast_anim_ms(), tick_ms),
         );
         self.state.ui.browse.retempo(anim);
@@ -100,9 +92,7 @@ impl crate::app::App {
         self.state.ui.channel_search.reconfigure(
             crate::render::anim::ticks16_from_ms(*anim.fullscreen_ms(), tick_ms),
             crate::render::anim::ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
-            crate::runtime::state::search_whitelist::SearchWhitelist::from(
-                tui_cfg.search().channel(),
-            ),
+            crate::runtime::state::search_whitelist::SearchWhitelist::from(cfg.search().channel()),
         );
         self.state
             .ui
@@ -120,56 +110,21 @@ impl crate::app::App {
         self.state
             .ui
             .spectrum
-            .reconfigure(tui_cfg.spectrum().clone(), tick_ms);
+            .reconfigure(cfg.spectrum().clone(), tick_ms);
         // FFT 预计算贵且重建丢样本环缓冲(频谱空一两帧),参数没变不动。
-        let params = crate::runtime::state::spectrum_params(tui_cfg.spectrum());
+        let params = crate::runtime::state::spectrum_params(cfg.spectrum());
         if self.state.resources.fft.params() != &params {
             self.state.resources.fft = mineral_spectrum::SpectrumComputer::new(params);
-        }
-    }
-
-    /// 消费一帧 daemon 推送的有效配置树:落型成功即应用;失败(版本偏斜等,
-    /// daemon 侧已校验、正常不该发生)保留现行配置 + 驻留错误卡。
-    ///
-    /// 成功路径一律静默(生效本身就是反馈),只有失败才打扰通知层。
-    ///
-    /// # Params:
-    ///   - `config`: 有效配置树(wire 形)
-    pub(crate) fn apply_pushed_config(&mut self, config: mineral_protocol::BusValue) {
-        use crate::components::toast::card::{plain_body, plain_line};
-        use crate::components::toast::notifications::TextTint;
-        match mineral_config::from_tree(&config.into_json()) {
-            Ok(cfg) => {
-                self.apply_config(Arc::new(cfg));
-                self.notifications.dismiss_card_by_id(PUSH_CARD_ID);
-            }
-            Err(warning) => {
-                mineral_log::warn!(
-                    target: "tui",
-                    error = mineral_log::chain(&warning),
-                    "daemon 推送的配置落型失败,保留现行配置"
-                );
-                self.notifications.push_card(
-                    TextTint::Error,
-                    plain_line("config push rejected"),
-                    plain_body(vec![
-                        config_warning_text(&warning),
-                        "keeping current config".to_owned(),
-                    ]),
-                    Some(PUSH_CARD_ID.to_owned()),
-                    /*ttl*/ None,
-                );
-            }
         }
     }
 
     /// 启动期配置提示(`run` 在 `App::new` 后调一次):
     ///   - `config_path` 不存在 → 驻留卡提醒 `mineral config init`(每次启动都提醒,
     ///     直到用户真的生成配置);
-    ///   - 启动自举加载的降级告警 → 驻留警告卡(daemon 侧重载后的告警走推送通道)。
+    ///   - 本地 tui.lua 加载的降级告警 → 驻留警告卡。
     ///
     /// # Params:
-    ///   - `config_path`: config.lua 路径(解析失败给 `None`,跳过缺失检查)
+    ///   - `config_path`: tui.lua 路径(解析失败给 `None`,跳过缺失检查)
     ///   - `warnings`: 启动加载产生的降级告警
     pub(crate) fn notify_startup_config(
         &mut self,
@@ -199,75 +154,51 @@ impl crate::app::App {
                 .chain(std::iter::once("using defaults".to_owned()));
             self.notifications.push_card(
                 TextTint::Warn,
-                plain_line("config.lua warnings"),
+                plain_line("tui.lua warnings"),
                 plain_body(lines),
                 Some("config.reload".to_owned()),
                 /*ttl*/ None,
             );
         }
     }
-
-    /// daemon 推送 `ScriptReloaded` 后重新拉取脚本 bind 表(结果经完成事件回流)。
-    pub(crate) fn refresh_script_binds(&mut self) {
-        self.client.refresh_script_binds();
-    }
-
-    /// 以现行配置重建 keymap 并合入给定 bind 表;卡片关闭键提示随表刷新。
-    ///
-    /// # Params:
-    ///   - `binds`: 脚本绑定表
-    pub(crate) fn apply_script_binds(&mut self, binds: &[mineral_protocol::ScriptBind]) {
-        let tui_cfg = self.state.cfg.tui();
-        let mut keymap =
-            crate::runtime::keymap::Keymap::from_config(tui_cfg.keys(), tui_cfg.behavior());
-        keymap.append_script_binds(binds);
-        self.notice_hint = Self::compose_notice_hint(&keymap);
-        self.keymap = keymap;
-    }
 }
 
 /// Describes the warning; callers state which configuration remains active.
 fn config_warning_text(warning: &mineral_config::ConfigWarning) -> String {
     match warning {
-        mineral_config::ConfigWarning::Read { .. } => "config.lua could not be read".to_owned(),
-        mineral_config::ConfigWarning::Eval { .. } => {
-            "config.lua could not be evaluated".to_owned()
-        }
+        mineral_config::ConfigWarning::Read { .. } => "tui.lua could not be read".to_owned(),
+        mineral_config::ConfigWarning::Eval { .. } => "tui.lua could not be evaluated".to_owned(),
         mineral_config::ConfigWarning::Serialize { .. } => {
-            "config.lua settings could not be converted".to_owned()
+            "tui.lua settings could not be converted".to_owned()
         }
         mineral_config::ConfigWarning::Deserialize { path: None, .. } => {
-            "config.lua settings are invalid".to_owned()
+            "tui.lua settings are invalid".to_owned()
         }
         mineral_config::ConfigWarning::Deserialize {
             path: Some(path), ..
         } => {
-            format!("config.lua: invalid {path}")
+            format!("tui.lua: invalid {path}")
         }
-        _ => "config.lua settings are invalid".to_owned(),
+        _ => "tui.lua settings are invalid".to_owned(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use mineral_config::keys::KeyChord;
-    use mineral_protocol::BusValue;
+    use crate::test_support::app_with_queue;
+    use std::sync::Arc;
 
-    use crate::runtime::action::Action;
-    use crate::test_support::{app_with_library, app_with_queue};
-
-    /// 造一帧「default.lua + overlay」合成的有效配置树(wire 形),
-    /// 与 daemon 侧合成路径同构。
-    fn pushed_tree(overlay: serde_json::Value) -> color_eyre::Result<BusValue> {
-        Ok(BusValue::from_json(mineral_config::merge_tree(
-            mineral_config::default_tree()?,
-            overlay,
-        )))
+    /// Load typed local defaults and overrides through the TUI-only schema.
+    fn local_config(
+        overlay: serde_json::Value,
+    ) -> color_eyre::Result<Arc<crate::config::TuiConfig>> {
+        let tree = mineral_config::merge_tree(crate::config::default_tui_tree()?, overlay);
+        Ok(Arc::new(crate::config::tui_from_tree(&tree)?))
     }
 
     /// 顶层按压时长热更覆盖歌词按钮，保留在途亮度并调整后续淡出速度。
     #[test]
-    fn pushed_config_retempos_lyric_press_in_place() -> color_eyre::Result<()> {
+    fn local_config_retempos_lyric_press_in_place() -> color_eyre::Result<()> {
         let mut app = app_with_queue(1, 0)?;
         app.state =
             crate::test_support::state_with_lyrics(crate::runtime::state::LyricExtra::None, true)?;
@@ -279,9 +210,9 @@ mod tests {
         assert!(before > 0 && before < 1000);
         let mut old_speed = app.state.ui.browse.lyrics.extra_press.clone();
         old_speed.tick();
-        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "animation": {
+        app.apply_config(local_config(serde_json::json!({ "animation": {
             "controls_press_ms": 4400, "frame_tick_ms": 32
-        } } }))?);
+        }  }))?);
         assert_eq!(app.state.ui.browse.lyrics.extra_press.strength(), before);
         app.state.tick_frame();
         let after = app.state.ui.browse.lyrics.extra_press.strength();
@@ -296,7 +227,7 @@ mod tests {
 
     /// minimap 时长热更保留显示位置，下一帧按新速度推进；0ms 能直接收敛到目标。
     #[test]
-    fn pushed_config_changes_minimap_speed_without_jumping() -> color_eyre::Result<()> {
+    fn local_config_changes_minimap_speed_without_jumping() -> color_eyre::Result<()> {
         use crate::runtime::scroll::list::ScrollMotion;
         use crate::runtime::scroll::position::POSITION_SCALE;
 
@@ -329,8 +260,8 @@ mod tests {
         let before = app.state.ui.browse.tracks.scroll().position(101);
         assert!(before.is_some_and(|value| value > 0 && value < POSITION_SCALE));
         let mut reference = app.state.ui.browse.tracks.scroll().clone();
-        app.apply_pushed_config(pushed_tree(serde_json::json!({
-            "tui": { "animation": { "minimap_cursor_ms": 1600 } }
+        app.apply_config(local_config(serde_json::json!({
+            "animation": { "minimap_cursor_ms": 1600 }
         }))?);
         let slow_ticks = crate::components::frame::FrameEnv {
             config: &app.state.cfg,
@@ -350,8 +281,8 @@ mod tests {
         let fast = reference.position(101);
         assert!(slow.zip(before).is_some_and(|(now, old)| now > old));
         assert!(slow.zip(fast).is_some_and(|(slow, fast)| slow < fast));
-        app.apply_pushed_config(pushed_tree(serde_json::json!({
-            "tui": { "animation": { "minimap_cursor_ms": 0 } }
+        app.apply_config(local_config(serde_json::json!({
+            "animation": { "minimap_cursor_ms": 0 }
         }))?);
         assert_eq!(app.state.ui.browse.tracks.scroll().position(101), slow);
         let cursor_ticks = crate::components::frame::FrameEnv {
@@ -376,7 +307,7 @@ mod tests {
     /// 波形入场动画时长热更:在途的揭示 retempo **保相位**(不重播,不跳变),
     /// 只有后续推进速度变化。
     #[test]
-    fn pushed_config_retempos_waveform_reveal_in_place() -> color_eyre::Result<()> {
+    fn local_config_retempos_waveform_reveal_in_place() -> color_eyre::Result<()> {
         use mineral_model::{Envelope, SongId, SourceKind};
 
         use crate::runtime::playback::EnvelopeState;
@@ -403,9 +334,9 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("装载后应有包络"))?;
         assert!(mid > 0 && mid < 1000, "前置:动画在途 ({mid})");
 
-        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": {
-            "waveform": { "reveal": { "duration_ms": 2000 } },
-        } }))?);
+        app.apply_config(local_config(serde_json::json!({
+           "waveform": { "reveal": { "duration_ms": 2000 } },
+        }))?);
         assert_eq!(
             app.state
                 .models
@@ -419,104 +350,10 @@ mod tests {
         Ok(())
     }
 
-    /// 推送应用:keymap / theme 热生效;成功路径静默,不打扰通知层。
-    #[test]
-    fn pushed_config_applies_keymap_and_theme() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        let old_accent = app.theme.accent;
-        assert_eq!(
-            app.keymap.lookup(KeyChord::parse("<Space>")?),
-            Some(Action::TogglePlayPause),
-            "应用前默认绑定"
-        );
-        let entries_before = app.notifications.entry_count();
-        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": {
-            "keys": { "play_pause": "w" },
-            "theme": { "accent": "#ff0000" },
-        } }))?);
-        assert_eq!(
-            app.keymap.lookup(KeyChord::parse("w")?),
-            Some(Action::TogglePlayPause),
-            "新键生效"
-        );
-        assert_eq!(
-            app.keymap.lookup(KeyChord::parse("<Space>")?),
-            None,
-            "旧键整体替换"
-        );
-        assert_ne!(app.theme.accent, old_accent, "主题热应用");
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "audio": { "volume": 42 } }),
-        )?);
-        assert_eq!(
-            app.notifications.entry_count(),
-            entries_before,
-            "成功应用应静默,不新增通知"
-        );
-        Ok(())
-    }
-
-    /// 配置热更清掉本地播放次数缓存与已装饰值；切到 off 后旧统计不会残留在 Selected。
-    #[test]
-    fn pushed_config_clears_local_play_counts() -> color_eyre::Result<()> {
-        use mineral_model::{SongId, SourceKind};
-
-        let mut app = app_with_library(1, 0)?;
-        let id = SongId::new(SourceKind::NETEASE, "1");
-        assert!(
-            app.state
-                .models
-                .library
-                .local_play_counts
-                .enter_selection(&id)
-        );
-        assert!(
-            app.state
-                .models
-                .library
-                .local_play_counts
-                .complete(&id, Some(3))
-        );
-        let entry = app
-            .state
-            .models
-            .library
-            .tracks
-            .values_mut()
-            .flat_map(|tracks| tracks.iter_mut())
-            .next()
-            .ok_or_else(|| color_eyre::eyre::eyre!("前置:Library 应有一首歌"))?;
-        entry.plays = Some(3);
-
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "stats": { "level": "off" } }),
-        )?);
-
-        assert!(
-            app.state
-                .models
-                .library
-                .local_play_counts
-                .has_no_cached_values()
-        );
-        assert!(app.state.models.library.local_play_counts.is_idle());
-        assert!(
-            app.state
-                .models
-                .library
-                .tracks
-                .values()
-                .flat_map(|tracks| tracks.iter())
-                .all(|entry| entry.plays.is_none()),
-            "已装饰的 Selected 值也必须清空"
-        );
-        Ok(())
-    }
-
     /// 图协议配置热更：替换 terminal backend 并清空终端图片缓存，切回 auto 时恢复
     /// 启动协商结果。
     #[test]
-    fn pushed_config_forces_cover_protocol() -> color_eyre::Result<()> {
+    fn local_config_forces_cover_protocol() -> color_eyre::Result<()> {
         use mineral_model::MediaUrl;
 
         use crate::image::GraphicsProtocol;
@@ -535,8 +372,8 @@ mod tests {
             .images
             .insert_test_terminal_image(&url, (10, 10));
 
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "cover": { "protocol": "sixel" } } }),
+        app.apply_config(local_config(
+            serde_json::json!({ "cover": { "protocol": "sixel" }  }),
         )?);
         assert_eq!(
             app.state.resources.images.graphics_protocol(),
@@ -548,8 +385,8 @@ mod tests {
             "backend 替换应清终端图片缓存"
         );
 
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "cover": { "protocol": "auto" } } }),
+        app.apply_config(local_config(
+            serde_json::json!({ "cover": { "protocol": "auto" }  }),
         )?);
         assert_eq!(
             app.state.resources.images.graphics_protocol(),
@@ -561,9 +398,9 @@ mod tests {
 
     /// 格边策略热更后请求新成品，保留解码图和旧策略缓存；切回时直接命中旧成品。
     #[test]
-    fn pushed_cover_cell_fit_selects_distinct_cached_variants() -> color_eyre::Result<()> {
+    fn local_cover_cell_fit_selects_distinct_cached_variants() -> color_eyre::Result<()> {
+        use crate::config::CoverCellFit;
         use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
-        use mineral_config::CoverCellFit;
         use mineral_model::MediaUrl;
         use ratatui::{buffer::Buffer, layout::Rect};
         use std::sync::Arc;
@@ -609,8 +446,8 @@ mod tests {
             ("contain", CoverCellFit::Contain),
         ] {
             let previous = app.state.resources.images.encode_pending.clone();
-            app.apply_pushed_config(pushed_tree(serde_json::json!({
-                "tui": { "cover": { "cell_fit": value } }
+            app.apply_config(local_config(serde_json::json!({
+                "cover": { "cell_fit": value }
             }))?);
             render(&mut app.state.resources.images);
             let pending = &app.state.resources.images.encode_pending;
@@ -638,8 +475,8 @@ mod tests {
             );
         }
         let pending = app.state.resources.images.encode_pending.clone();
-        app.apply_pushed_config(pushed_tree(serde_json::json!({
-            "tui": { "cover": { "cell_fit": "crop" } }
+        app.apply_config(local_config(serde_json::json!({
+            "cover": { "cell_fit": "crop" }
         }))?);
         render(&mut app.state.resources.images);
         assert_eq!(app.state.resources.images.encode_pending, pending);
@@ -652,12 +489,12 @@ mod tests {
 
     /// 每个组件现读跑马灯配置，关闭后无需重建组件或重新绑定标题。
     #[test]
-    fn pushed_config_changes_component_marquee() -> color_eyre::Result<()> {
+    fn local_config_changes_component_marquee() -> color_eyre::Result<()> {
         use std::time::{Duration, Instant};
         let mut app = app_with_queue(1, 0)?;
         let start = Instant::now();
         app.state.ui.transport.title.prepare("a", 40, 10, start);
-        let tick_ms = *app.state.cfg.tui().animation().frame_tick_ms();
+        let tick_ms = *app.state.cfg.animation().frame_tick_ms();
         let now = start + Duration::from_millis(tick_ms * 200);
         let later = start + Duration::from_millis(tick_ms * 400);
         let sample = |now| {
@@ -665,33 +502,33 @@ mod tests {
                 .ui
                 .transport
                 .title
-                .phase("a", 40, 10, 2, app.state.cfg.tui().animation(), now)
+                .phase("a", 40, 10, 2, app.state.cfg.animation(), now)
                 .offset
         };
         assert!(sample(now).max(sample(later)) > 0);
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "animation": { "marquee": { "mode": "off" } } } }),
+        app.apply_config(local_config(
+            serde_json::json!({ "animation": { "marquee": { "mode": "off" } }  }),
         )?);
         assert_eq!(
             app.state
                 .ui
                 .transport
                 .title
-                .phase("a", 40, 10, 2, app.state.cfg.tui().animation(), later)
+                .phase("a", 40, 10, 2, app.state.cfg.animation(), later)
                 .offset,
             0
         );
         Ok(())
     }
 
-    /// 窗口标题随推送热更:换成含 lyric 的模板后 wants_lyric 翻真。
+    /// 窗口标题随重载热更:换成含 lyric 的模板后 wants_lyric 翻真。
     #[test]
-    fn pushed_config_rebuilds_window_title() -> color_eyre::Result<()> {
+    fn local_config_rebuilds_window_title() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         assert!(!app.window_title.wants_lyric(), "默认模板不含 lyric");
-        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "window_title": {
+        app.apply_config(local_config(serde_json::json!({ "window_title": {
             "template": [ { "field": "lyric" } ],
-        } } }))?);
+        }  }))?);
         assert!(
             app.window_title.wants_lyric(),
             "热更后模板含 lyric → 窗口标题热应用"
@@ -701,7 +538,7 @@ mod tests {
 
     /// 固化型就地重设保留运行态:全屏形变飞行中热更拍数,逻辑态与相位都不回零。
     #[test]
-    fn pushed_config_retempo_preserves_phase() -> color_eyre::Result<()> {
+    fn local_config_retempo_preserves_phase() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         app.state.ui.browse.fullscreen.toggle();
         for _ in 0..3 {
@@ -709,8 +546,8 @@ mod tests {
         }
         let mid = app.state.ui.browse.fullscreen.eased_in_out();
         assert!(mid > 0, "前置:形变已起步");
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "animation": { "fullscreen_ms": 1000 } } }),
+        app.apply_config(local_config(
+            serde_json::json!({ "animation": { "fullscreen_ms": 1000 }  }),
         )?);
         assert!(app.state.ui.browse.fullscreen.on(), "逻辑态保留");
         assert!(
@@ -720,10 +557,10 @@ mod tests {
         Ok(())
     }
 
-    /// 氛围背景滞后跟随飞行中热更 `ambient_trail`:retempo 保相位——推送那帧进度不回零、
+    /// 氛围背景滞后跟随飞行中热更 `ambient_trail`:retempo 保相位——重载那帧进度不回零、
     /// 不跳变(逻辑态与已走缓动都留住)。
     #[test]
-    fn pushed_config_ambient_trail_retempo_preserves_phase() -> color_eyre::Result<()> {
+    fn local_config_ambient_trail_retempo_preserves_phase() -> color_eyre::Result<()> {
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         app.state.ui.browse.fullscreen.toggle();
         // 推进过默认滞后(140ms/16ms ≈ 9 拍)再进缓动几拍;tick_frame 同拍推进跟随。
@@ -732,110 +569,17 @@ mod tests {
         }
         let mid = app.state.ui.browse.ambient_reveal.progress();
         assert!(mid > 0, "前置:滞后已尽、缓动起步");
-        app.apply_pushed_config(pushed_tree(serde_json::json!({ "tui": { "animation": {
+        app.apply_config(local_config(serde_json::json!({ "animation": {
             "ambient_trail": {
                 "enter": { "delay_ms": 400, "ease_ms": 2000 },
                 "exit": { "delay_ms": 0, "ease_ms": 240 },
             },
-        } } }))?);
+        }  }))?);
         assert_eq!(
             app.state.ui.browse.ambient_reveal.progress(),
             mid,
-            "retempo 只换速度,推送那帧进度不跳"
+            "retempo 只换速度,重载那帧进度不跳"
         );
-        Ok(())
-    }
-
-    /// 防御:落型不了的推送(版本偏斜)保留现行配置,弹驻留错误卡;
-    /// 下一帧好配置到来自动撤卡。
-    #[test]
-    fn bad_pushed_config_keeps_current_and_recovers() -> color_eyre::Result<()> {
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        app.apply_pushed_config(BusValue::Map(vec![(
-            "no_such_section".to_owned(),
-            BusValue::Int(1),
-        )]));
-        assert_eq!(
-            app.keymap.lookup(KeyChord::parse("<Space>")?),
-            Some(Action::TogglePlayPause),
-            "失败时键表不动"
-        );
-        assert!(
-            app.notifications.has_live_card(super::PUSH_CARD_ID),
-            "失败应弹驻留错误卡"
-        );
-        app.apply_pushed_config(pushed_tree(serde_json::json!({}))?);
-        assert!(
-            !app.notifications.has_live_card(super::PUSH_CARD_ID),
-            "好配置到来应撤卡"
-        );
-        Ok(())
-    }
-
-    /// 动态 accent 热更关闭:已染上封面色后推送 `enabled = false`,
-    /// effective theme 渐变回 base 静态 token(不瞬跳、不残留封面色)。
-    #[test]
-    fn pushed_config_dynamic_disabled_returns_to_base() -> color_eyre::Result<()> {
-        use mineral_model::MediaUrl;
-
-        use crate::render::palette::{CoverPalette, Rgb};
-
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        let base_accent = app.theme_base.accent;
-        let url = MediaUrl::remote("https://example.com/c.jpg")?;
-        if let Some(song) = app.state.models.player.current.as_mut() {
-            song.cover_url = Some(url.clone());
-        }
-        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
-            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.resources.images.palettes.insert(url, palette);
-        app.sync_cover_palette();
-        for _ in 0..400 {
-            app.tick_cover_fades();
-        }
-        assert_ne!(app.theme.accent, base_accent, "前置:已染上封面色");
-
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "theme": { "dynamic": { "enabled": false } } } }),
-        )?);
-        assert_ne!(
-            app.theme.accent, base_accent,
-            "关闭那帧应从封面色渐变起步,不瞬跳"
-        );
-        for _ in 0..400 {
-            app.tick_cover_fades();
-        }
-        assert_eq!(app.theme.accent, base_accent, "关闭后应渐变回 base accent");
-        Ok(())
-    }
-
-    /// 动态 accent 渐变中热更 `fade_ms`:retempo 保相位,推送前后同一帧颜色不跳。
-    #[test]
-    fn pushed_config_accent_fade_retempo_preserves_phase() -> color_eyre::Result<()> {
-        use mineral_model::MediaUrl;
-
-        use crate::render::palette::{CoverPalette, Rgb};
-
-        let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
-        let url = MediaUrl::remote("https://example.com/c.jpg")?;
-        if let Some(song) = app.state.models.player.current.as_mut() {
-            song.cover_url = Some(url.clone());
-        }
-        let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(40, 40, 200)])
-            .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.resources.images.palettes.insert(url, palette);
-        app.sync_cover_palette();
-        for _ in 0..20 {
-            app.tick_cover_fades();
-        }
-        let mid = app.theme.accent;
-        assert_ne!(mid, app.theme_base.accent, "前置:渐变已起步");
-        // 6016ms / 16ms = 376 拍,恰为默认 3000ms(188 拍)的两倍:相位比例
-        // 可被整数精确保持,断言得以用严格相等(非倍数时长只有 ±1 字节级误差)。
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "theme": { "dynamic": { "fade_ms": 6016 } } } }),
-        )?);
-        assert_eq!(app.theme.accent, mid, "retempo 保相位,推送那帧颜色不跳");
         Ok(())
     }
 
@@ -857,67 +601,18 @@ mod tests {
         Ok(app)
     }
 
-    /// 用 1×1 铺场探针读氛围场的当前可见色(屏心一点,几何项不干扰)。
-    fn ambient_probe(app: &crate::app::App) -> color_eyre::Result<ratatui::style::Color> {
-        use ratatui::buffer::Buffer;
-        use ratatui::layout::Rect;
-
-        use crate::render::ambient;
-
-        let area = Rect::new(0, 0, 1, 1);
-        let mut buf = Buffer::empty(area);
-        let base = ambient::rgb_of(app.theme_base.base)
-            .ok_or_else(|| color_eyre::eyre::eyre!("默认主题应为真彩"))?;
-        ambient::render(
-            &mut buf,
-            area,
-            &app.ambient,
-            base,
-            app.state.cfg.tui().ambient(),
-            /*progress_permille*/ 1000,
-            /*pulse_permille*/ 0,
-            /*skip*/ None,
-        );
-        Ok(buf
-            .cell((0, 0))
-            .ok_or_else(|| color_eyre::eyre::eyre!("cell 越界"))?
-            .bg)
-    }
-
-    /// 氛围渐变中热更 `ambient.fade_ms`:retempo 保相位,推送前后同一帧场色不跳。
-    #[test]
-    fn pushed_config_ambient_fade_retempo_preserves_phase() -> color_eyre::Result<()> {
-        let mut app = app_with_synced_palette()?;
-        // 新时长取「当前拍数 × 2」折回毫秒:retempo 的整数缩放 frame×2N/N 恒整除,
-        // 相位比例作为有理数完全一致,断言得以用严格相等;默认 fade_ms 调整不破本测试。
-        let tick_ms = *app.state.cfg.tui().animation().frame_tick_ms();
-        let fade_ticks =
-            crate::render::anim::ticks32_from_ms(*app.state.cfg.tui().ambient().fade_ms(), tick_ms);
-        let doubled_ms = u64::from(fade_ticks) * 2 * tick_ms;
-        for _ in 0..20 {
-            app.tick_cover_fades();
-        }
-        let mid = ambient_probe(&app)?;
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "ambient": { "fade_ms": doubled_ms } } }),
-        )?);
-        assert_eq!(ambient_probe(&app)?, mid, "retempo 保相位,推送那帧场色不跳");
-        Ok(())
-    }
-
-    /// 响度包络热更 `frame_tick_ms`:retempo 只换时间基准——推送瞬间包络值不跳,
+    /// 响度包络热更 `frame_tick_ms`:retempo 只换时间基准——重载瞬间包络值不跳,
     /// 此后同样样本下新拍长(更长)单拍步进更大。
     #[test]
-    fn pushed_config_pulse_retempo_rescales_without_jump() -> color_eyre::Result<()> {
+    fn local_config_pulse_retempo_rescales_without_jump() -> color_eyre::Result<()> {
         let mut app = app_with_synced_palette()?;
         // punch 零 attack 一拍打满会掩盖主包络的步进差,关掉只看主包络。
         let pulse_tree = mineral_config::merge_tree(
-            mineral_config::default_tree()?,
-            serde_json::json!({ "tui": { "ambient": { "pulse": { "punch": { "gain": 0.0 } } } } }),
+            crate::config::default_tui_tree()?,
+            serde_json::json!({ "ambient": { "pulse": { "punch": { "gain": 0.0 } } }  }),
         );
-        let pulse_cfg = mineral_config::from_tree(&pulse_tree)
+        let pulse_cfg = crate::config::tui_from_tree(&pulse_tree)
             .map_err(|warning| color_eyre::eyre::eyre!("测试配置落型失败:{warning}"))?
-            .tui()
             .ambient()
             .pulse()
             .clone();
@@ -928,14 +623,14 @@ mod tests {
         }
         let stale = app.ambient_pulse.clone();
         let before = app.ambient_pulse.level_permille(&pulse_cfg);
-        let tick_ms = *app.state.cfg.tui().animation().frame_tick_ms();
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "animation": { "frame_tick_ms": tick_ms * 2 } } }),
+        let tick_ms = *app.state.cfg.animation().frame_tick_ms();
+        app.apply_config(local_config(
+            serde_json::json!({ "animation": { "frame_tick_ms": tick_ms * 2 }  }),
         )?);
         assert_eq!(
             app.ambient_pulse.level_permille(&pulse_cfg),
             before,
-            "推送瞬间包络不跳"
+            "重载瞬间包络不跳"
         );
         let mut doubled = app.ambient_pulse.clone();
         let mut old_tempo = stale;
@@ -950,10 +645,10 @@ mod tests {
         Ok(())
     }
 
-    /// 氛围热更关闭:已染上封面场后推送 `enabled = false`,渐变回底色场并静止
+    /// 氛围热更关闭:已染上封面场后重载 `enabled = false`,渐变回底色场并静止
     /// (不瞬跳、不残留封面色;静止后渲染方可整段跳过铺场)。
     #[test]
-    fn pushed_config_ambient_disabled_fades_out() -> color_eyre::Result<()> {
+    fn local_config_ambient_disabled_fades_out() -> color_eyre::Result<()> {
         let mut app = app_with_synced_palette()?;
         for _ in 0..400 {
             app.tick_cover_fades();
@@ -962,8 +657,8 @@ mod tests {
             !app.ambient.settled_at_base(),
             "前置:氛围场已静止在封面色板上"
         );
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "ambient": { "enabled": false } } }),
+        app.apply_config(local_config(
+            serde_json::json!({ "ambient": { "enabled": false }  }),
         )?);
         assert!(
             !app.ambient.settled_at_base(),
@@ -976,9 +671,9 @@ mod tests {
         Ok(())
     }
 
-    /// 在途切歌封面转场热更 `duration_ms`:retempo 保相位,推送前后同一帧进度不跳。
+    /// 在途切歌封面转场热更 `duration_ms`:retempo 保相位,重载前后同一帧进度不跳。
     #[test]
-    fn pushed_config_cover_transition_retempo_preserves_phase() -> color_eyre::Result<()> {
+    fn local_config_cover_transition_retempo_preserves_phase() -> color_eyre::Result<()> {
         use mineral_model::MediaUrl;
 
         use crate::render::anim::Transition;
@@ -996,8 +691,8 @@ mod tests {
             anim,
         });
         let before = anim.eased_in_out();
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "cover_transition": { "duration_ms": 1800 } } }),
+        app.apply_config(local_config(
+            serde_json::json!({ "cover_transition": { "duration_ms": 1800 }  }),
         )?);
         let active = app
             .state
@@ -1009,14 +704,14 @@ mod tests {
         assert_eq!(
             active.anim.eased_in_out(),
             before,
-            "retempo 保相位,推送那帧进度不跳"
+            "retempo 保相位,重载那帧进度不跳"
         );
         Ok(())
     }
 
     /// 封面缓存预算热更:缩到 0 立即逐出已缓存原图(不清表结构、派生物联动清理)。
     #[test]
-    fn pushed_config_shrinks_cover_budget_evicts() -> color_eyre::Result<()> {
+    fn local_config_shrinks_cover_budget_evicts() -> color_eyre::Result<()> {
         use std::sync::Arc;
 
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
@@ -1030,8 +725,8 @@ mod tests {
             .insert_test(&url, Arc::new(img));
         assert!(evicted.is_empty(), "预算内不逐出");
         assert_eq!(app.state.resources.images.cache.len(), 1, "前置:已缓存一张");
-        app.apply_pushed_config(pushed_tree(
-            serde_json::json!({ "tui": { "cover": { "cache": { "image": 0 } } } }),
+        app.apply_config(local_config(
+            serde_json::json!({ "cover": { "cache": { "image": 0 } }  }),
         )?);
         assert_eq!(
             app.state.resources.images.cache.len(),
@@ -1041,12 +736,12 @@ mod tests {
         Ok(())
     }
 
-    /// 启动期:config.lua 缺失 → init 提醒卡;文件存在 → 不弹;
+    /// 启动期:tui.lua 缺失 → init 提醒卡;文件存在 → 不弹;
     /// 启动降级告警 → 警告卡。
     #[test]
     fn startup_notifies_missing_config_and_warnings() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let missing = dir.path().join("config.lua");
+        let missing = dir.path().join("tui.lua");
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         app.notify_startup_config(Some(&missing), /*warnings*/ &[]);
         assert!(
@@ -1065,9 +760,9 @@ mod tests {
         // 真实坏配置产出的 warnings → 警告卡。
         std::fs::write(
             &missing,
-            r#"return { tui = { behavior = { volume_step = "loud" } } }"#,
+            r#"return { behavior = { volume_step = "loud" } }"#,
         )?;
-        let (_cfg, warnings) = mineral_config::load(&missing)?;
+        let (_cfg, warnings) = crate::config::load_tui(&missing)?;
         assert!(!warnings.is_empty(), "坏字段应产出 warning");
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
         app.notify_startup_config(Some(&missing), &warnings);

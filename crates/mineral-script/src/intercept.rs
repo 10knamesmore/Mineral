@@ -10,9 +10,10 @@ use std::sync::Arc;
 
 use mlua::Lua;
 
-use crate::dispatch::{lua_field, report_callback_failure, song_table};
+use crate::dispatch::{lua_field, report_callback_failure};
 use crate::hooks::{BeforeDownloadCtx, BeforeStreamCtx, HookDecision, HookKind};
 use crate::host::ScriptHost;
+use crate::projection::song_table;
 use crate::watchdog::{WatchdogConfig, call_guarded};
 
 /// 待补交的拦截回执槽:`Some` = 裁决未交(同步返回或 `ctx.resolve` 补交时 take),
@@ -120,13 +121,7 @@ fn run_hooks(
     build_ctx: impl Fn(&Lua, &PendingReply) -> mlua::Result<mlua::Table>,
 ) -> Option<HookDecision> {
     // 锁内只克隆 Arc 列表,锁外调回调(回调里再注册不撞锁)。
-    let callbacks = host
-        .events
-        .lock()
-        .hooks
-        .get(&kind)
-        .cloned()
-        .unwrap_or_default();
+    let callbacks = host.hooks.lock().get(&kind).cloned().unwrap_or_default();
     for key in &callbacks {
         let outcome = build_ctx(lua, pending).and_then(|args| {
             let func = lua.registry_value::<mlua::Function>(key)?;

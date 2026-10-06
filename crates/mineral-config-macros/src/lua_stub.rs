@@ -1,12 +1,12 @@
 //! LuaCATS stub 片段生成:把 schema struct / enum 的语法树渲染成
-//! `meta/config.lua` 里的 `---@class` / `---@alias` 文本。
+//! 宿主配置元数据里的 `---@class` / `---@alias` 文本。
 
 use syn::{Fields, GenericArgument, ItemStruct, PathArguments, Type};
 
 /// 把 Rust 字段类型映射为 LuaCATS 类型串。
 ///
 /// 规则:标量按固定表;`Option<T>` 剥壳(stub 字段本就全可选);`Vec<T>` 加 `[]`;
-/// `FxHashMap<String, T>` 走 `table<string, T>`;其余无泛型的路径类型按约定引用
+/// 字符串键 map 走 `table<string, T>`;其余无泛型的路径类型按约定引用
 /// `mineral.<Name>`(定义是否存在由拼装侧闭合性测试兜底)。
 ///
 /// # Params:
@@ -37,7 +37,7 @@ pub(crate) fn map_type(ty: &Type) -> syn::Result<String> {
         ("String" | "char" | "PathBuf", []) => Ok("string".to_owned()),
         ("Option", [inner]) => map_type(inner),
         ("Vec", [element]) => Ok(format!("{}[]", map_type(element)?)),
-        ("FxHashMap" | "HashMap", [key, value]) => {
+        ("FxHashMap" | "HashMap" | "BTreeMap", [key, value]) => {
             if map_type(key)? != "string" {
                 return Err(syn::Error::new_spanned(
                     key,
@@ -187,7 +187,7 @@ fn lua_type_override(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
 }
 
 /// struct 级 `#[lua_extra_field("名[?]", "类型", "描述")]` 声明的追加字段:
-/// Rust struct 上没有落点、但用户 config.lua 里真实存在的字段(落型前被摘走的
+/// Rust struct 上没有落点、但用户 Lua 配置里真实存在的字段(落型前被摘走的
 /// 函数字段)。名字尾缀 `?` 表示可选,原样进 `@field` 行。
 struct ExtraField {
     /// 字段名(可带 `?` 尾缀)。
@@ -503,6 +503,10 @@ mod tests {
             "table<string, mineral.KeyBinding>"
         );
         assert_eq!(mapped("FxHashMap<String, bool>")?, "table<string, boolean>");
+        assert_eq!(
+            mapped("BTreeMap<String, ColorRef>")?,
+            "table<string, mineral.ColorRef>"
+        );
         Ok(())
     }
 

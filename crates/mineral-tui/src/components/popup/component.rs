@@ -3,8 +3,8 @@
 //! chrome 提供居中布局与弹出动画；实现方声明外框、内容与边框绘制、按键响应。
 //! 浮层开合动画由 stack 托管 [`Transition`]；按键产出 [`OverlayAction`] 回传 App 执行。
 
+use crate::config::{MenuAlign, MenuReveal};
 use crossterm::event::KeyEvent;
-use mineral_config::{MenuAlign, MenuReveal};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -56,7 +56,7 @@ pub(crate) struct Chrome {
     /// `pct_*`/`min_*` 不参与;`None` 走居中 / dock。优先级高于 `dock`。
     pub(crate) anchor: Option<(Rect, Placement)>,
 
-    /// 锚定时交叉轴对齐覆盖:`None` 跟随全局 `tui.layout.menu_align`;`Some(_)` 强制本菜单对齐
+    /// 锚定时交叉轴对齐覆盖:`None` 跟随全局 `layout.menu_align`;`Some(_)` 强制本菜单对齐
     /// (chip 下拉贴 chip 左下展开,不吃全局 morph)。非锚定浮层忽略。
     pub(crate) align: Option<MenuAlign>,
 }
@@ -294,7 +294,7 @@ pub(crate) fn render_overlay<O: Overlay>(
 ) {
     let theme = env.frame.theme;
     let c = overlay.chrome();
-    let (base, dock) = full_rect(&c, area, env.frame.config.tui().layout(), env.dock_right);
+    let (base, dock) = full_rect(&c, area, env.frame.config.layout(), env.dock_right);
     if base.width < 4 || base.height < 3 {
         return;
     }
@@ -312,14 +312,13 @@ pub(crate) fn render_overlay<O: Overlay>(
         // 离屏渲染在此统一做(动画头几帧被几何 guard 跳过时白渲一次,面积小、可忽略)。
         let off = render_offscreen(base, overlay, focused, ctx, theme);
         match (c.anchor, dock) {
-            (Some((anchor, _)), _) => match env.frame.config.tui().animation().menu_reveal() {
+            (Some((anchor, _)), _) => match env.frame.config.animation().menu_reveal() {
                 // 形变盒用与终态同款的 block(accent 边框 + 标题),避免落定瞬间边框/标题跳变。
                 MenuReveal::Morph => {
                     let block = overlay.block(ctx, theme, focused);
                     draw_morph(frame, base, anchor, scale, &off, block);
                 }
-                // #[non_exhaustive]:新风格接线前按方向性揭开兜底。
-                MenuReveal::Directional | _ => {
+                MenuReveal::Directional => {
                     draw_anchored_reveal(frame, base, anchor, scale, &off, theme);
                 }
             },
@@ -333,7 +332,7 @@ pub(crate) fn render_overlay<O: Overlay>(
 pub(super) fn full_rect(
     c: &Chrome,
     area: Rect,
-    config: &mineral_config::LayoutConfig,
+    config: &crate::config::LayoutConfig,
     dock_right: bool,
 ) -> (Rect, Option<Dock>) {
     // anchor 模式(PopMenu)优先:不停靠、不居中,贴锚点放置。
@@ -373,7 +372,7 @@ fn render_offscreen<O: Overlay>(
     buf
 }
 
-/// 计算停靠浮层「完全展开」矩形:左右**同宽(配置 `tui.layout.dock_w_pct`)同高**
+/// 计算停靠浮层「完全展开」矩形:左右**同宽(配置 `layout.dock_w_pct`)同高**
 /// (从顶栏下顶对齐 + 满高),只在贴边侧不同 —— old layout 贴左、全屏贴右,
 /// 均避开另一侧的封面。
 fn dock_rect(area: Rect, dock: Dock, dock_w_pct: u16) -> Rect {
@@ -396,7 +395,7 @@ fn dock_rect(area: Rect, dock: Dock, dock_w_pct: u16) -> Rect {
 ///   - `ctx`: 只读后端态(全屏标志 + 停靠宽度配置)
 pub(crate) fn dock_full_rect(
     area: Rect,
-    config: &mineral_config::LayoutConfig,
+    config: &crate::config::LayoutConfig,
     dock_right: bool,
 ) -> Rect {
     let d = if dock_right { Dock::Right } else { Dock::Left };

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::config::CoverDecodePixelsConfig;
 use image::DynamicImage;
-use mineral_config::CoverDecodePixelsConfig;
 use mineral_model::{MediaUrl, SourceKind};
 use parking_lot::Mutex;
 
@@ -117,5 +117,5 @@ pub(crate) enum CoverCompletion {
     },
 }
 
-/// 完成 buffer 类型别名。worker 端 push、client tick 端 drain。
+/// 完成 buffer 类型别名。worker 端 push、TUI tick 端 drain。
 pub(super) type ReadyBuf = Arc<Mutex<Vec<CoverCompletion>>>;

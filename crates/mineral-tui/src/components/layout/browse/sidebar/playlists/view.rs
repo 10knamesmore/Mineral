@@ -99,7 +99,7 @@ impl PlaylistView<'_> {
     /// 深度搜索正在补齐的歌单数量。
     pub(super) fn indexing_count(&self) -> Option<usize> {
         let count = self.input.library.completing_playlists();
-        (*self.frame.config.tui().search().deep().enabled() && count > 0).then_some(count)
+        (*self.frame.config.search().deep().enabled() && count > 0).then_some(count)
     }
 
     /// 当前已经知道的歌单时长，未知曲目不加入合计。

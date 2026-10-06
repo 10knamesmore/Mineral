@@ -1,8 +1,8 @@
 //! 使用 CPU SIMD 采样封面，统一精确尺寸、等比适配、居中裁剪与透明补边。
 
+use crate::config::CoverCellFit;
 use fast_image_resize::{CropBox, FilterType, ResizeAlg, ResizeOptions, Resizer};
 use image::{DynamicImage, Rgba, RgbaImage};
-use mineral_config::CoverCellFit;
 
 use crate::image::key::PixelSize;
 

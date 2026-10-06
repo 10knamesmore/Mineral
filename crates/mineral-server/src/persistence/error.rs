@@ -106,20 +106,6 @@ pub enum Error {
         value_type: String,
     },
 
-    /// An increment targeted an existing non-integer value.
-    #[error("KV key {key} does not hold an integer")]
-    NotInteger {
-        /// KV key.
-        key: String,
-    },
-
-    /// A successful integer upsert did not return its value.
-    #[error("KV integer value missing for key {key}")]
-    MissingInteger {
-        /// KV key.
-        key: String,
-    },
-
     /// A rating exceeds the supported maximum.
     #[error("rating {rating} exceeds maximum {max}")]
     InvalidRating {

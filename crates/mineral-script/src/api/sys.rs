@@ -3,8 +3,8 @@
 //! 全部是**常量字段**(运行期不变,加载时灌一次):`os` / `arch` /
 //! `hostname` / `version` / `paths`。时间日期**不**在这里——Lua 标准库
 //! `os.date("*t")` / `os.time()` 已是实时 + 结构化,不做重复 API。
-//! 有意不给 `cwd`:daemon 的 cwd 取决于谁拉起它(终端 / systemd),
-//! 无稳定语义;文件操作用 `paths.*`,子进程工作目录用 `spawn` 的 `opts.cwd`。
+//! 信息来自实际安装模块的进程，daemon 与 TUI 分别安装。
+//! 不提供 `cwd`；文件操作使用 `paths.*`。
 
 use mlua::{Lua, Table};
 
@@ -12,7 +12,7 @@ use mlua::{Lua, Table};
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
+///   - `mineral`: daemon 或 TUI 的宿主模块表
 pub(crate) fn install(lua: &Lua, mineral: &Table) -> mlua::Result<()> {
     let sys = lua.create_table()?;
     // 应用展示名(外部上报 / User-Agent / 通知标题拼串用)。
@@ -24,9 +24,9 @@ pub(crate) fn install(lua: &Lua, mineral: &Table) -> mlua::Result<()> {
         sys.set("hostname", name.to_string_lossy())?;
     }
     let version = lua.create_table()?;
-    version.set("major", component(env!("CARGO_PKG_VERSION_MAJOR")))?;
-    version.set("minor", component(env!("CARGO_PKG_VERSION_MINOR")))?;
-    version.set("patch", component(env!("CARGO_PKG_VERSION_PATCH")))?;
+    version.set("major", component(env!("CARGO_PKG_VERSION_MAJOR"))?)?;
+    version.set("minor", component(env!("CARGO_PKG_VERSION_MINOR"))?)?;
+    version.set("patch", component(env!("CARGO_PKG_VERSION_PATCH"))?)?;
     // `v:str()` 拼回 "x.y.z"(日志 / toast 拼串用;编译期定值,直接闭包捕获)。
     version.set(
         "str",
@@ -73,9 +73,9 @@ fn set_path(
     }
 }
 
-/// 编译期版本号分量 → 整数(cargo 注入的合法数字串,解析失败兜 0 只是形式)。
-fn component(raw: &'static str) -> i64 {
-    raw.parse().unwrap_or(0)
+/// 将 Cargo 注入的版本号分量解析为 Lua 整数，保留解析错误。
+fn component(raw: &'static str) -> mlua::Result<i64> {
+    raw.parse().map_err(mlua::Error::external)
 }
 
 #[cfg(test)]
@@ -89,6 +89,7 @@ mod tests {
         let (lua, _host) = vm_with_host()?;
         let script = format!(
             r#"
+            local mineral = require("mineral.daemon")
             assert(mineral.sys.name == "Mineral", "应用名应为 Mineral")
             assert(mineral.sys.os == "{os}", "os 应为编译目标")
             assert(mineral.sys.arch == "{arch}", "arch 应为编译目标")
@@ -116,6 +117,7 @@ mod tests {
         let (lua, _host) = vm_with_host()?;
         let script = format!(
             r#"
+            local mineral = require("mineral.daemon")
             local p = mineral.sys.paths
             assert(p.config == "{config}", "config 路径不一致")
             assert(p.data == "{data}", "data 路径不一致")
@@ -128,34 +130,6 @@ mod tests {
             cache = mineral_paths::cache_dir()?.display(),
         );
         lua.load(&script).exec()?;
-        Ok(())
-    }
-
-    /// meta stub 必须声明 sys 的全部字段(编辑器侧补全的守卫)。
-    #[test]
-    fn meta_stub_declares_sys_fields() -> color_eyre::Result<()> {
-        use color_eyre::eyre::WrapErr;
-        let meta_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../mineral-config/src/lua/meta/mineral.lua"
-        );
-        let meta = std::fs::read_to_string(meta_path).wrap_err("read meta/mineral.lua")?;
-        for needle in [
-            "---@class mineral.sys",
-            "---@field name \"Mineral\"",
-            "---@field os \"linux\"|\"macos\"",
-            "---@field arch string",
-            "---@field hostname string",
-            "---@field version mineral.SysVersion",
-            "---@field paths mineral.SysPaths",
-            "---@class mineral.SysVersion",
-            "function SysVersion:str() end",
-            "---@class mineral.SysPaths",
-            "---@field config string",
-            "---@field socket string",
-        ] {
-            assert!(meta.contains(needle), "meta stub 缺少:`{needle}`");
-        }
         Ok(())
     }
 }

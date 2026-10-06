@@ -70,7 +70,7 @@ impl crate::app::App {
     pub(crate) fn tick_cover_fades(&mut self) {
         self.accent_fade.tick();
         self.theme = Arc::new(self.accent_fade.apply(self.theme_base));
-        let ambient_cfg = self.state.cfg.tui().ambient();
+        let ambient_cfg = self.state.cfg.ambient();
         let drift = ambient_cfg.drift();
         let drift_speed = if *drift.enabled() {
             *drift.speed()
@@ -92,7 +92,7 @@ impl crate::app::App {
         let Some(base) = crate::render::ambient::rgb_of(self.theme_base.base) else {
             return;
         };
-        let ambient_cfg = self.state.cfg.tui().ambient();
+        let ambient_cfg = self.state.cfg.ambient();
         let enabled = *ambient_cfg.enabled();
         self.ambient
             .set_target(palette.filter(|_| enabled), base, ambient_cfg.anchors());
@@ -100,6 +100,6 @@ impl crate::app::App {
 
     /// 动态主题开关(现读配置 `theme.dynamic.enabled`,热更下一次封面 diff 生效)。
     fn dynamic_accent_enabled(&self) -> bool {
-        *self.state.cfg.tui().theme().dynamic().enabled()
+        *self.state.cfg.theme().dynamic().enabled()
     }
 }

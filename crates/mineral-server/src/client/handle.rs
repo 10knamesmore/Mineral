@@ -126,82 +126,6 @@ impl ClientHandle {
             });
     }
 
-    /// 触发脚本具名动作并等待结果(serve 层处理 `InvokeAction` 用)。
-    ///
-    /// # Params:
-    ///   - `name`: 动作注册名
-    ///   - `ctx`: 按键瞬间的 client 上下文(无界面触发面为 `None`)
-    ///   - `args`: 调用位置实参(CLI 采集;无参触发为空)
-    ///
-    /// # Return:
-    ///   成功为 `Ok`;脚本未启用 / 未注册 / 执行失败为 `Err`。
-    pub(crate) async fn invoke_action_async(
-        &self,
-        name: &str,
-        ctx: Option<mineral_protocol::KeyContext>,
-        args: Vec<String>,
-    ) -> Result<(), crate::notify::ScriptError> {
-        let trigger = if ctx.is_some() {
-            mineral_stats::ActionTrigger::Tui
-        } else {
-            mineral_stats::ActionTrigger::Cli
-        };
-        let result = self.player.invoke_script_action(name, ctx, args).await;
-        self.record_behavior(mineral_stats::BehaviorEvent::ActionInvocation {
-            name: name.to_owned(),
-            trigger,
-            outcome: if result.is_ok() {
-                mineral_stats::OpOutcome::Ok
-            } else {
-                mineral_stats::OpOutcome::Failed
-            },
-        });
-        result
-    }
-
-    /// 渲染一个复制模板并等待结果(serve 层处理 `RenderCopyTemplate` 用)。
-    ///
-    /// # Params:
-    ///   - `index`: 模板下标(0-based,对位 config `copy.templates` 数组序)
-    ///   - `ctx`: 模板作用的实体
-    ///
-    /// # Return:
-    ///   `Ok(text)` = 剪贴板文本;`Err` = 脚本未启用、线程退出或回调失败。
-    pub(crate) async fn render_copy_template_async(
-        &self,
-        index: usize,
-        ctx: mineral_protocol::CopyTemplateCtx,
-    ) -> Result<String, crate::notify::ScriptError> {
-        // 埋点前先据 ctx 取类型 + 目标(ctx 随即被 render 移走)。
-        let (ctx_kind, target_ref) = match &ctx {
-            mineral_protocol::CopyTemplateCtx::Song(s) => {
-                (mineral_stats::CopyContext::Song, Some(s.id.qualified()))
-            }
-            mineral_protocol::CopyTemplateCtx::Playlist(p) => {
-                (mineral_stats::CopyContext::Playlist, Some(p.id.qualified()))
-            }
-            mineral_protocol::CopyTemplateCtx::Album(a) => {
-                (mineral_stats::CopyContext::Album, Some(a.id.qualified()))
-            }
-            mineral_protocol::CopyTemplateCtx::Artist(a) => {
-                (mineral_stats::CopyContext::Artist, Some(a.id.qualified()))
-            }
-        };
-        let result = self.player.render_copy_template(index, ctx).await;
-        // 埋点:文案渲染(copy_renders;user 发起)。Err = 模板缺失 / 渲染失败。
-        self.record_behavior(mineral_stats::BehaviorEvent::CopyRender {
-            template_index: i64::try_from(index).unwrap_or(i64::MAX),
-            ctx_kind,
-            target_ref,
-            outcome: if result.is_ok() {
-                mineral_stats::OpOutcome::Ok
-            } else {
-                mineral_stats::OpOutcome::Failed
-            },
-        });
-        result
-    }
-
     /// 队列编辑的完整入口(serve 层用)。
     ///
     /// [`QueueOp::ApplyTransform`] 要跨线程跑脚本、必须异步,其余操作同步落地。变换失败
@@ -214,7 +138,7 @@ impl ClientHandle {
     /// # Return:
     ///   本次编辑的结果。
     pub(crate) async fn queue_edit_async(&self, op: QueueOp) -> QueueEditOutcome {
-        let QueueOp::ApplyTransform { index, selected } = op else {
+        let QueueOp::ApplyTransform { name, selected } = op else {
             return self.queue_edit(&op);
         };
         let (queue, current) = self
@@ -223,13 +147,13 @@ impl ClientHandle {
         let after = queue.len();
         match self
             .player
-            .queue_transform(index, queue, current, selected)
+            .queue_transform(name.clone(), queue, current, selected)
             .await
         {
             Ok(ids) => {
                 let outcome = self.player.queue_reorder(&ids);
                 if matches!(outcome, QueueEditOutcome::Stale) {
-                    mineral_log::warn!(target: "script", index, "queue transform returned a song outside the queue");
+                    mineral_log::warn!(target: "script", name, "queue transform returned a song outside the queue");
                     self.player
                         .notify()
                         .failure(mineral_protocol::FailureNotice::QueueTransformInvalidSong);
@@ -244,7 +168,7 @@ impl ClientHandle {
                 outcome
             }
             Err(error) => {
-                mineral_log::warn!(target: "script", index, error = mineral_log::chain(&error), "queue transform failed, leaving the queue untouched");
+                mineral_log::warn!(target: "script", name, error = mineral_log::chain(&error), "queue transform failed, leaving the queue untouched");
                 self.player
                     .notify()
                     .failure(mineral_protocol::FailureNotice::QueueTransformFailed);
@@ -291,14 +215,9 @@ impl ClientHandle {
         Ok(())
     }
 
-    /// 当前有效配置(serve 层握手订阅 `Config` 时重放一帧)。
-    pub(crate) fn effective_config(&self) -> mineral_protocol::BusValue {
-        self.player.effective_config()
-    }
-
-    /// 当前窗口标题覆盖(serve 层握手订阅 `WindowTitle` 时重放;无覆盖不发)。
-    pub(crate) fn window_title_override(&self) -> Option<String> {
-        self.player.window_title_override()
+    /// 当前 daemon 服务能力，供查询与订阅重放使用。
+    pub(crate) fn service_info(&self) -> mineral_protocol::ServiceInfo {
+        self.player.service_info()
     }
 
     /// 按握手订阅集组装重放帧:各订阅类别的当前状态快照,先于实时流下发,
@@ -315,15 +234,10 @@ impl ClientHandle {
     ) -> Vec<Event> {
         use mineral_protocol::Subscription;
         let mut frames = Vec::new();
-        if subscriptions.contains(&Subscription::Config) {
-            frames.push(Event::ConfigChanged {
-                config: self.effective_config(),
+        if subscriptions.contains(&Subscription::ServiceInfo) {
+            frames.push(Event::ServiceInfoChanged {
+                info: self.service_info(),
             });
-        }
-        if subscriptions.contains(&Subscription::WindowTitle)
-            && let Some(text) = self.window_title_override()
-        {
-            frames.push(Event::WindowTitleOverride { text: Some(text) });
         }
         if subscriptions.contains(&Subscription::Task) {
             if let Some(playlists) = self.player.library().cached_snapshot() {
@@ -345,14 +259,6 @@ impl ClientHandle {
     /// `terminal` 属性回 None)。
     pub(crate) fn connection_closed(&self) {
         self.player.clear_terminal_state(self.conn);
-    }
-
-    /// 拉取脚本 bind 表(serve 层处理 `ScriptBinds` 用);无脚本 / 线程退出为空。
-    pub(crate) async fn script_binds_async(&self) -> Vec<mineral_protocol::ScriptBind> {
-        let Some(script) = self.player.script_sender() else {
-            return Vec::new();
-        };
-        script.script_binds().await.unwrap_or_default()
     }
 
     /// 查询一首歌的本地播放统计，转成 protocol DTO。

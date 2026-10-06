@@ -257,7 +257,8 @@ mod tests {
         use crate::image::ImageEngine;
 
         let theme = crate::test_support::default_theme()?;
-        let mut images = ImageEngine::disabled_kitty(Arc::new(mineral_config::Config::defaults()?));
+        let mut images =
+            ImageEngine::disabled_kitty(Arc::new(crate::config::TuiConfig::defaults()?));
         let url = MediaUrl::remote("https://example.com/morph-cover.png")?;
         images.insert_test_thumbnail(&url)?;
         let area = Rect::new(0, 0, 4, 1);

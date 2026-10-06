@@ -45,8 +45,8 @@ fn collect_cover_candidates(
     state: &AppState,
     queue_covers: Vec<(SourceKind, MediaUrl)>,
 ) -> Vec<(SourceKind, MediaUrl)> {
-    let radius = *state.cfg.tui().prefetch().radius();
-    let playback_radius = *state.cfg.tui().prefetch().playback_cover_radius();
+    let radius = *state.cfg.prefetch().radius();
+    let playback_radius = *state.cfg.prefetch().playback_cover_radius();
     let mut out = Vec::<(SourceKind, MediaUrl)>::new();
     let push_if_new = |item: Option<(SourceKind, &MediaUrl)>,
                        out: &mut Vec<(SourceKind, MediaUrl)>| {
@@ -148,7 +148,7 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
 /// - 前后邻居:切歌转场要两图都已解码才开(`ImageEngine::sync_transition`),邻居封面只有提前
 ///   解码才赶得上;不等全屏稳态帧、任何视图都跑,否则刚启动 / 刚进全屏按 `n` / `p` 只能瞬切。
 fn request_playback_cover_decodes(state: &mut AppState) {
-    let ahead = *state.cfg.tui().prefetch().prewarm_ahead();
+    let ahead = *state.cfg.prefetch().prewarm_ahead();
     let mut covers = Vec::<(SourceKind, MediaUrl)>::new();
     if let Some((source, url)) = state.models.playback.track.as_ref().and_then(song_cover) {
         covers.push((source, url.clone()));
@@ -190,7 +190,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
                 .saturating_sub(1)
                 .saturating_sub(state.ui.browse.tracks.scroll().sel());
             if visible.is_empty()
-                || rows_to_bottom > usize::from(*state.cfg.tui().behavior().search_prefetch_rows())
+                || rows_to_bottom > usize::from(*state.cfg.behavior().search_prefetch_rows())
             {
                 return;
             }
@@ -243,9 +243,8 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
 ///
 /// 本地统计无需为 API 限流，选中后立即查询，不与 remote detail 共用驻留防抖。
 /// 成功值跨 selection 命中 cache；失败结果只在当前 selection 内抑制逐 tick 重试，离开
-/// 后再选中会重查。`stats.level = off` 或 source 被 `exclude_sources` 排除时不查询，字段
-/// 始终缺失。
-fn request_play_count(state: &mut AppState, client: &dyn Backend) {
+/// 后再选中会重查。Daemon 未提供统计或排除了该 source 时不查询，字段始终缺失。
+pub(crate) fn request_play_count(state: &mut AppState, client: &dyn Backend) {
     if state.ui.browse.view != View::Library {
         state.models.library.local_play_counts.leave_selection();
         return;
@@ -275,7 +274,7 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
         return;
     }
     let debounce =
-        std::time::Duration::from_millis(*state.cfg.tui().search().channel().detail_debounce_ms());
+        std::time::Duration::from_millis(*state.cfg.search().channel().detail_debounce_ms());
     if state.ui.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
@@ -331,7 +330,7 @@ fn collect_detail_cover_candidates(
         return Vec::new();
     }
     let debounce =
-        std::time::Duration::from_millis(*state.cfg.tui().search().channel().detail_debounce_ms());
+        std::time::Duration::from_millis(*state.cfg.search().channel().detail_debounce_ms());
     if state.ui.channel_search.last_sel_change.elapsed() < debounce {
         return Vec::new();
     }
@@ -344,7 +343,7 @@ fn collect_detail_cover_candidates(
         return Vec::new();
     };
     let radius = match protocol {
-        GraphicsProtocol::Kitty => *state.cfg.tui().prefetch().radius(),
+        GraphicsProtocol::Kitty => *state.cfg.prefetch().radius(),
         _ if frame.selected_cover().is_some() => 0,
         _ => return Vec::new(),
     };
@@ -416,7 +415,7 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
 
 /// sel 周围 `prefetch.radius` 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。
 fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
-    let radius = *state.cfg.tui().prefetch().radius();
+    let radius = *state.cfg.prefetch().radius();
     let filtered = state.filtered_playlists();
     let sel = state.ui.browse.playlists.scroll().sel();
     let mut out = Vec::new();
@@ -683,11 +682,11 @@ mod tests {
         assert_eq!(overlays.active_queue_cursor(&state), Some(2));
         for (radius, indices) in [(0, vec![2, 0]), (1, vec![2, 0, 4]), (0, vec![2, 0])] {
             let tree = mineral_config::merge_tree(
-                mineral_config::default_tree()?,
-                serde_json::json!({"tui": {"prefetch": {"radius": radius, "playback_cover_radius": 0}}}),
+                crate::config::default_tui_tree()?,
+                serde_json::json!({"prefetch": {"radius": radius, "playback_cover_radius": 0}}),
             );
             state.cfg = Arc::new(
-                mineral_config::from_tree(&tree)
+                crate::config::tui_from_tree(&tree)
                     .map_err(|warning| color_eyre::eyre::eyre!("预取配置无效: {warning}"))?,
             );
             let expected = indices
@@ -723,9 +722,10 @@ mod tests {
             .any(|(_, u)| *u == want))
     }
 
-    /// 造一个 Library 刚选中 Bilibili 曲目的状态。
+    /// 造一个 daemon 统计已启用、Library 刚选中 Bilibili 曲目的状态。
     fn selected_bilibili_state() -> color_eyre::Result<AppState> {
         let mut state = state_with_mixed_tracks()?;
+        state.models.service_info.play_counts.enabled = true;
         state.ui.browse.tracks.select(1);
         state.ui.browse.nav.last_sel_change = Instant::now();
         Ok(state)
@@ -866,18 +866,11 @@ mod tests {
         Ok(())
     }
 
-    /// stats.level=off 时不查询、不缓存，Selected 的本地播放次数字段保持缺失。
+    /// Daemon 未提供统计时不查询、不缓存，Selected 的本地播放次数字段保持缺失。
     #[test]
-    fn selected_play_count_stays_empty_when_stats_are_off() -> color_eyre::Result<()> {
+    fn selected_play_count_stays_empty_when_unavailable() -> color_eyre::Result<()> {
         let mut state = selected_bilibili_state()?;
-        let tree = mineral_config::merge_tree(
-            mineral_config::default_tree()?,
-            serde_json::json!({ "stats": { "level": "off" } }),
-        );
-        state.cfg = Arc::new(
-            mineral_config::from_tree(&tree)
-                .map_err(|warning| color_eyre::eyre::eyre!("stats off 配置应合法: {warning}"))?,
-        );
+        state.models.service_info.play_counts.enabled = false;
         let queries = Arc::new(Mutex::new(Vec::new()));
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let client = TestClient {
@@ -969,8 +962,8 @@ mod tests {
         .save(&path)?;
         let url = MediaUrl::local(path);
 
-        let cfg = Arc::new(mineral_config::Config::defaults()?);
-        let fetcher = CoverFetcher::spawn(cfg.tui().cover().clone(), /*capacity*/ 0, None).await?;
+        let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+        let fetcher = CoverFetcher::spawn(cfg.cover().clone(), /*capacity*/ 0, None).await?;
         let mut state = AppState::test_default()?;
         state.cfg = Arc::clone(&cfg);
         state.resources.images =
@@ -1199,12 +1192,12 @@ mod tests {
     ///
     /// # Params:
     ///   - `radius`: 选中行上下各自允许预取的行数
-    fn prefetch_radius_config(radius: usize) -> color_eyre::Result<Arc<mineral_config::Config>> {
+    fn prefetch_radius_config(radius: usize) -> color_eyre::Result<Arc<crate::config::TuiConfig>> {
         let tree = mineral_config::merge_tree(
-            mineral_config::default_tree()?,
-            serde_json::json!({ "tui": { "prefetch": { "radius": radius } } }),
+            crate::config::default_tui_tree()?,
+            serde_json::json!({ "prefetch": { "radius": radius }  }),
         );
-        Ok(Arc::new(mineral_config::from_tree(&tree).map_err(
+        Ok(Arc::new(crate::config::tui_from_tree(&tree).map_err(
             |warning| color_eyre::eyre::eyre!("预取半径配置应合法: {warning}"),
         )?))
     }

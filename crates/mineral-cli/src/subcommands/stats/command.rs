@@ -158,9 +158,8 @@ fn now_ms() -> Result<i64> {
 ///
 /// # Return:
 ///   装配好的查询期口径
-fn report_options(top_override: Option<u32>) -> Result<ReportOptions> {
-    let (config, _warnings) =
-        mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
+async fn report_options(top_override: Option<u32>) -> Result<ReportOptions> {
+    let (config, _warnings) = crate::subcommands::config::load_daemon().await?;
     let report = config.stats().report();
     let min_listen_ms = i64::try_from(*report.min_listen_secs())
         .map_err(|source| Error::NumberOverflow {
@@ -192,7 +191,7 @@ async fn report(window: &Window, top: Option<u32>, format: Format) -> Result<()>
     let now = now_ms()?;
     let range = window.range(WindowDefault::CurrentYear, now)?;
     let label = window.label(WindowDefault::CurrentYear, now)?;
-    let opts = report_options(top)?;
+    let opts = report_options(top).await?;
     let sr = assemble::stats_report(&store, range, &opts).await?;
     let color = std::io::stdout().is_terminal();
     let out = match format {
@@ -222,7 +221,7 @@ async fn top(
     }
     let store = StatsStore::open(&db_path).await?;
     let range = window.range(WindowDefault::All, now_ms()?)?;
-    let opts = report_options(limit)?;
+    let opts = report_options(limit).await?;
     let entries = assemble::top_entries(&store, category, range, by.into(), &opts).await?;
     let color = std::io::stdout().is_terminal();
     let out = match format {
@@ -267,17 +266,17 @@ async fn status(format: Format) -> Result<()> {
         println!("{}", render::render_absent());
         return Ok(());
     }
-    // 离线自 eval 配置取当前 level(与 daemon 同一真相源);坏配置已在 loader 降级默认。
-    let (config, _warnings) =
-        mineral_config::load(&mineral_paths::config_dir()?.join("config.lua"))?;
+    // 离线加载 daemon 采集策略，不执行 setup。
+    let (config, _warnings) = crate::subcommands::config::load_daemon().await?;
     let level = match config.stats().level() {
-        mineral_config::StatsLevel::Off => "off",
-        mineral_config::StatsLevel::Core => "core",
-        mineral_config::StatsLevel::Full => "full",
+        mineral_server::config::StatsLevel::Off => "off",
+        mineral_server::config::StatsLevel::Core => "core",
+        mineral_server::config::StatsLevel::Full => "full",
     };
     let store = StatsStore::open(&db_path).await?;
     let report = store.status().await?;
-    let size = std::fs::metadata(&db_path)
+    let size = tokio::fs::metadata(&db_path)
+        .await
         .map_err(|source| Error::Io {
             operation: "read stats database metadata",
             path: db_path.clone(),

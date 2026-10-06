@@ -25,7 +25,7 @@ pub const ENVELOPE_VERSION: u16 = 3;
 
 /// 包络计算参数(配置 `audio.envelope` 的切片,daemon 启动时派生)。
 ///
-/// 默认值(在 `default.lua`)即 BS.1770 规范参数。私有字段 + builder 构造 +
+/// 默认值(在 `daemon-default.lua`)即 BS.1770 规范参数。私有字段 + builder 构造 +
 /// getter 读取(对外配置 struct 约定)。
 #[non_exhaustive]
 #[derive(Clone, Debug, typed_builder::TypedBuilder, derive_getters::Getters)]
@@ -385,7 +385,7 @@ mod tests {
         NonZeroU32::new(hz).ok_or_else(|| color_eyre::eyre::eyre!("sample_rate 不能为 0"))
     }
 
-    /// 测试用计算参数(default.lua 同款默认值,点数可指定)。
+    /// 测试用计算参数(daemon-default.lua 同款默认值,点数可指定)。
     fn params(point_count: NonZeroUsize) -> super::EnvelopeParams {
         super::EnvelopeParams::builder()
             .point_count(point_count)
@@ -396,7 +396,7 @@ mod tests {
             .build()
     }
 
-    /// BS.1770 高频搁架模拟原型参数(default.lua 同款默认值)。
+    /// BS.1770 高频搁架模拟原型参数(daemon-default.lua 同款默认值)。
     fn shelf_params() -> super::ShelfParams {
         super::ShelfParams::builder()
             .f0_hz(1_681.974_450_955_533)
@@ -406,7 +406,7 @@ mod tests {
             .build()
     }
 
-    /// BS.1770 RLB 高通模拟原型参数(default.lua 同款默认值)。
+    /// BS.1770 RLB 高通模拟原型参数(daemon-default.lua 同款默认值)。
     fn highpass_params() -> super::HighpassParams {
         super::HighpassParams::builder()
             .f0_hz(38.135_470_876_024_44)

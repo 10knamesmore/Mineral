@@ -85,7 +85,7 @@ async fn local_hit_computes_and_pushes_envelope() -> color_eyre::Result<()> {
     assert_eq!(id, s.id);
     assert_eq!(
         envelope.points.len(),
-        *mineral_config::Config::defaults()?
+        *crate::config::DaemonConfig::defaults()?
             .audio()
             .envelope()
             .points(),

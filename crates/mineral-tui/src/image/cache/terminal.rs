@@ -322,7 +322,7 @@ mod tests {
             &TerminalImageKey::rasterized(
                 ImageIdentity::Url(url.clone()),
                 PixelSize::from_cells(dims, (1, 1)),
-                mineral_config::CoverCellFit::Contain,
+                crate::config::CoverCellFit::Contain,
             ),
             protocol,
             bytes,
@@ -334,7 +334,7 @@ mod tests {
         cache.contains(&TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells(dims, (1, 1)),
-            mineral_config::CoverCellFit::Contain,
+            crate::config::CoverCellFit::Contain,
         ))
     }
 
@@ -348,7 +348,7 @@ mod tests {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells(dims, (1, 1)),
-            mineral_config::CoverCellFit::Contain,
+            crate::config::CoverCellFit::Contain,
         );
         cache.observe(&key);
         cache.render_if_ready(&key, render)

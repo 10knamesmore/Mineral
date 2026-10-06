@@ -1,7 +1,7 @@
 //! 图片引擎缓存的终端图片成品抽象。
 
+use crate::config::CoverCellFit;
 use image::DynamicImage;
-use mineral_config::CoverCellFit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -213,8 +213,8 @@ fn raster_pixels(pixels: Option<PixelSize>) -> Result<PixelSize, Error> {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::CoverCellFit;
     use image::{DynamicImage, Rgb, RgbImage};
-    use mineral_config::CoverCellFit;
     use ratatui::{buffer::Buffer, layout::Rect};
 
     use super::TerminalImage;

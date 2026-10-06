@@ -87,7 +87,7 @@ pub enum SubscriptionTopic {
     /// PCM 样本流:有界推送,带播放代次与缺口标记。
     Pcm,
 
-    /// 事件类别(Toast / Lifecycle / Config / WindowTitle / Task / Bus / Property)。
+    /// 事件类别(Toast / Lifecycle / ServiceInfo / Task / Property)。
     Events(Subscription),
 }
 

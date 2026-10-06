@@ -1,10 +1,10 @@
 //! 使用 `icy_sixel` 编码并放置 Sixel 图片。
 
+use crate::config::CoverCellFit;
 use icy_sixel::{
     DiffusionMethod, MethodForLargest, MethodForRep, PixelFormat, Quality, SixelError, sixel_string,
 };
 use image::DynamicImage;
-use mineral_config::CoverCellFit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

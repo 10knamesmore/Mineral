@@ -1,19 +1,13 @@
-//! Mineral 用户配置(Lua):强类型 [`Config`] 的单一真相源。
+//! daemon 与 TUI 共用的 Lua 配置机械能力。
 //!
-//! 内置 `default.lua` 经 `include_str!` 编入二进制,启动期与用户 `config.lua` 深合并后
-//! 整表落成 [`Config`]。声明面(主题 / 键位 / 音频 / 缓存等)经 getter 读取;事件 hooks
-//! 等可编程层的 host API 在此只有 no-op stub([`inject_noop_host`]),活实现由 daemon
-//! 脚本运行时注入。键字符串与语义键的统一表示见 [`keys`]。
+//! 宿主提供默认源码、schema 与回调摘取函数;本 crate 只负责求值、
+//! 深合并、数据落型、字段诊断和资产写出,不持有业务配置或宿主目录布局。
 
-pub mod keys;
-
-mod check;
+pub mod de;
 mod init;
 mod loader;
-mod lua_stub;
-mod schema;
 
-/// 配置资产写入或内置默认配置加载失败。
+/// 配置资产写入、Lua 求值或配置落型失败。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// 初始化配置目录或写入配置文件失败。
@@ -42,9 +36,17 @@ pub enum Error {
     },
 
     /// 内置默认表无法落成配置,属于程序包错误。
-    #[error("default.lua 无法落成 Config")]
+    #[error("内置默认配置无法落型")]
     DefaultConfig {
         /// 配置字段和分类。
+        #[source]
+        warning: ConfigWarning,
+    },
+
+    /// 源码求值后的配置无法序列化或落型;不返回部分成功产物。
+    #[error("配置无效")]
+    InvalidConfig {
+        /// 配置转换或落型失败的诊断。
         #[source]
         warning: ConfigWarning,
     },
@@ -64,10 +66,8 @@ impl From<mlua::Error> for Error {
     }
 }
 
-pub use check::render_check;
-pub use init::{InitOutcome, run_init};
+pub use init::{InitOutcome, create_dir, overwrite, recreate_dir, write_if_absent};
 pub use loader::{
-    ConfigWarning, DaemonLoad, default_tree, from_tree, inject_noop_host, load, load_with_vm,
-    merge_tree, nest_path,
+    ConfigWarning, FileLoad, defaults, deserialize_tree, extract_setup, from_source, load_file,
+    merge_tree, nest_path, table_path,
 };
-pub use schema::*;

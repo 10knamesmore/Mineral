@@ -203,7 +203,7 @@ impl Overlay for DownloadOverlay {
         self.list
             .dependencies(inputs, ctx.downloads.len(), viewport);
         self.title
-            .dependencies(inputs, env.config.tui().animation(), env.now);
+            .dependencies(inputs, env.config.animation(), env.now);
     }
 
     type Input<'a> = DownloadInput<'a>;
@@ -290,7 +290,7 @@ impl Overlay for DownloadOverlay {
             .unwrap_or_default();
         let marquee_ctx = MarqueeCtx::new(
             &self.title,
-            ctx.cfg.tui().animation(),
+            ctx.cfg.animation(),
             ctx.frame_now,
             theme,
             theme.surface0,
@@ -334,8 +334,7 @@ impl Overlay for DownloadOverlay {
                 Some(OverlayResponse::Consumed)
             }
             Action::Scroll(step) => {
-                let delta =
-                    crate::runtime::scroll::viewport::step_delta(step, ctx.cfg.tui().behavior());
+                let delta = crate::runtime::scroll::viewport::step_delta(step, ctx.cfg.behavior());
                 self.list
                     .page(delta, ctx.downloads.len(), ctx.list_glide_ticks());
                 Some(OverlayResponse::Consumed)
@@ -374,8 +373,7 @@ impl Overlay for DownloadOverlay {
             | Action::NextSong
             | Action::DismissNotice
             | Action::OpenAudioSettings
-            | Action::OpenHelp
-            | Action::InvokeScript(_) => None,
+            | Action::OpenHelp => None,
         }
     }
 }

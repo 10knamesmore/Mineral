@@ -2,8 +2,9 @@
 
 /// `BilibiliChannel` 的构造参数。私有字段 + builder 构造 + getter 读取。
 ///
-/// **所有字段必填,本类型不携带默认值**:默认值的唯一真相源是 mineral-config 的
-/// `default.lua`(`sources.bilibili` 段),由消费侧(`mineral` 启动链 / CLI)映射传入,
+/// **所有字段必填,本类型不携带默认值**:默认值的唯一来源是
+/// `crates/mineral-server/src/config/lua/daemon-default.lua` 的 `sources.bilibili` 段,
+/// 由消费侧(`mineral` 启动链 / CLI)映射传入,
 /// 避免两处默认漂移。
 #[non_exhaustive]
 #[derive(Clone, Debug, typed_builder::TypedBuilder, derive_getters::Getters)]

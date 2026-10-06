@@ -66,7 +66,7 @@ pub(crate) fn draw(
                 src.label(),
                 Style::new().fg(crate::render::theme::resolve_source_color(
                     theme,
-                    state.frame.config.sources(),
+                    state.frame.config.source_colors(),
                     src,
                 )),
             ),

@@ -24,22 +24,20 @@ use tokio::time::timeout;
 /// 订阅推送 / 命令收敛的通用等待上限。
 const WAIT: Duration = Duration::from_secs(10);
 
-/// 预埋配置:一个唯一 label、一组同名 label 与一条反转变换(用来看队列真的被改了)。
-const CONFIG_WITH_TRANSFORMS: &str = r#"
+/// 具名队列操作:反转、拒绝外来歌曲与按选中位置保留一首。
+const DAEMON_WITH_TRANSFORMS: &str = r#"
 return {
   queue = {
     transforms = {
-      { label = "reverse", transform = function(queue)
+      { name = "Reverse queue", transform = function(queue)
           local out = {}
           for i = #queue, 1, -1 do out[#out + 1] = queue[i] end
           return out
         end },
-      { label = "dup", transform = function(queue) return queue end },
-      { label = "dup", transform = function(queue) return queue end },
-      { label = "bogus", transform = function(queue)
+      { name = "Foreign song", transform = function(queue)
           return { { id = "netease:not-in-queue" } }
         end },
-      { label = "keep-selected", transform = function(queue, ctx)
+      { name = "Keep selected", transform = function(queue, ctx)
           if not ctx.selected then return queue end
           return { queue[ctx.selected] }
         end },
@@ -117,12 +115,12 @@ struct Harness {
 }
 
 impl Harness {
-    /// 起一个隔离环境、null 音频后端的 daemon;`config_lua` 为 `Some` 时预埋。
+    /// 起一个隔离环境、null 音频后端的 daemon;可预埋 daemon.lua。
     ///
     /// # Params:
-    ///   - `tag`: 临时目录名里的测试标识
-    ///   - `config_lua`: 预埋的用户 config.lua
-    fn spawn(tag: &str, config_lua: Option<&str>) -> color_eyre::Result<Self> {
+    ///   - `tag`: 临时目录名里的测试标识。
+    ///   - `daemon_lua`: 返回 daemon 配置与可选 setup 回调的用户文件。
+    fn spawn(tag: &str, daemon_lua: Option<&str>) -> color_eyre::Result<Self> {
         let root = std::env::temp_dir().join(format!(
             "mineral-ctl-e2e-{}-{}-{}",
             tag,
@@ -132,10 +130,10 @@ impl Harness {
         let sock_dir =
             std::env::temp_dir().join(format!("mnlc-{}-{}", std::process::id(), unique_suffix()));
         std::fs::create_dir_all(&root).wrap_err("create isolated root dir")?;
-        if let Some(src) = config_lua {
+        if let Some(src) = daemon_lua {
             let cfg_dir = root.join("config/mineral");
             std::fs::create_dir_all(&cfg_dir).wrap_err("create config dir")?;
-            std::fs::write(cfg_dir.join("config.lua"), src).wrap_err("seed config.lua")?;
+            std::fs::write(cfg_dir.join("daemon.lua"), src).wrap_err("seed daemon.lua")?;
         }
         let child = spawn_daemon(&root, &sock_dir)?;
         let socket = sock_dir.join("mineral.sock");
@@ -404,10 +402,10 @@ async fn mirror_backed_commands() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 队列命令:唯一 label 的变换真的改到队列、可撤销;同名 / 未注册明确失败且不动队列。
+/// 队列命令按稳定操作名提交并可撤销;外来歌曲与未注册操作被拒绝且不动队列。
 #[tokio::test(flavor = "multi_thread")]
 async fn queue_commands() -> color_eyre::Result<()> {
-    let h = Harness::spawn("queue", Some(CONFIG_WITH_TRANSFORMS))?;
+    let h = Harness::spawn("queue", Some(DAEMON_WITH_TRANSFORMS))?;
     h.wait_ready()?;
     let client = h.connect("ctl-queue").await?;
     client.subscribe(SubscriptionTopic::Player);
@@ -415,8 +413,8 @@ async fn queue_commands() -> color_eyre::Result<()> {
     start_queue(&client).await?;
     let original = queue_ids(&client);
 
-    // 唯一 label:队列真的被反转,结论 applied。
-    let run = h.ctl(&["--json", "queue", "transform", "reverse"])?;
+    // 同一名称既是操作标识,也是用户在菜单中看到的名称。
+    let run = h.ctl(&["--json", "queue", "transform", "Reverse queue"])?;
     assert_eq!(run.status.code(), Some(0), "stderr={}", run.stderr);
     let json = run.json()?;
     assert_eq!(field(&json, "command")?, "queue transform");
@@ -438,7 +436,7 @@ async fn queue_commands() -> color_eyre::Result<()> {
     assert_eq!(field(&json, "reason")?, "no-change");
 
     // `--at` 落到脚本的 `ctx.selected`(wire 0-based → Lua 1-based):保留第三首。
-    let run = h.ctl(&["--json", "queue", "transform", "keep-selected", "--at", "2"])?;
+    let run = h.ctl(&["--json", "queue", "transform", "Keep selected", "--at", "2"])?;
     assert_eq!(run.status.code(), Some(0), "stderr={}", run.stderr);
     assert_eq!(field(&run.json()?, "outcome")?, "applied");
     let expected = original
@@ -451,15 +449,12 @@ async fn queue_commands() -> color_eyre::Result<()> {
     wait_until("撤销回原序", || queue_ids(&client) == original).await?;
 
     // 变换返回队列外的 id:daemon 拒整次变换,CLI 报 failed(stale) 且队列不动。
-    let run = h.ctl(&["--json", "queue", "transform", "bogus"])?;
+    let run = h.ctl(&["--json", "queue", "transform", "Foreign song"])?;
     assert_eq!(run.status.code(), Some(1), "stderr={}", run.stderr);
     assert_eq!(field(&run.json()?, "kind")?, "stale");
     assert_eq!(queue_ids(&client), original, "stale 不该动队列");
 
-    // 同名 label → ambiguous;未注册 → unknown;两者都被拒且不动队列。
-    let run = h.ctl(&["--json", "queue", "transform", "dup"])?;
-    assert_eq!(run.status.code(), Some(1), "stderr={}", run.stderr);
-    assert_eq!(field(&run.json()?, "kind")?, "ambiguous-transform");
+    // 未注册操作被拒;操作名不通过数组下标解析。
     let run = h.ctl(&["--json", "queue", "transform", "nope"])?;
     assert_eq!(run.status.code(), Some(1), "stderr={}", run.stderr);
     assert_eq!(field(&run.json()?, "kind")?, "unknown-transform");

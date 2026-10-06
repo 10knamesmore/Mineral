@@ -78,7 +78,7 @@ pub(crate) fn restore<K: Clone + Eq + std::hash::Hash>(
     expansion: &mut ListExpansionState<K>,
     index: Option<usize>,
     order: impl Iterator<Item = (K, usize)>,
-    animation: &mineral_config::AnimationConfig,
+    animation: &crate::config::AnimationConfig,
 ) {
     let previous_selection = scroll.sel();
     let screen_row = previous_selection.saturating_sub(scroll.scroll_target());

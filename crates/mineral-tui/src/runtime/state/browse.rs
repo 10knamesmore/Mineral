@@ -3,7 +3,7 @@
 //! 与模型数据(library / caps / player)分离——模型留在外层聚合态,Browse 决策时按需借入。
 //! 全屏与 `/` 过滤都是这一页的内部子模式(同一套导航面),不另起独立页。
 
-use mineral_config::{AnimationConfig, TrailTimingConfig};
+use crate::config::{AnimationConfig, TrailTimingConfig};
 use mineral_model::{PlaylistId, Song};
 
 use crate::render::anim::{Toggle, TrailLeg, TrailingToggle, ticks16_from_ms};
@@ -28,7 +28,7 @@ pub(crate) struct BrowseModel<'a> {
     pub library: &'a LibraryData,
 
     /// 全局配置(深度搜索权重 / 开关)。
-    pub cfg: &'a mineral_config::Config,
+    pub cfg: &'a crate::config::TuiConfig,
 }
 
 /// Library 起播边界的 Song projection 与 exact target coordinate。
@@ -258,13 +258,7 @@ impl BrowsePage {
         let filtered = self.filtered_tracks(model);
         let filtered_target = self.tracks.scroll().sel();
         let selected_index = filtered.get(filtered_target)?.data.index;
-        if model
-            .cfg
-            .tui()
-            .behavior()
-            .filter_play_scope()
-            .matches_only()
-        {
+        if model.cfg.behavior().filter_play_scope().matches_only() {
             Some(LibraryQueueProjection {
                 songs: filtered
                     .iter()

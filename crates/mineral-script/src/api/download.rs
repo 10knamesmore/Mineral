@@ -10,7 +10,7 @@ use crate::message::ScriptCmd;
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
+///   - `mineral`: `mineral.daemon` 模块表
 ///   - `host`: 宿主句柄(闭包捕获其命令出口)
 pub(crate) fn install(lua: &Lua, mineral: &Table, host: &ScriptHost) -> mlua::Result<()> {
     let commands = host.commands.clone();

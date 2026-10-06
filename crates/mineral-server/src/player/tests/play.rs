@@ -25,7 +25,7 @@ use crate::media_cache::MediaCache;
 async fn play_records_to_stats_db() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -69,7 +69,7 @@ async fn play_records_to_stats_db() -> color_eyre::Result<()> {
 async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -144,7 +144,7 @@ async fn insert_next_override_does_not_pollute_queue_context() -> color_eyre::Re
 async fn direct_play_settles_interrupted_song() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -341,7 +341,7 @@ async fn stale_url_failure_does_not_notify() -> color_eyre::Result<()> {
 async fn url_resolution_error_records_to_stats_db() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -388,7 +388,7 @@ async fn url_resolution_error_records_to_stats_db() -> color_eyre::Result<()> {
 async fn prefetch_resolve_failure_records_failed() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),
@@ -438,7 +438,7 @@ async fn lyrics_fetch_records_to_stats_db() -> color_eyre::Result<()> {
     use mineral_task::{ChannelFetchKind, Priority, TaskKind};
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let channels: Vec<Arc<dyn MusicChannel>> = vec![Arc::new(RecordingChannel {
         calls: Arc::default(),

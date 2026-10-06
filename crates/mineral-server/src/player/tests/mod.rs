@@ -7,6 +7,7 @@ mod hooks;
 mod library;
 mod play;
 mod queue;
+mod services;
 mod session;
 mod ui;
 mod waiting;

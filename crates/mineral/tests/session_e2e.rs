@@ -1,5 +1,5 @@
 //! 会话协议进程级 e2e:真 `mineral serve` 子进程 + 真 `mineral_client::Client`,
-//! 验证操作提交顺序、查询归属、订阅推送与配置热更在完整链路上的行为。
+//! 验证操作提交顺序、查询归属、订阅推送与 daemon 能力热更在完整链路上的行为。
 //!
 //! 音频走 `MINERAL_AUDIO_NULL` 降级,headless 稳跑;每个测试隔离一套 XDG 目录与
 //! 独立 socket 目录,与 `daemon_lifecycle` / `script_hooks` 同属 `daemon-e2e` 串行组。
@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{WrapErr, bail, eyre};
 use mineral_client::Client;
 use mineral_client::connection::ClientConfig;
-use mineral_client::operation::Outcome;
 use mineral_client::state::PlayerMirror;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
@@ -39,12 +38,12 @@ struct Daemon {
 }
 
 impl Daemon {
-    /// 起一个隔离环境、null 音频后端的 daemon;`config_lua` 为 `Some` 时预埋。
+    /// 起一个隔离环境、null 音频后端的 daemon;可预埋返回配置表的 daemon.lua。
     ///
     /// # Params:
-    ///   - `tag`: 临时目录名里的测试标识
-    ///   - `config_lua`: 预埋的用户 config.lua(须以 `return {}` 结尾)
-    fn spawn(tag: &str, config_lua: Option<&str>) -> color_eyre::Result<Self> {
+    ///   - `tag`: 临时目录名里的测试标识。
+    ///   - `daemon_lua`: daemon 配置与可选 setup 回调。
+    fn spawn(tag: &str, daemon_lua: Option<&str>) -> color_eyre::Result<Self> {
         let root = std::env::temp_dir().join(format!(
             "mineral-session-e2e-{}-{}-{}",
             tag,
@@ -54,10 +53,10 @@ impl Daemon {
         let sock_dir =
             std::env::temp_dir().join(format!("mnls-{}-{}", std::process::id(), unique_suffix()));
         std::fs::create_dir_all(&root).wrap_err("create isolated root dir")?;
-        if let Some(src) = config_lua {
+        if let Some(src) = daemon_lua {
             let cfg_dir = root.join("config/mineral");
             std::fs::create_dir_all(&cfg_dir).wrap_err("create config dir")?;
-            std::fs::write(cfg_dir.join("config.lua"), src).wrap_err("seed config.lua")?;
+            std::fs::write(cfg_dir.join("daemon.lua"), src).wrap_err("seed daemon.lua")?;
         }
         let child = Command::new(env!("CARGO_BIN_EXE_mineral"))
             .arg("serve")
@@ -103,13 +102,13 @@ impl Daemon {
             .map_err(color_eyre::Report::new)
     }
 
-    /// 重写用户 config.lua(热更测试用)。
+    /// 重写 daemon.lua,触发 daemon 的配置与脚本重载。
     ///
     /// # Params:
-    ///   - `content`: 新的完整脚本内容
-    fn write_config(&self, content: &str) -> color_eyre::Result<()> {
-        let path = self.root.join("config/mineral/config.lua");
-        std::fs::write(path, content).wrap_err("rewrite config.lua")
+    ///   - `content`: 新的完整文件内容。
+    fn write_daemon(&self, content: &str) -> color_eyre::Result<()> {
+        let path = self.root.join("config/mineral/daemon.lua");
+        std::fs::write(path, content).wrap_err("rewrite daemon.lua")
     }
 }
 
@@ -175,36 +174,6 @@ async fn queue_ops_apply_in_arrival_order() -> color_eyre::Result<()> {
     .await?;
     let queue_len = client.mirror().read_player(|player| player.queue().len());
     assert_eq!(queue_len, 5);
-    Ok(())
-}
-
-/// 慢脚本动作在脚本线程执行,不阻塞同一会话的控制查询。
-#[tokio::test]
-async fn slow_action_does_not_block_control() -> color_eyre::Result<()> {
-    let daemon = Daemon::spawn(
-        "slow",
-        Some(
-            r#"
-            mineral.action("e2e.slow", function(ctx) os.execute("sleep 0.6") end)
-            return {}
-            "#,
-        ),
-    )?;
-    daemon.wait_ready()?;
-    let client = daemon.connect("slow").await?;
-    let slow = client.invoke_action("e2e.slow", /*ctx*/ None, Vec::new());
-    tokio::pin!(slow);
-    // 给 daemon 一点时间真正开始执行慢动作。
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let started = Instant::now();
-    let pid = client.daemon_info().await;
-    assert!(
-        started.elapsed() < Duration::from_millis(400),
-        "控制查询不应被慢脚本阻塞,实际 {:?}",
-        started.elapsed()
-    );
-    assert!(matches!(pid, Outcome::Applied(_)), "daemon_info 应成功");
-    assert!(slow.await.is_success(), "慢动作本身仍应完成");
     Ok(())
 }
 
@@ -518,53 +487,68 @@ async fn tasks_subscription_delivers_snapshot() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 配置热更:改写 config.lua 后 daemon 推新配置事件。
+/// 订阅重放业务能力;daemon.lua 重载后推送具名队列操作与播放计数可用性。
 #[tokio::test]
-async fn config_change_is_pushed() -> color_eyre::Result<()> {
-    let daemon = Daemon::spawn("config", Some("return {}\n"))?;
+async fn service_info_replays_and_changes_after_daemon_reload() -> color_eyre::Result<()> {
+    let daemon = Daemon::spawn(
+        "service-info",
+        Some(
+            r#"return {
+                queue = { transforms = {
+                    { name = "Keep order", transform = function(queue) return queue end },
+                } },
+                stats = { level = "off" },
+            }"#,
+        ),
+    )?;
     daemon.wait_ready()?;
-    let client = daemon.connect("config").await?;
-    client.subscribe(SubscriptionTopic::Events(Subscription::Config));
-    // 订阅重放当前配置:首帧 ConfigChanged 到达事件流。
-    let mut seen = 0_usize;
-    wait_until("订阅重放当前配置", || {
-        seen += config_changes(&client);
-        seen > 0
+    let client = daemon.connect("service-info").await?;
+    let initial = client
+        .service_info()
+        .await
+        .into_success()
+        .ok_or_else(|| eyre!("service info query failed"))?;
+    assert_eq!(initial.queue_transforms, vec!["Keep order"]);
+    assert!(!initial.play_counts.enabled);
+    client.subscribe(SubscriptionTopic::Events(Subscription::ServiceInfo));
+    wait_until("订阅重放当前能力", || {
+        client.mirror().drain_events().into_iter().any(|event| {
+            matches!(event, mineral_protocol::Event::ServiceInfoChanged { info }
+                if info.queue_transforms == initial.queue_transforms
+                    && info.play_counts.enabled == initial.play_counts.enabled)
+        })
     })
     .await?;
-    daemon.write_config("return { tui = { animation = { frame_tick_ms = 33 } } }\n")?;
-    wait_until("配置变更推送", || {
-        seen += config_changes(&client);
-        seen > 1
+    daemon.write_daemon(
+        r#"return {
+            queue = { transforms = {
+                { name = "Reverse queue", transform = function(queue)
+                    local out = {}
+                    for i = #queue, 1, -1 do out[#out + 1] = queue[i] end
+                    return out
+                end },
+            } },
+            stats = { level = "core", exclude_sources = { "bilibili" } },
+        }"#,
+    )?;
+    wait_until("业务能力变更推送", || {
+        client.mirror().drain_events().into_iter().any(|event| {
+            matches!(event, mineral_protocol::Event::ServiceInfoChanged { info }
+                if info.queue_transforms == ["Reverse queue"]
+                    && info.play_counts.enabled
+                    && info.play_counts.excluded_sources == ["bilibili"])
+        })
     })
     .await?;
+    let current = client
+        .service_info()
+        .await
+        .into_success()
+        .ok_or_else(|| eyre!("reloaded service info query failed"))?;
+    assert_eq!(current.queue_transforms, vec!["Reverse queue"]);
+    assert!(current.play_counts.enabled);
+    assert_eq!(current.play_counts.excluded_sources, vec!["bilibili"]);
     Ok(())
-}
-
-/// 取走事件流里的 `ConfigChanged` 数量(其余事件一并消费,本用例只关心配置推送)。
-///
-/// # Params:
-///   - `client`: 已订阅配置事件的会话 client
-fn config_changes(client: &mineral_client::Client) -> usize {
-    let mut count = 0;
-    for event in client.mirror().drain_events() {
-        match event {
-            mineral_protocol::Event::ConfigChanged { .. } => count += 1,
-            mineral_protocol::Event::Failure(_)
-            | mineral_protocol::Event::Toast { .. }
-            | mineral_protocol::Event::Card { .. }
-            | mineral_protocol::Event::PropertyChanged { .. }
-            | mineral_protocol::Event::TrackFinished { .. }
-            | mineral_protocol::Event::DownloadCompleted { .. }
-            | mineral_protocol::Event::StoreChanged { .. }
-            | mineral_protocol::Event::ScriptReloaded
-            | mineral_protocol::Event::BusMessage { .. }
-            | mineral_protocol::Event::WindowTitleOverride { .. }
-            | mineral_protocol::Event::DismissToast { .. }
-            | mineral_protocol::Event::Task(_) => {}
-        }
-    }
-    count
 }
 
 /// A real daemon reads and plays local media through ordinary channel requests; reconnects reuse it.

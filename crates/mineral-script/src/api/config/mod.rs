@@ -1,4 +1,4 @@
-//! `mineral.config.*`:脚本对有效配置的 session 级覆盖出口。
+//! daemon session 配置与 TUI 本地配置共用的覆盖解析出口。
 
 pub(crate) mod override_;
 mod table;

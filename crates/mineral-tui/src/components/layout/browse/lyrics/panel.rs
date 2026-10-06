@@ -13,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use mineral_config::LyricTextAlphaConfig;
+use crate::config::LyricTextAlphaConfig;
 use mineral_model::LyricLine;
 
 use super::sweep::LyricPaint;
@@ -93,7 +93,7 @@ pub fn draw(
         state
             .panel
             .colors
-            .begin(state.frame.config.tui().lyrics(), motion, state.frame.now);
+            .begin(state.frame.config.lyrics(), motion, state.frame.now);
     paint_window(frame, inner, window, theme, &lyric_paint);
 }
 
@@ -153,19 +153,14 @@ impl crate::components::lifecycle::Prepare for LyricsPanel {
                         inactive,
                         theme,
                         row_bg,
-                        state.frame.config.tui().lyrics(),
+                        state.frame.config.lyrics(),
                     ));
                 }
                 targets
             });
         let song = input.song;
-        self.colors.prepare(
-            song,
-            frame.config.tui().lyrics(),
-            motion,
-            targets,
-            frame.now,
-        );
+        self.colors
+            .prepare(song, frame.config.lyrics(), motion, targets, frame.now);
     }
 }
 
@@ -418,13 +413,13 @@ struct WindowInput<'a> {
     /// 呈现模式:决定行间距与高亮过渡。
     motion: LyricMode,
 
-    /// Immersive 模式的行间距(行,配置 `tui.lyrics.fullscreen_line_gap`,可被脚本覆盖)。
+    /// Immersive 模式的行间距(行,配置 `lyrics.fullscreen_line_gap`,可被脚本覆盖)。
     fullscreen_line_gap: usize,
 
-    /// Compact 模式的行间距(行,配置 `tui.lyrics.compact_line_gap`,可被脚本覆盖)。
+    /// Compact 模式的行间距(行,配置 `lyrics.compact_line_gap`,可被脚本覆盖)。
     compact_line_gap: usize,
 
-    /// 行切换缓动平移时长(ms,配置 `tui.lyrics.scroll_ms`)。
+    /// 行切换缓动平移时长(ms,配置 `lyrics.scroll_ms`)。
     scroll_ms: u64,
 
     /// 手动滚动「脱离播放」的缓动锚点(milli-line = 原文行号 × 1000);`None` = 附着态
@@ -488,12 +483,12 @@ impl<'a> WindowLayout<'a> {
                 lines,
                 cur,
                 position_ms,
-                text_alpha: state.frame.config.tui().lyrics().text_alpha(),
+                text_alpha: state.frame.config.lyrics().text_alpha(),
                 extra: state.active_extra(),
                 motion,
-                fullscreen_line_gap: *state.frame.config.tui().lyrics().fullscreen_line_gap(),
-                compact_line_gap: *state.frame.config.tui().lyrics().compact_line_gap(),
-                scroll_ms: *state.frame.config.tui().lyrics().scroll_ms(),
+                fullscreen_line_gap: *state.frame.config.lyrics().fullscreen_line_gap(),
+                compact_line_gap: *state.frame.config.lyrics().compact_line_gap(),
+                scroll_ms: *state.frame.config.lyrics().scroll_ms(),
                 // 紧凑面板恒附着，不继承全屏手动偏移。
                 manual_anchor_milli: match motion {
                     LyricMode::Immersive => state.manual_anchor(),

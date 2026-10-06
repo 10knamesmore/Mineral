@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config::{CoverConfig, CoverDecodePixelsConfig};
 use crate::persistence::TuiStore;
 use isahc::HttpClient;
 use isahc::config::Configurable;
-use mineral_config::{CoverConfig, CoverDecodePixelsConfig};
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::CacheIndex;
 use parking_lot::Mutex;
@@ -17,13 +17,13 @@ use crate::image::key::TerminalImageKey;
 use super::types::{CoverCompletion, CoverRequest, DecodeRequest, PreviewRequest, ReadyBuf};
 use super::worker::complete_request;
 
-/// Client 端封面 fetcher。`spawn` 起 worker 池，`preview` / `decode` 投递，`drain_ready` 拉就绪；
+/// TUI 端封面 fetcher。`spawn` 起 worker 池，`preview` / `decode` 投递，`drain_ready` 拉就绪；
 /// 禁用态使用关闭的请求队列同步拒绝投递。
 pub(crate) struct CoverFetcher {
     /// 待执行的 preview / decode 请求队列。
     req_tx: mpsc::UnboundedSender<CoverRequest>,
 
-    /// worker 完成后塞结果的 buffer;client tick `drain_ready()` 一次拿走。
+    /// worker 完成后塞结果的 buffer;TUI tick `drain_ready()` 一次拿走。
     ready: ReadyBuf,
 }
 
@@ -34,7 +34,7 @@ impl CoverFetcher {
     ///
     /// # Params:
     ///   - `cfg`: 封面段配置(timeout / 并发 / kmeans)
-    ///   - `cover_capacity`: 封面磁盘缓存容量上限(字节,配置 `tui.cover.cache.disk`)
+    ///   - `cover_capacity`: 封面磁盘缓存容量上限(字节,配置 `cover.cache.disk`)
     ///   - `store`: 共享的 `tui.db` 句柄(与 UI 偏好共用连接池;`None` = 降级不缓存)
     pub(crate) async fn spawn(
         cfg: CoverConfig,
@@ -79,7 +79,7 @@ impl CoverFetcher {
     ///
     /// # Params:
     ///   - `store`: 共享的 `tui.db` 句柄(`None` = 上游已降级)
-    ///   - `capacity`: 缓存容量上限(字节,配置 `tui.cover.cache.disk`)
+    ///   - `capacity`: 缓存容量上限(字节,配置 `cover.cache.disk`)
     ///
     /// # Return:
     ///   就绪的缓存句柄;不可用时 `None`。
@@ -167,7 +167,7 @@ impl CoverFetcher {
             .is_ok()
     }
 
-    /// 把全部图片 worker completion 拿走。client 主循环 tick 调一次。
+    /// 把全部图片 worker completion 拿走。TUI 主循环 tick 调一次。
     pub(crate) fn drain_ready(&self) -> Vec<CoverCompletion> {
         std::mem::take(&mut *self.ready.lock())
     }

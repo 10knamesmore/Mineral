@@ -44,8 +44,8 @@ pub(crate) struct RootView {
 
 impl RootView {
     /// 按当前配置创建组件实例，后续配置通过应用更新入口重设折算参数。
-    pub(crate) fn new(cfg: &mineral_config::Config, mode: mineral_protocol::PlayMode) -> Self {
-        let anim = cfg.tui().animation();
+    pub(crate) fn new(cfg: &crate::config::TuiConfig, mode: mineral_protocol::PlayMode) -> Self {
+        let anim = cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
         Self {
             browse: BrowsePage::new(anim),
@@ -55,12 +55,12 @@ impl RootView {
                     ticks16_from_ms(*anim.search_focus_morph_ms(), tick_ms),
                 )
                 .with_whitelist(search_whitelist::SearchWhitelist::from(
-                    cfg.tui().search().channel(),
+                    cfg.search().channel(),
                 )),
             ),
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             transport: Component::new(TransportBar::new(mode, anim)),
-            spectrum: Component::new(SpectrumState::new(cfg.tui().spectrum().clone(), tick_ms)),
+            spectrum: Component::new(SpectrumState::new(cfg.spectrum().clone(), tick_ms)),
             vinyl: crate::components::layout::shared::vinyl::VinylSpin::from_config(
                 *anim.vinyl_rev_ms(),
                 tick_ms,

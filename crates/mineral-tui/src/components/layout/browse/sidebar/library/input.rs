@@ -91,7 +91,7 @@ impl TrackList {
     pub(crate) fn clear_filter(
         &mut self,
         input: super::TrackInput<'_>,
-        config: &mineral_config::Config,
+        config: &crate::config::TuiConfig,
     ) {
         if self.search.query().is_empty() {
             return;
@@ -117,7 +117,7 @@ impl TrackList {
                 .iter()
                 .enumerate()
                 .map(|(index, entry)| (entry.data.index, index)),
-            config.tui().animation(),
+            config.animation(),
         );
     }
 
@@ -126,7 +126,7 @@ impl TrackList {
         &mut self,
         key: &crossterm::event::KeyEvent,
         input: super::TrackInput<'_>,
-        config: &mineral_config::Config,
+        config: &crate::config::TuiConfig,
     ) -> bool {
         match filter_input::edit(&mut self.search, key) {
             filter_input::FilterEdit::Unchanged => false,

@@ -43,7 +43,7 @@ pub(crate) struct CoverCache {
     /// 单调访问计数器,每次 `observe_visible` / `insert` 取一个新值赋给 `last_used`。
     tick: u64,
 
-    /// 字节预算上限(来自配置 `tui.cover.cache.image`)。
+    /// 字节预算上限(来自配置 `cover.cache.image`)。
     budget: u64,
 
     /// 最近准备的显示需求包含的图片，后台解码回填不能逐出它们。

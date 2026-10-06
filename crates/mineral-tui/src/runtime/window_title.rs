@@ -1,6 +1,6 @@
 //! TUI 窗口标题：把当前播放态实时写进终端任务栏 / tab 标题。
 //!
-//! 标题是既有 client 状态的纯派生，按优先级取：断连（client 强制）> 脚本旋钮
+//! 标题是既有 TUI 状态的纯派生，按优先级取：断连（TUI 强制）> 脚本旋钮
 //! 覆盖 > 结构化四态模板（播放 / 暂停 / 空闲各一套，`StateIcon` 段按当前态解析
 //! 图标字形）。写入走 crossterm `SetTitle` + 变化检测，避免每帧刷 OSC；写前抹掉
 //! 控制字符，杜绝远端元数据里的转义序列注入。
@@ -8,9 +8,9 @@
 use std::borrow::Cow;
 use std::io;
 
+use crate::config::{TimeFormat, TitleField, TitleSegment, WindowTitleConfig};
 use crossterm::execute;
 use crossterm::terminal::SetTitle;
-use mineral_config::{TimeFormat, TitleField, TitleSegment, WindowTitleConfig};
 use mineral_model::Song;
 
 /// 渲染窗口标题所需的当帧上下文（既有状态的只读投影）。
@@ -40,7 +40,7 @@ pub(crate) struct TitleContext<'a> {
 
 /// 窗口标题的状态机 + 变化检测。
 pub(crate) struct WindowTitle {
-    /// `tui.window_title` 段配置（总开关 / 四态图标 / 四态模板）。
+    /// `window_title` 段配置（总开关 / 四态图标 / 四态模板）。
     cfg: WindowTitleConfig,
 
     /// 是否有任一模板引用 `Lyric` 字段。无引用时调用方可跳过每帧的歌词行拼接
@@ -55,7 +55,7 @@ impl WindowTitle {
     /// 从配置初始化。
     ///
     /// # Params:
-    ///   - `cfg`: `tui.window_title` 段配置。
+    ///   - `cfg`: `window_title` 段配置。
     ///
     /// # Return:
     ///   新的窗口标题管理器。
@@ -99,7 +99,7 @@ impl WindowTitle {
             return None;
         }
         let icons = self.cfg.icons();
-        // 断连优先且 client 强制：此时脚本通道已死，旋钮值 stale，忽略。
+        // 断连优先且 TUI 强制：此时脚本通道已死，旋钮值 stale，忽略。
         if !ctx.connected {
             return Some(fold(self.cfg.disconnected(), icons.disconnected(), ctx));
         }
@@ -232,7 +232,7 @@ fn field_value<'a>(
 
 #[cfg(test)]
 mod tests {
-    use mineral_config::Config;
+    use crate::config::TuiConfig;
     use mineral_model::Song;
     use mineral_test::{song, with_artist};
 
@@ -254,8 +254,8 @@ mod tests {
     /// 断连态走 disconnected 模板，优先级最高（覆盖有歌态）。
     #[test]
     fn disconnected_overrides_all() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
+        let cfg = TuiConfig::defaults()?;
+        let wt = WindowTitle::new(cfg.window_title());
         let s = with_artist(song("s"), "Artist");
         let mut c = ctx(Some(&s));
         c.connected = false;
@@ -269,8 +269,8 @@ mod tests {
     /// 旋钮覆盖胜过结构化模板（已连接时）。
     #[test]
     fn override_text_wins_over_template() -> color_eyre::Result<()> {
-        let cfg = Config::defaults()?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
+        let cfg = TuiConfig::defaults()?;
+        let wt = WindowTitle::new(cfg.window_title());
         let s = with_artist(song("s"), "Artist");
         let mut c = ctx(Some(&s));
         c.override_text = Some("⠙ 自定义标题");
@@ -282,13 +282,10 @@ mod tests {
     #[test]
     fn disabled_returns_none() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
-        std::fs::write(
-            &path,
-            r#"return { tui = { window_title = { enabled = false } } }"#,
-        )?;
-        let (cfg, _warnings) = mineral_config::load(&path)?;
-        let wt = WindowTitle::new(cfg.tui().window_title());
+        let path = dir.path().join("tui.lua");
+        std::fs::write(&path, r#"return { window_title = { enabled = false } }"#)?;
+        let (cfg, _warnings) = crate::config::load_tui(&path)?;
+        let wt = WindowTitle::new(cfg.window_title());
         assert_eq!(wt.render(&ctx(Some(&song("s")))), None);
         Ok(())
     }

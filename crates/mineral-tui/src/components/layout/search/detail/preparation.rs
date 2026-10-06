@@ -32,7 +32,7 @@ pub(crate) fn prepare(
         motion,
         cx.frame.now,
         page.last_sel_change,
-        std::time::Duration::from_millis(*cx.frame.config.tui().cover().debounce_ms()),
+        std::time::Duration::from_millis(*cx.frame.config.cover().debounce_ms()),
     );
     let now = cx.frame.now;
     let theme = cx.frame.theme;

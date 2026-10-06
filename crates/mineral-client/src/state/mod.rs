@@ -9,6 +9,4 @@ mod mirror;
 mod pcm;
 
 pub(crate) use mirror::ApplyOutcome;
-pub use mirror::{
-    DownloadsDetailMirror, Mirror, PlaybackMirror, PlayerMirror, WindowTitleOverride,
-};
+pub use mirror::{DownloadsDetailMirror, Mirror, PlaybackMirror, PlayerMirror};

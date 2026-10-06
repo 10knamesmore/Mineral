@@ -143,7 +143,7 @@ impl<C: Overlay> OverlayStack<C> {
     pub(crate) fn prepare(
         &mut self,
         area: Rect,
-        config: &mineral_config::LayoutConfig,
+        config: &crate::config::LayoutConfig,
         dock_right: bool,
         mut visit: impl FnMut(&mut C, OverlayLayout),
     ) {
@@ -205,12 +205,7 @@ impl<C: Overlay> OverlayStack<C> {
                 continue;
             }
             let chrome = layer.content.chrome();
-            let (full, _) = full_rect(
-                &chrome,
-                area,
-                env.frame.config.tui().layout(),
-                env.dock_right,
-            );
+            let (full, _) = full_rect(&chrome, area, env.frame.config.layout(), env.dock_right);
             plan.add(
                 full,
                 layer.content.bind_view(env.frame, |content| OverlayView {

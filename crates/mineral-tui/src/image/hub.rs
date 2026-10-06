@@ -1,12 +1,12 @@
-//! 图片管线的 client 端状态：解码图与色板缓存、在飞集合、终端图片成品。
+//! 图片管线的 TUI 端状态：解码图与色板缓存、在飞集合、终端图片成品。
 //!
 //! preview、按需 decode 与 encode worker 的结果都在这里落地。预取生成低清真实封面；稳定
 //! 布局准备登记完整 decode demand，由主循环统一调度。
 
 use std::sync::Arc;
 
+use crate::config::CoverCellFit;
 use image::DynamicImage;
-use mineral_config::CoverCellFit;
 use mineral_model::MediaUrl;
 use mineral_model::SourceKind;
 use mineral_protocol::AdvanceKind;
@@ -98,12 +98,12 @@ pub struct CoverTransition {
 /// preview 与 decode 候选的缓存、失败和在途判断均在此收敛。
 pub struct ImageEngine {
     /// 与应用状态共享的当前配置，整棵替换后所有现读政策立即生效。
-    cfg: Arc<mineral_config::Config>,
+    cfg: Arc<crate::config::TuiConfig>,
 
     /// 图片引擎与编码 worker 共享的唯一 terminal backend。
     terminal_backend: TerminalBackend,
 
-    /// 已拉好的封面原始图(字节预算 LRU;越 `tui.cover.cache.image` 逐出最久未用)。
+    /// 已拉好的封面原始图(字节预算 LRU;越 `cover.cache.image` 逐出最久未用)。
     /// 逐出时联动清理高清终端成品与色板；行内缩略图保留自己的小像素资源。
     pub cache: CoverCache,
 
@@ -144,7 +144,7 @@ pub struct ImageEngine {
     /// 协议无关的真实封面低清 preview 缓存；协议切换和完整 decoded LRU 逐出都不清理。
     pub preview_images: TerminalImageCache,
 
-    /// 终端图片成品缓存(字节预算 LRU;越 `tui.cover.cache.protocol` 逐出最久未渲染)。
+    /// 终端图片成品缓存(字节预算 LRU;越 `cover.cache.protocol` 逐出最久未渲染)。
     /// 成品保留协议渲染状态与资源，render 命中后无需每帧重编；逐出的图片滚回时
     /// 后台重编，其间使用 halfblock。
     pub terminal_images: TerminalImageCache,
@@ -179,12 +179,12 @@ impl ImageEngine {
     ///   - `fetcher`: 图片下载、解码与取色 worker
     ///   - `graphics`: 启动期协商出的终端图片能力
     pub(crate) fn new(
-        cfg: Arc<mineral_config::Config>,
+        cfg: Arc<crate::config::TuiConfig>,
         fetcher: CoverFetcher,
         graphics: TerminalGraphics,
     ) -> Self {
-        let mode = *cfg.tui().cover().protocol();
-        let encode_workers = *cfg.tui().cover().encode_workers();
+        let mode = *cfg.cover().protocol();
+        let encode_workers = *cfg.cover().encode_workers();
         let terminal_backend = TerminalBackend::new(graphics, mode);
         let encoder = CoverEncoder::spawn(encode_workers, &terminal_backend);
         Self::from_parts(cfg, fetcher, encoder, terminal_backend)
@@ -192,7 +192,7 @@ impl ImageEngine {
 
     /// 构造不启动 worker 的测试图片引擎。
     #[cfg(test)]
-    pub(crate) fn disabled(cfg: Arc<mineral_config::Config>) -> Self {
+    pub(crate) fn disabled(cfg: Arc<crate::config::TuiConfig>) -> Self {
         let terminal_backend = TerminalBackend::fixed((8, 16));
         Self::from_parts(
             cfg,
@@ -204,10 +204,10 @@ impl ImageEngine {
 
     /// 构造支持 Kitty 的测试引擎；不启动 worker，也不探测真实终端。
     #[cfg(test)]
-    pub(crate) fn disabled_kitty(cfg: Arc<mineral_config::Config>) -> Self {
+    pub(crate) fn disabled_kitty(cfg: Arc<crate::config::TuiConfig>) -> Self {
         let backend = TerminalBackend::new(
             TerminalGraphics::fixed_kitty((8, 16)),
-            mineral_config::CoverProtocolMode::Kitty,
+            crate::config::CoverProtocolMode::Kitty,
         );
         Self::from_parts(
             cfg,
@@ -245,14 +245,14 @@ impl ImageEngine {
 
     /// 从已经确定的 worker 与 backend 构造图片引擎状态。
     fn from_parts(
-        cfg: Arc<mineral_config::Config>,
+        cfg: Arc<crate::config::TuiConfig>,
         fetcher: CoverFetcher,
         encoder: CoverEncoder,
         terminal_backend: TerminalBackend,
     ) -> Self {
-        let image_budget = *cfg.tui().cover().cache().image();
-        let preview_budget = *cfg.tui().cover().cache().preview();
-        let protocol_budget = *cfg.tui().cover().cache().protocol();
+        let image_budget = *cfg.cover().cache().image();
+        let preview_budget = *cfg.cover().cache().preview();
+        let protocol_budget = *cfg.cover().cache().protocol();
         Self {
             cfg,
             terminal_backend,
@@ -290,11 +290,11 @@ impl ImageEngine {
     ///
     /// # Params:
     ///   - `cfg`: 新的有效配置
-    pub(crate) fn apply_config(&mut self, cfg: Arc<mineral_config::Config>) {
-        let image_budget = *cfg.tui().cover().cache().image();
-        let preview_budget = *cfg.tui().cover().cache().preview();
-        let protocol_budget = *cfg.tui().cover().cache().protocol();
-        let cell_fit = *cfg.tui().cover().cell_fit();
+    pub(crate) fn apply_config(&mut self, cfg: Arc<crate::config::TuiConfig>) {
+        let image_budget = *cfg.cover().cache().image();
+        let preview_budget = *cfg.cover().cache().preview();
+        let protocol_budget = *cfg.cover().cache().protocol();
+        let cell_fit = *cfg.cover().cell_fit();
         if self.cell_fit() != cell_fit {
             mineral_log::debug!(target: "cover", previous = ?self.cell_fit(), ?cell_fit,
                 "cover cell fit changed; decoded images and cached variants retained");
@@ -316,7 +316,7 @@ impl ImageEngine {
 
     /// 现读主封面的格边适配策略；worker 使用请求键中固定的策略。
     pub(super) fn cell_fit(&self) -> CoverCellFit {
-        *self.cfg.tui().cover().cell_fit()
+        *self.cfg.cover().cell_fit()
     }
 
     /// 返回当前 terminal backend generation。
@@ -326,7 +326,7 @@ impl ImageEngine {
 
     /// 返回 cover transition 的 zoom 缩放倍数。
     pub(crate) fn transition_zoom_scale(&self) -> f32 {
-        *self.cfg.tui().cover_transition().zoom().scale()
+        *self.cfg.cover_transition().zoom().scale()
     }
 
     /// 返回当前生效的终端图协议。
@@ -348,7 +348,7 @@ impl ImageEngine {
 
     /// 将配置的协议模式应用到当前终端能力。
     fn apply_graphics_mode(&mut self) {
-        let mode = *self.cfg.tui().cover().protocol();
+        let mode = *self.cfg.cover().protocol();
         if self.terminal_backend.apply_mode(mode) {
             self.clear_terminal_state();
         }
@@ -365,9 +365,9 @@ impl ImageEngine {
     /// 原图侧被逐出项的高清协议成品、色板与频谱标记照常联动清理，保留行内缩略图。
     ///
     /// # Params:
-    ///   - `image_budget`: 原图缓存新预算(配置 `tui.cover.cache.image`)
-    ///   - `preview_budget`: preview 缓存新预算(配置 `tui.cover.cache.preview`)
-    ///   - `protocol_budget`: 协议缓存新预算(配置 `tui.cover.cache.protocol`)
+    ///   - `image_budget`: 原图缓存新预算(配置 `cover.cache.image`)
+    ///   - `preview_budget`: preview 缓存新预算(配置 `cover.cache.preview`)
+    ///   - `protocol_budget`: 协议缓存新预算(配置 `cover.cache.protocol`)
     pub(crate) fn set_budgets(
         &mut self,
         image_budget: u64,
@@ -686,7 +686,7 @@ impl ImageEngine {
         if !self.workers.fetcher.decode(
             source,
             url.clone(),
-            self.cfg.tui().cover().decode_pixels().clone(),
+            self.cfg.cover().decode_pixels().clone(),
         ) {
             self.pending.remove(url);
             self.decode_demand.remove(url);
@@ -724,7 +724,7 @@ impl ImageEngine {
         // 身份已换:旧转场画的封面不再是当前这一对,无论等下开不开得起新转场都得先撤掉,
         // 否则它会继续画一对过期封面(表现为闪回旧图再跳新图)。
         self.transition = None;
-        let cfg = self.cfg.tui().cover_transition();
+        let cfg = self.cfg.cover_transition();
         let (Some(from_url), Some(to_url)) = (previous, current_cover) else {
             return;
         };
@@ -739,7 +739,7 @@ impl ImageEngine {
             advance,
             anim: Transition::expanding(ticks16_from_ms(
                 *cfg.duration_ms(),
-                *self.cfg.tui().animation().frame_tick_ms(),
+                *self.cfg.animation().frame_tick_ms(),
             )),
         });
     }
@@ -772,7 +772,7 @@ mod tests {
 
     /// 造一个使用默认配置的测试图片引擎(不起 worker)。
     fn engine() -> color_eyre::Result<ImageEngine> {
-        let cfg = Arc::new(mineral_config::Config::defaults()?);
+        let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
         Ok(ImageEngine::disabled(cfg))
     }
 
@@ -781,7 +781,7 @@ mod tests {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells(/*cells*/ (4, 4), /*cell_pixels*/ (8, 16)),
-            mineral_config::CoverCellFit::Crop,
+            crate::config::CoverCellFit::Crop,
         );
         CoverPreviewReady {
             url: url.clone(),
@@ -843,8 +843,8 @@ mod tests {
             .save(&path)?;
             let url = MediaUrl::local(path);
             let outside_radius = MediaUrl::remote("https://example.com/not-prefetched.jpg")?;
-            let cfg = Arc::new(mineral_config::Config::defaults()?);
-            let fetcher = CoverFetcher::spawn(cfg.tui().cover().clone(), 0, None).await?;
+            let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+            let fetcher = CoverFetcher::spawn(cfg.cover().clone(), 0, None).await?;
             let mut engine = ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty((8, 16)));
             assert_ne!(
                 engine.thumbnail_preview_key(&url),
@@ -961,7 +961,7 @@ mod tests {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
-        let cfg = Arc::new(mineral_config::Config::defaults()?);
+        let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
         let mut kitty = ImageEngine::disabled_kitty(cfg);
         let url = MediaUrl::remote("https://example.com/cover.jpg")?;
         kitty.cache.insert_test(

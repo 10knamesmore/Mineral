@@ -18,7 +18,7 @@ use crate::runtime::action::ScrollStep;
 ///
 /// # Return:
 ///   带符号行数。
-pub(crate) fn step_delta(step: ScrollStep, behavior: &mineral_config::BehaviorConfig) -> i64 {
+pub(crate) fn step_delta(step: ScrollStep, behavior: &crate::config::BehaviorConfig) -> i64 {
     let line = i64::try_from(*behavior.line_scroll_rows()).unwrap_or(i64::MAX);
     let page = i64::try_from(*behavior.page_scroll_rows()).unwrap_or(i64::MAX);
     match step {

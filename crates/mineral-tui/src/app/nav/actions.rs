@@ -119,8 +119,8 @@ impl BrowsePage {
         if self.fullscreen.on() {
             return BrowseEffect::ScrollLyrics(step);
         }
-        let delta = scroll::viewport::step_delta(step, model.cfg.tui().behavior());
-        let anim = model.cfg.tui().animation();
+        let delta = scroll::viewport::step_delta(step, model.cfg.behavior());
+        let anim = model.cfg.animation();
         let ticks = ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms());
         // len 先算(释放 model 借用),再取列表态可变借用;page 同移视口 + 光标(vim `<C-d>` 语义)。
         let len = match self.view.current() {
@@ -156,7 +156,7 @@ impl BrowsePage {
     /// 深度搜索数据保障:Playlists 视图 + deep 开启时,列出所有未拉取 / 未请求的歌单(待补拉);
     /// 非该状态返回空；落地端交给统一提交层并去重，容量不足由提交层重试。
     fn deep_search_pending(&self, model: BrowseModel<'_>) -> Vec<PlaylistId> {
-        if self.view != View::Playlists || !*model.cfg.tui().search().deep().enabled() {
+        if self.view != View::Playlists || !*model.cfg.search().deep().enabled() {
             return Vec::new();
         }
         model
@@ -215,7 +215,7 @@ impl BrowsePage {
                     return BrowseEffect::None;
                 };
                 // 保留父列表查询与位置；曲目面板用独立身份和查询，过渡两侧不会互相改写。
-                let locate = (*model.cfg.tui().search().deep().locate_on_enter())
+                let locate = (*model.cfg.search().deep().locate_on_enter())
                     .then(|| self.deep_hit_for(&target_id).map(|h| h.song_id))
                     .flatten();
                 self.nav.opened_playlist = Some(target_id.clone());
@@ -229,7 +229,7 @@ impl BrowsePage {
                     })
                 }) {
                     sel_track = idx;
-                } else if model.cfg.tui().behavior().remember_track_pos().enabled()
+                } else if model.cfg.behavior().remember_track_pos().enabled()
                     && let Some(pos) = self.nav.track_pos.get(&target_id).cloned()
                 {
                     // 深度命中优先于历史位置；尚未加载到记忆曲目时延迟恢复。
@@ -257,8 +257,8 @@ impl BrowsePage {
                 );
                 self.view.switch_to(View::Library);
                 // 光标落位 + 视口瞬时定位(记忆按屏上相对行还原;命中歌上方留 scrolloff;无命中即从头看)。
-                let anchor = screen_anchor
-                    .unwrap_or_else(|| usize::from(*model.cfg.tui().behavior().scrolloff()));
+                let anchor =
+                    screen_anchor.unwrap_or_else(|| usize::from(*model.cfg.behavior().scrolloff()));
                 self.tracks.place(sel_track, anchor);
                 BrowseEffect::None
             }
@@ -349,7 +349,7 @@ impl BrowsePage {
     /// 曲目未就绪 / 空歌单时不记,**保留旧记忆**——进了还没加载完的歌单就退出来,不该把上次的
     /// 有效位置抹成空。搜索过滤态下 `nav.sel_track` 指向 filtered 列表,记忆统一锚定到 raw 下标。
     fn remember_track_pos(&mut self, model: BrowseModel<'_>) -> bool {
-        let mem = *model.cfg.tui().behavior().remember_track_pos();
+        let mem = *model.cfg.behavior().remember_track_pos();
         if !mem.enabled() || self.view != View::Library {
             return false;
         }
@@ -564,12 +564,12 @@ mod tests {
     /// 给测试 App 热更 Library 过滤起播范围。
     fn set_filter_play_scope(app: &mut App, scope: &str) -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
+        let path = dir.path().join("tui.lua");
         std::fs::write(
             &path,
-            format!("return {{ tui = {{ behavior = {{ filter_play_scope = \"{scope}\" }} }} }}"),
+            format!("return {{ behavior = {{ filter_play_scope = \"{scope}\" }} }}"),
         )?;
-        let (cfg, warnings) = mineral_config::load(&path)?;
+        let (cfg, warnings) = crate::config::load_tui(&path)?;
         assert!(warnings.is_empty(), "配置字段应被 schema 接受:{warnings:?}");
         app.apply_config(std::sync::Arc::new(cfg));
         Ok(())
@@ -868,8 +868,8 @@ mod tests {
             )));
         }
         let mut app = crate::test_support::app_with_long_library(100, /*sel_track*/ 0)?;
-        let page = *app.state.cfg.tui().behavior().page_scroll_rows();
-        let line = *app.state.cfg.tui().behavior().line_scroll_rows();
+        let page = *app.state.cfg.behavior().page_scroll_rows();
+        let line = *app.state.cfg.behavior().line_scroll_rows();
         ctrl(&mut app, 'f');
         assert_eq!(
             app.state.ui.browse.tracks.scroll().sel(),
@@ -993,13 +993,13 @@ mod tests {
         use crate::test_support::{entry_views, song, with_name};
 
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
+        let path = dir.path().join("tui.lua");
         std::fs::write(
             &path,
-            "return { tui = { search = { deep = { locate_on_enter = false } } } }",
+            "return { search = { deep = { locate_on_enter = false } } }",
         )?;
         let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
-        let (cfg, _warnings) = mineral_config::load(&path)?;
+        let (cfg, _warnings) = crate::config::load_tui(&path)?;
         app.apply_config(std::sync::Arc::new(cfg));
         let pid = PlaylistId::new(SourceKind::NETEASE, "p2");
         let songs = ["甲", "乙", "春日影"]
@@ -1111,13 +1111,10 @@ mod tests {
     #[test]
     fn slash_respects_deep_disabled() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
-        std::fs::write(
-            &path,
-            "return { tui = { search = { deep = { enabled = false } } } }",
-        )?;
+        let path = dir.path().join("tui.lua");
+        std::fs::write(&path, "return { search = { deep = { enabled = false } } }")?;
         let (mut app, submitted) = crate::test_support::app_with_playlists_probed()?;
-        let (cfg, _warnings) = mineral_config::load(&path)?;
+        let (cfg, _warnings) = crate::config::load_tui(&path)?;
         app.apply_config(std::sync::Arc::new(cfg));
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
@@ -1203,13 +1200,13 @@ mod tests {
     #[test]
     fn remember_off_returns_to_top() -> color_eyre::Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.lua");
+        let path = dir.path().join("tui.lua");
         std::fs::write(
             &path,
-            "return { tui = { behavior = { remember_track_pos = \"off\" } } }",
+            "return { behavior = { remember_track_pos = \"off\" } }",
         )?;
         let mut app = app_with_library(10, /*sel_track*/ 0)?;
-        let (cfg, _warnings) = mineral_config::load(&path)?;
+        let (cfg, _warnings) = crate::config::load_tui(&path)?;
         app.apply_config(std::sync::Arc::new(cfg));
         for _ in 0..3 {
             press(&mut app, KeyCode::Char('j'));
@@ -1419,7 +1416,7 @@ mod tests {
         );
         // 模拟 snapshot 回传:播放进入焦点行并越过交叉淡入窗口(elapsed ≥ scroll_ms)→ 下一
         // tick 无缝清脱离回附着(仅落地不越窗则仍钉住,避免 attached 重演行切入)。
-        let scroll_ms = *app.state.cfg.tui().lyrics().scroll_ms();
+        let scroll_ms = *app.state.cfg.lyrics().scroll_ms();
         app.state.models.playback.position_ms = expected + scroll_ms;
         app.state.tick_lyric_scroll();
         assert!(

@@ -1,185 +1,11 @@
-//! daemon ↔ 脚本线程之间的内部消息类型。
+//! daemon 音乐脚本的命令、查询结果与回调请求。
 //!
-//! 方向约定:[`ScriptEvent`] 是 daemon → 脚本(投递给 Lua 回调的事件),
-//! [`ScriptCmd`] 是脚本 → daemon(Lua API 发出的播放器命令)。两侧都是
-//! **结构化** Rust 类型,Lua 字符串只出现在 VM 边界的适配层(`api` 模块)。
+//! Lua 值只存在于 API 与回调边界；线程之间传递结构化音乐模型和回执。
 
 use mineral_model::{BitRate, PlaylistEntry, Song, SongId};
 use mineral_protocol::PlayMode;
 
-/// daemon 投递给脚本线程的事件。携带 daemon 侧已有的完整模型
-/// (如整个 [`Song`]),投影成 Lua table 的裁剪发生在 dispatch 层。
-#[derive(Clone, Debug)]
-pub enum ScriptEvent {
-    /// 在播曲目变更(与 `player.song` 属性同源:远端起播 / 本地命中 /
-    /// gapless 推进全覆盖;同曲重启不重复触发)。
-    TrackStarted {
-        /// 开始播放的歌曲。
-        song: Box<Song>,
-    },
-
-    /// 一首歌结束(必带 reason,与 wire 的 `FinishReason` 同构)。
-    TrackFinished {
-        /// 结束的歌曲。
-        song: Box<Song>,
-
-        /// 结束原因。
-        reason: TrackFinishedReason,
-    },
-
-    /// 一首歌下载完成(永久导出落盘;已存在跳过不触发)。
-    DownloadCompleted {
-        /// 下载完成的歌曲。
-        song: Box<Song>,
-
-        /// 落盘路径。
-        path: std::path::PathBuf,
-
-        /// 下载请求档位；hook 改写时为脚本声明的目录档位。
-        quality: mineral_model::BitRate,
-
-        /// 容器格式(channel 实际提供;拿不到为 `None`,Lua 侧投影成 nil)。
-        format: Option<mineral_model::AudioFormat>,
-    },
-
-    /// 属性树某项变更；`mineral.observe` 的匹配回调消费该事件。
-    PropertyChanged {
-        /// 属性键。
-        key: PropKey,
-
-        /// 新值。
-        value: PropValue,
-    },
-}
-
-/// 曲目结束原因(内部表示,与 `mineral_protocol::FinishReason` 同构;
-/// 不直接复用是为了脚本层不感知 wire 演进)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrackFinishedReason {
-    /// 自然播完。
-    Eof,
-
-    /// 用户跳过(next / prev 切歌)。
-    Skip,
-
-    /// 解码 / 取链失败导致中断。
-    Error,
-
-    /// 用户显式停止。
-    Stop,
-}
-
-impl TrackFinishedReason {
-    /// 给 Lua 回调的字符串表示。
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Eof => "eof",
-            Self::Skip => "skip",
-            Self::Error => "error",
-            Self::Stop => "stop",
-        }
-    }
-}
-
-/// 可观测属性键(**封闭**枚举,与 `mineral_protocol::PropName` 的六个内置常量
-/// 一一对应)。protocol 侧 `PropName` 为前向兼容保持开放;脚本侧 observe 必须
-/// 校验合法名,故这里收成封闭集合。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PropKey {
-    /// 当前在播歌(qualified id 字符串;无在播为 none)。
-    PlayerSong,
-
-    /// 播放态("playing" / "paused" / "stopped")。
-    PlayerState,
-
-    /// 音量百分比(0..=100)。
-    PlayerVolume,
-
-    /// 播放进度(整秒)。
-    PlayerPosition,
-
-    /// 播放模式(`PlayMode` 稳定名)。
-    PlayerMode,
-
-    /// 队列长度。
-    QueueLength,
-
-    /// 终端 UI 状态(复合属性:rows/cols/fullscreen;无 client 在线为 none)。
-    Terminal,
-}
-
-impl PropKey {
-    /// 全部属性键(`mineral.observe` 错误信息 / meta 守卫测试用)。
-    pub const ALL: [Self; 7] = [
-        Self::PlayerSong,
-        Self::PlayerState,
-        Self::PlayerVolume,
-        Self::PlayerPosition,
-        Self::PlayerMode,
-        Self::QueueLength,
-        Self::Terminal,
-    ];
-
-    /// 按属性名解析(与 [`Self::as_str`] 对偶);未知名为 `None`。
-    ///
-    /// # Params:
-    ///   - `name`: 属性名字符串(脚本侧输入)
-    ///
-    /// # Return:
-    ///   对应键;未知名为 `None`,调用方报脚本错误。
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "player.song" => Some(Self::PlayerSong),
-            "player.state" => Some(Self::PlayerState),
-            "player.volume" => Some(Self::PlayerVolume),
-            "player.position" => Some(Self::PlayerPosition),
-            "player.mode" => Some(Self::PlayerMode),
-            "queue.length" => Some(Self::QueueLength),
-            "terminal" => Some(Self::Terminal),
-            _ => None,
-        }
-    }
-
-    /// 属性名字符串(与 `PropName` 的内置常量字面量一致)。
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::PlayerSong => "player.song",
-            Self::PlayerState => "player.state",
-            Self::PlayerVolume => "player.volume",
-            Self::PlayerPosition => "player.position",
-            Self::PlayerMode => "player.mode",
-            Self::QueueLength => "queue.length",
-            Self::Terminal => "terminal",
-        }
-    }
-}
-
-/// 属性值(内部表示)。与 `mineral_protocol::PropValue` 同构但独立定形,
-/// 理由同 [`TrackFinishedReason`]。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PropValue {
-    /// 布尔(terminal 的 fullscreen 字段)。
-    Bool(bool),
-
-    /// 整数(volume / position 整秒 / queue.length)。
-    Int(i64),
-
-    /// 字符串(state / mode 名 / song 的 qualified id)。
-    Str(String),
-
-    /// 复合结构(有序键值对,如 `terminal`)。递归用自身而非 BusValue:
-    /// BusValue 带 Float 无 `Eq`,会破坏属性缓存的 diff / 回放语义。
-    Table(Vec<(String, Self)>),
-
-    /// 缺省 / 空(如无在播歌)。
-    None,
-}
-
-/// 脚本发往 daemon 的播放器命令。daemon 侧由独立 task drain，并交给 player 或
-/// download 执行面。
+/// 脚本发往 daemon 的音乐命令与 session 配置覆盖。
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptCmd {
     /// 播放 / 暂停切换。
@@ -236,31 +62,16 @@ pub enum ScriptCmd {
         value: mineral_protocol::StoreValue,
     },
 
-    /// per-song 数值自增;带 `query` 时回投自增后的值。
-    StoreInc {
-        /// 目标歌。
-        song: SongId,
-
-        /// 开放键。
-        key: String,
-
-        /// 增量(可负)。
-        delta: i64,
-
-        /// 结果回投句柄(脚本侧没传回调则为 `None`,失败只记日志)。
-        query: Option<QueryId>,
-    },
-
     /// 读当前播放队列;结果以 [`ResolveValue::Songs`] 回投 `query`。
     QueueList {
         /// 结果回投句柄。
         query: QueryId,
     },
 
-    /// 整表重排队列。每个 id 必须在当前队列里出现过(次数不限);混入外来 id 则整体被拒。
+    /// 整表重排队列。id 必须来自当前队列，出现次数不限；混入外来 id 则整体被拒。
     QueueSet {
         /// 新的队列顺序。
-        ids: Vec<mineral_model::SongId>,
+        ids: Vec<SongId>,
     },
 
     /// 读用户歌单列表;结果以 [`ResolveValue::Playlists`] 回投 `query`。
@@ -269,12 +80,12 @@ pub enum ScriptCmd {
         query: QueryId,
     },
 
-    /// 读指定歌单的 membership relation;结果以 [`ResolveValue::PlaylistEntries`] 回投 `query`。
+    /// 读指定歌单的 membership relation。
     LibraryTracks {
         /// 目标歌单。
         playlist: mineral_model::PlaylistId,
 
-        /// 结果回投句柄。
+        /// 结果以 [`ResolveValue::PlaylistEntries`] 回投此句柄。
         query: QueryId,
     },
 
@@ -283,7 +94,7 @@ pub enum ScriptCmd {
         /// 搜索关键词。
         term: String,
 
-        /// 限定源;`None` = 跨全部源聚合(单源失败跳过该源)。
+        /// 限定来源；`None` 跨全部来源聚合，单个 channel 失败跳过。
         source: Option<mineral_model::SourceKind>,
 
         /// 起始偏移(从 0 起)。
@@ -296,17 +107,16 @@ pub enum ScriptCmd {
         query: QueryId,
     },
 
-    /// Resolves optional direct media for a song; the result is returned through
-    /// [`ResolveValue::DirectMedia`] 回投 `query`,无 direct media 时回错误。
+    /// 解析歌曲的 direct media；没有直链时回投查询错误。
     LibrarySongUrl {
-        /// 目标歌(namespace 决定走哪个 channel)。
+        /// 目标歌，namespace 决定 playback provider。
         song: SongId,
 
-        /// 结果回投句柄。
+        /// 结果以 [`ResolveValue::DirectMedia`] 回投此句柄。
         query: QueryId,
     },
 
-    /// 设/取消一首歌的 love。fire-and-forget,失败只记日志。
+    /// 设 / 取消一首歌的 love。fire-and-forget,失败只记日志。
     SetLoved {
         /// 目标歌。
         song: SongId,
@@ -315,97 +125,56 @@ pub enum ScriptCmd {
         loved: bool,
     },
 
-    /// 起一个子进程;结束后以 [`ResolveValue::Spawn`] 回投 `query`。
-    Spawn {
-        /// 脚本侧分配的标识(`handle:kill()` 经它路由)。
-        id: crate::proc::SpawnId,
-
-        /// 结构化参数。
-        spec: crate::proc::SpawnSpec,
-
-        /// 结果回投句柄。
-        query: QueryId,
-    },
-
-    /// 中止一个在跑的子进程(已退出 / 未知 id 为 no-op)。
-    SpawnKill {
-        /// 目标子进程标识。
-        id: crate::proc::SpawnId,
-    },
-
-    /// session 级配置覆盖(`mineral.config.override`)。一批叶子 op 原子应用:
-    /// daemon 全部落进覆盖表再一次重算 / 一次广播
-    /// [`Event::ConfigChanged`](mineral_protocol::Event::ConfigChanged)。
-    /// 表对象形一次调用拍出多条叶子;字符串形 = 长度 1 的一批。
+    /// 一批叶子覆盖原子应用于 daemon 私有配置。
     ConfigOverride {
         /// 待应用的叶子覆盖。
         ops: Vec<ConfigOverrideOp>,
     },
-
-    /// 窗口标题整串覆盖(`mineral.ui.window_title`,脚本自渲染)。渲染产物
-    /// 直通:不进配置合成,经
-    /// [`Event::WindowTitleOverride`](mineral_protocol::Event::WindowTitleOverride)
-    /// 转发给订阅 client;高频刷零成本。
-    WindowTitle {
-        /// 覆盖文本;`None` = 撤销(Lua 侧传 nil),client 回落结构化模板。
-        text: Option<String>,
-    },
 }
 
-/// 一条配置覆盖叶子 op。daemon 把它深合并进有效配置并落型校验,坏路径 /
-/// 坏值按 path 剔除并警告,好叶子不受殃及。
+/// 一条配置覆盖叶子 op。宿主深合并后落型校验；无效叶子按路径剔除。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConfigOverrideOp {
-    /// 配置路径(真实路径,如 `tui.lyrics.fullscreen_line_gap`)。
+    /// 宿主配置中的叶子路径；daemon 与 TUI 分别校验自己的配置。
     pub path: String,
 
-    /// 覆盖值;`None` = 撤销(仅字符串形传 nil 产生;表对象形拍不出撤销——
-    /// Lua 表存不下 nil value)。`Some(Nil)` 不出现,API 层把 nil 收敛成
-    /// `None`,避免「覆盖成 Nil」与「撤销」两义。
+    /// 覆盖值；`None` 撤销。Lua nil 收敛成 `None`，不产生 `Some(Nil)`。
     pub value: Option<mineral_protocol::BusValue>,
 }
 
-/// 一次异步查询的回投句柄:脚本侧把 Lua 回调挂进 pending 表拿到它,
-/// daemon 泵完成查询后凭它回投结果。
+/// 音乐查询的回投句柄，由脚本注册回调后随查询命令发给 daemon。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct QueryId(pub(crate) u64);
 
-/// 异步查询的结果(结构化;Lua 值的转换在脚本线程的 dispatch 层)。
-///
-/// 失败统一走 [`Self::Error`],Lua 回调收 `(nil, err)`。
+/// daemon 回投的音乐查询结果；失败时 Lua 回调接收 `(nil, err)`。
 #[derive(Debug)]
 pub enum ResolveValue {
-    /// per-song 持久值(`store.get` / `store.inc`)。
+    /// per-song 持久值(`store.get`)。
     Store(mineral_protocol::StoreValue),
 
     /// 无 collection membership 的歌曲列表(`queue.list` / `library.search`)。
     Songs(Vec<Song>),
 
-    /// Playlist membership 列表(`library.tracks`)，每项保留 0-based canonical index。
+    /// 歌单 membership 列表，每项保留 0-based canonical index。
     PlaylistEntries(Vec<PlaylistEntry>),
 
     /// 歌单列表(`library.playlists`)。
     Playlists(Vec<PlaylistBrief>),
 
-    /// Direct media and the tier requested by `library.song_url`.
+    /// `library.song_url` 解析的媒体与请求档位。
     DirectMedia {
-        /// Provider's direct resource and media facts.
+        /// Playback provider 的播放资源和媒体信息。
         media: Box<mineral_model::DirectMedia>,
 
-        /// Quality requested from the provider, not a measured quality receipt.
+        /// 请求档位，不是实测音质。
         requested_quality: BitRate,
     },
 
-    /// 子进程结束(`mineral.spawn` 回调)。
-    Spawn(crate::proc::SpawnResult),
-
-    /// 查询失败;底层 source 沿线程回执传递,到 Lua 回调边界才渲染成字符串。
+    /// 查询失败；跨线程保留原始错误，到 Lua 回调边界才渲染错误链。
     Error(Box<dyn std::error::Error + Send + Sync>),
 }
 
-/// 歌单在脚本侧的轻量投影(不携带曲目,曲目另经 `library.tracks` 拉)。
-///
-/// `library.playlists` 回调与 curate transform 入参共用这一投影。
+/// 歌单轻量投影，供 `library.playlists` 与 curate transform 共用。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaylistBrief {
     /// 歌单 id(Lua 侧用 `qualified()` 字符串)。
@@ -417,7 +186,7 @@ pub struct PlaylistBrief {
     /// 曲目数。
     pub track_count: u64,
 
-    /// 简介(拿不到为空串,与 [`mineral_model::Playlist`] 同约定)。
+    /// 简介，与 [`mineral_model::Playlist`] 同约定。
     pub description: String,
 
     /// 播放量;拿不到为 `None`(Lua 侧缺席为 nil)。
@@ -440,8 +209,7 @@ impl From<&mineral_model::Playlist> for PlaylistBrief {
     }
 }
 
-/// curate transform 采纳的一条歌单条目。daemon 侧凭 `id` 对回真实
-/// `Playlist`(未知 id 丢弃、重复取首见,在 daemon 落地)。
+/// curate transform 采纳的歌单条目；daemon 对回真实歌单，未知 id 丢弃、重复取首见。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CuratedEntry {
     /// 目标歌单(qualified id 解析回来)。
@@ -454,195 +222,82 @@ pub struct CuratedEntry {
     pub description: Option<String>,
 }
 
-/// 一次 curate 往返的结果。
+/// curate transform 的采纳结果。
 #[derive(Clone, Debug, PartialEq)]
 pub enum CurateOutcome {
-    /// 原列表透传:无函数注册(常态,非错误)/ 函数失败 / 超时(fail-open,
-    /// 歌单不因脚本 bug 消失)。
+    /// 无函数、执行失败或超时，原列表透传，歌单不因脚本错误消失。
     Identity,
 
-    /// transform 采纳:省略 = 隐藏,顺序 = 展示序,`name`/`description` 可覆盖。
+    /// 省略条目即隐藏，列表顺序即展示顺序，允许覆盖名称与简介。
     Curated(Vec<CuratedEntry>),
 }
 
-/// 脚本线程主循环消费的信封:事件投递、动作调用或停机。
+/// daemon 脚本线程消费的查询回投、音乐拦截、配置回调或停机请求。
 #[derive(Debug)]
 pub(crate) enum ScriptMsg {
-    /// 投递一个事件给已注册的 Lua 回调。
-    Event(ScriptEvent),
-
-    /// 调用一个具名动作(`mineral.action` 注册),结果经 oneshot 回执。
-    Action {
-        /// 动作注册名。
-        name: String,
-
-        /// 按键瞬间的 client 上下文(无界面触发面为 `None`,回调收空表)。
-        ctx: Option<mineral_protocol::KeyContext>,
-
-        /// 调用位置实参(CLI `mineral action <name> <args...>` 采集;
-        /// TUI 键位 / 无参触发为空)。Lua 回调经 `ctx.args` 读取(恒为数组)。
-        args: Vec<String>,
-
-        /// 调用结果回执(接收端 drop 时静默丢)。
-        reply: tokio::sync::oneshot::Sender<ActionOutcome>,
-    },
-
-    /// 一次异步查询的结果回投(daemon 泵完成 [`ScriptCmd`] 查询后发回)。
+    /// 一次异步查询的结果回投。
     Resolve {
-        /// 查询句柄(对应 pending 表里的 Lua 回调)。
+        /// 对应在途表里的 Lua 回调。
         query: QueryId,
 
         /// 查询结果。
         value: ResolveValue,
     },
 
-    /// 拉取 `mineral.bind` 的键绑定表(daemon 处理 `Request::ScriptBinds` 用)。
-    GetBinds {
-        /// bind 表回执(接收端 drop 时静默丢)。
-        reply: tokio::sync::oneshot::Sender<Vec<mineral_protocol::ScriptBind>>,
-    },
-
-    /// 同步拦截 `before_stream`:跑回调链并回执裁决(daemon 侧带墙钟超时 await)。
+    /// 同步拦截 `before_stream`，daemon 带墙钟超时等待裁决。
     InterceptStream {
         /// 入参快照。
         ctx: crate::hooks::BeforeStreamCtx,
 
-        /// 裁决回执(接收端超时放弃时静默丢)。
+        /// 裁决回执，接收端超时放弃时静默丢。
         reply: tokio::sync::oneshot::Sender<crate::hooks::HookDecision>,
     },
 
-    /// 同步拦截 `before_download`:跑回调链并回执裁决(daemon 侧带墙钟超时 await)。
+    /// 同步拦截 `before_download`。
     InterceptDownload {
         /// 入参快照。
         ctx: crate::hooks::BeforeDownloadCtx,
 
-        /// 裁决回执(接收端超时放弃时静默丢)。
+        /// 裁决回执，接收端超时放弃时静默丢。
         reply: tokio::sync::oneshot::Sender<crate::hooks::HookDecision>,
     },
 
-    /// 跑一级 curate transform(config `sources` 摘出的函数),回执采纳结果。
+    /// 执行 config 中的 curate transform。
     CuratePlaylists {
-        /// `Some` = per-source 函数(按源名取);`None` = 跨源函数(合并列表)。
+        /// `Some` 取来源函数；`None` 取跨来源的合并函数。
         source: Option<mineral_model::SourceKind>,
 
-        /// 待 transform 的歌单投影(per-source 给该源全量,跨源给合并列表)。
+        /// 按来源的全量歌单或跨来源合并歌单。
         briefs: Vec<PlaylistBrief>,
 
-        /// 采纳结果回执(接收端超时放弃时静默丢)。
+        /// 采纳结果回执。
         reply: tokio::sync::oneshot::Sender<CurateOutcome>,
     },
 
-    /// 拉取 per-source curate 函数的源名键集(daemon 对无对应 channel 的键
-    /// 打 warn 用),回执经 oneshot。
+    /// 拉取注册了 curate 函数的来源名，供 daemon 校验 channel 配置。
     GetCurateKeys {
-        /// 键集回执(接收端 drop 时静默丢)。
+        /// 来源名回执。
         reply: tokio::sync::oneshot::Sender<Vec<String>>,
     },
 
-    /// 渲染一个复制模板(config `copy.templates[index]` 的函数),结果经
-    /// oneshot 回执(daemon 处理 `Request::RenderCopyTemplate` 用)。
-    RenderCopyTemplate {
-        /// 模板下标(0-based,对位 config 数组序)。
-        index: usize,
-
-        /// 模板作用的实体(client 随请求带来)。
-        ctx: mineral_protocol::CopyTemplateCtx,
-
-        /// 渲染结果回执(接收端 drop 时静默丢)。
-        reply: tokio::sync::oneshot::Sender<crate::Result<String>>,
-    },
-
-    /// 跑一个具名队列变换(config `queue.transforms[index]` 的函数),回执新的队列顺序
-    /// (daemon 处理 [`crate::ScriptCmd`] 之外的 `Request::QueueEdit` 变换分支用)。
+    /// 执行 config 的队列变换函数。
     QueueTransform {
-        /// 变换下标(0-based,对位 config 数组序)。
-        index: usize,
+        /// daemon 配置中的唯一操作名。
+        name: String,
 
-        /// 当前队列(有序)。
-        queue: Vec<mineral_model::Song>,
+        /// 当前有序队列。
+        queue: Vec<Song>,
 
-        /// 在播条目的下标(0-based)。
+        /// 在播条目的 0-based 下标。
         current: usize,
 
-        /// 发起时的光标下标(0-based);无光标概念时缺席。
+        /// 光标的 0-based 下标，无光标时缺席。
         selected: Option<usize>,
 
-        /// 新顺序的 id 序列回执(接收端 drop 时静默丢)。
-        reply: tokio::sync::oneshot::Sender<crate::Result<Vec<mineral_model::SongId>>>,
+        /// 新顺序的 id 序列回执。
+        reply: tokio::sync::oneshot::Sender<crate::Result<Vec<SongId>>>,
     },
 
-    /// 优雅停机:主循环退出,线程结束。
+    /// 优雅停机，退出主循环。
     Stop,
-}
-
-/// 一次具名动作调用的结果。
-#[derive(Debug)]
-pub enum ActionOutcome {
-    /// 回调执行完成。
-    Done,
-
-    /// 该名字未注册。
-    NotFound,
-
-    /// 回调执行失败,保留结构化错误和 Lua source。
-    Failed(crate::Error),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TrackFinishedReason;
-
-    #[test]
-    fn meta_stub_finish_reason_alias_matches_rust() -> color_eyre::Result<()> {
-        use color_eyre::eyre::WrapErr;
-        // meta/mineral.lua 的 `mineral.FinishReason` 字符串枚举必须与
-        // Rust 侧 `as_str` 的全部取值逐字一致(顺序也钉死)。
-        let meta_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../mineral-config/src/lua/meta/mineral.lua"
-        );
-        let meta = std::fs::read_to_string(meta_path).wrap_err("read meta/mineral.lua")?;
-        let literals = [
-            TrackFinishedReason::Eof,
-            TrackFinishedReason::Skip,
-            TrackFinishedReason::Error,
-            TrackFinishedReason::Stop,
-        ]
-        .map(|reason| format!("\"{}\"", reason.as_str()))
-        .join("|");
-        let alias = format!("---@alias mineral.FinishReason {literals}");
-        assert!(
-            meta.contains(&alias),
-            "meta stub 缺少与 Rust 一致的别名行:`{alias}`"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn meta_stub_view_kind_alias_matches_rust() -> color_eyre::Result<()> {
-        use color_eyre::eyre::WrapErr;
-        use mineral_protocol::ViewKind;
-        // meta/mineral.lua 的 `mineral.ViewKind` 字符串枚举必须与
-        // Rust 侧 `script_name` 的全部取值逐字一致(顺序也钉死)。
-        let meta_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../mineral-config/src/lua/meta/mineral.lua"
-        );
-        let meta = std::fs::read_to_string(meta_path).wrap_err("read meta/mineral.lua")?;
-        let literals = [
-            ViewKind::Playlists,
-            ViewKind::Tracks,
-            ViewKind::Queue,
-            ViewKind::Fullscreen,
-            ViewKind::Search,
-        ]
-        .map(|view| format!("\"{}\"", view.script_name()))
-        .join("|");
-        let alias = format!("---@alias mineral.ViewKind {literals}");
-        assert!(
-            meta.contains(&alias),
-            "meta stub 缺少与 Rust 一致的别名行:`{alias}`"
-        );
-        Ok(())
-    }
 }

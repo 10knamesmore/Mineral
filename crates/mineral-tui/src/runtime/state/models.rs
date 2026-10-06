@@ -10,10 +10,6 @@ pub(crate) struct AppModels {
     /// server 数据镜像/拉取缓存(歌单 / 曲目 / 歌词 + ♥/本地完整播放次数装饰)。
     pub(crate) library: LibraryData,
 
-    /// 脚本下发的窗口标题整串覆盖(`Event::WindowTitleOverride` 落地;
-    /// `None` = 无覆盖,标题走结构化模板)。渲染产物直通,不属于配置。
-    pub(crate) window_title_override: Option<String>,
-
     /// server 权威播放态镜像(在播歌 / 队列 / 洗牌备份 / 同步版本号)。
     pub(crate) player: PlayerMirror,
 
@@ -36,6 +32,9 @@ pub(crate) struct AppModels {
     /// 各源能力声明镜像(启动时从 server 拉一次)。UI 据此决定渲染哪些入口
     /// (搜索类型 / 歌单写操作键 / 网页链接复制项);缺项 = 该源未注册,入口不画。
     pub(crate) caps: FxHashMap<SourceKind, mineral_channel_core::ChannelCaps>,
+
+    /// Daemon operations and play-count availability; never part of local config.
+    pub(crate) service_info: mineral_protocol::ServiceInfo,
 }
 
 impl AppModels {
@@ -43,7 +42,6 @@ impl AppModels {
     pub(crate) fn new() -> Self {
         Self {
             library: LibraryData::new(),
-            window_title_override: None,
             player: PlayerMirror::new(),
             playback: Playback::new(),
             tasks_snapshot: mineral_task::Snapshot {
@@ -53,6 +51,7 @@ impl AppModels {
             downloads_summary: mineral_protocol::DownloadSummary::default(),
             downloads: Vec::new(),
             caps: FxHashMap::default(),
+            service_info: mineral_protocol::ServiceInfo::default(),
         }
     }
 }

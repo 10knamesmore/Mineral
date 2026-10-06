@@ -121,9 +121,6 @@ pub trait NamespaceStore: Send + Sync {
     /// Writes a song value; Nil removes the key and reserved keys are rejected.
     async fn kv_set(&self, id: &SongId, key: &str, value: &StoreValue) -> StoreResult<()>;
 
-    /// Atomically increments an integer; absent keys start at zero, other types are rejected.
-    async fn kv_inc(&self, id: &SongId, key: &str, delta: i64) -> StoreResult<StoreValue>;
-
     /// Writes a rating from zero to five; None clears it.
     async fn set_rating(&self, id: &SongId, rating: Option<u8>) -> StoreResult<()>;
 

@@ -3,13 +3,10 @@
 use std::sync::Arc;
 
 use mineral_channel_core::ChannelCaps;
-use mineral_client::state::{
-    DownloadsDetailMirror, PlaybackMirror, PlayerMirror, WindowTitleOverride,
-};
+use mineral_client::state::{DownloadsDetailMirror, PlaybackMirror, PlayerMirror};
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    CopyTemplateCtx, DownloadId, DownloadTarget, Event, KeyContext, QueueContextWire, QueueOp,
-    ScriptBind, SubscriptionTopic,
+    DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp, SubscriptionTopic,
 };
 use mineral_task::{Priority, Snapshot, TaskKind};
 
@@ -21,8 +18,8 @@ pub(crate) struct BackendBootstrap {
     /// 各源能力声明。
     pub(crate) channel_caps: Vec<(SourceKind, ChannelCaps)>,
 
-    /// 脚本键绑定表。
-    pub(crate) script_binds: Vec<ScriptBind>,
+    /// Daemon business capabilities, independent of client preferences.
+    pub(crate) service_info: mineral_protocol::ServiceInfo,
 }
 
 /// TUI 后端端口。
@@ -35,11 +32,8 @@ pub(crate) trait Backend: Send + Sync {
     /// Selects a route and delivers the result through the completion queue.
     fn set_audio_output(&self, target: mineral_audio::OutputTarget);
 
-    /// 启动自举数据(能力表 / 脚本绑定)。
+    /// 启动自举能力表。
     fn bootstrap(&self) -> BackendBootstrap;
-
-    /// 重新拉取脚本绑定表(脚本热重载后调;结果经完成事件回流)。
-    fn refresh_script_binds(&self);
 
     /// 完成事件队列。
     fn completions(&self) -> &Arc<CompletionQueue>;
@@ -73,9 +67,6 @@ pub(crate) trait Backend: Send + Sync {
 
     /// 下载明细(未订阅 / 未就绪为 `None`)。
     fn downloads_detail(&self) -> Option<DownloadsDetailMirror>;
-
-    /// 窗口标题覆盖状态。
-    fn window_title_override(&self) -> WindowTitleOverride;
 
     /// 订阅主题(引用计数)。
     ///
@@ -195,20 +186,6 @@ pub(crate) trait Backend: Send + Sync {
     /// # Params:
     ///   - `id`: 目标歌曲
     fn request_song_stats(&self, id: SongId);
-
-    /// 触发脚本动作。
-    ///
-    /// # Params:
-    ///   - `name`: 动作名
-    ///   - `ctx`: 按键上下文
-    fn invoke_action(&self, name: &str, ctx: Option<KeyContext>);
-
-    /// 渲染复制模板。
-    ///
-    /// # Params:
-    ///   - `index`: 模板下标
-    ///   - `ctx`: 模板实体
-    fn render_copy_template(&self, index: usize, ctx: CopyTemplateCtx);
 
     /// 上报终端 UI 状态。
     ///

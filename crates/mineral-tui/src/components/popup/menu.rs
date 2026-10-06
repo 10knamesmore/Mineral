@@ -5,8 +5,8 @@
 //! 进退场是方向性揭开(贴锚边先出现),动画由
 //! [`OverlayStack`](super::stack::OverlayStack) 托管。
 
+use crate::config::MenuAlign;
 use crossterm::event::{KeyCode, KeyEvent};
-use mineral_config::MenuAlign;
 use mineral_model::{Album, Artist, Playlist, Song};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -93,14 +93,14 @@ pub(crate) enum MenuAction {
     /// 把文本写进系统剪贴板(复制菜单;文本在构造菜单时就渲染好)。
     Copy(String),
 
-    /// 自定义复制模板:确认时把实体发给 daemon 脚本运行时渲染,文本回来再进
-    /// 剪贴板(函数在 daemon 的 VM 里,client 侧只有下标与数据)。
+    /// 自定义复制模板:在当前客户端 VM 中同步渲染，配置与 UI 效果校验成功后
+    /// 才写入剪贴板，不向 daemon 发送模板或实体。
     CopyTemplate {
-        /// 模板下标(0-based,对位 config `copy.templates` 数组序)。
+        /// 模板下标(0-based,对位本地 `copy.templates` 数组序)。
         index: usize,
 
         /// 模板作用的实体(构造菜单时捕获)。
-        ctx: mineral_protocol::CopyTemplateCtx,
+        ctx: mineral_script::CopyTemplateCtx,
     },
 }
 

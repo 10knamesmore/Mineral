@@ -1,8 +1,8 @@
-//! mineral-config 专用 proc-macro:配置 schema 结构体的样板收敛。
+//! daemon 与 TUI 配置 schema 的 proc-macro:生成落型类型、getter 和 LuaLS 片段。
 //!
 //! 独立于 `mineral-macros`(那是普通 lib,导出类型与 `macro_rules!`;
 //! `proc-macro = true` 的 crate 只能导出过程宏,两者无法合并)。这里的宏
-//! 耦合 mineral-config 的 schema 约定,不做通用件。
+//! 遵循两个宿主的配置 schema 约定,不做通用序列化宏。
 
 mod lua_stub;
 
@@ -32,11 +32,10 @@ pub fn config_section(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// 音乐源段:[`macro@config_section`] 三件套 + 注入各源共用的网络字段
-/// (`timeout_secs` / `proxy` / `max_connections` / `color`),源特有字段照常
+/// (`timeout_secs` / `proxy` / `max_connections`),源特有字段照常
 /// 写在 struct 体里(排在共用字段之后)。
 ///
-/// 注入字段引用 `de_proxy` 与 `ColorRef`,**只在 `schema::sources` 模块语境
-/// 展开**(两个名字按展开点解析)。
+/// 注入字段引用 `de_proxy`,只在 `schema::sources` 模块语境展开。
 ///
 /// # Params:
 ///   - `attr`: 无参数(带参报编译错)
@@ -64,9 +63,6 @@ pub fn source_section(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         /// 连接并发上限；0 为不限
         max_connections: usize,
-
-        /// 来源徽标色
-        color: ColorRef,
     });
     let own_fields = std::mem::take(&mut fields.named);
     fields.named = shared.named;

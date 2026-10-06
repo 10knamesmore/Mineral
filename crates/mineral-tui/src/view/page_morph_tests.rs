@@ -20,7 +20,7 @@ fn transport_feedback_survives_repeated_paint_resize_and_morph() -> color_eyre::
     let area = Rect::new(0, 0, 120, 40);
     let mut app = app_with_queue(3, 0)?;
     let now = std::time::Instant::now();
-    let anim = app.state.cfg.tui().animation();
+    let anim = app.state.cfg.animation();
     app.state.ui.transport.on_action(
         Action::CyclePlayMode,
         app.state.models.playback.mode,

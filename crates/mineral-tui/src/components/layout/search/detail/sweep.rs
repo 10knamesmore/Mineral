@@ -1,7 +1,7 @@
 //! 下钻 / 返回与 artist 双区切换共用的横向 sweep 列合成原语：计算每列的取样帧与源列号，
 //! 并把列写入目标缓冲，保留透明背景。
 
-use mineral_config::SweepStyle;
+use crate::config::SweepStyle;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -57,8 +57,7 @@ pub(super) fn sweep_column(
                 (SweepLayer::From, c)
             }
         }
-        // SweepStyle 是 #[non_exhaustive];本接线不识别的变体按 Push 处理。
-        SweepStyle::Push | _ => {
+        SweepStyle::Push => {
             if is_push {
                 // 出发帧整体左移 advance、目标从右补入。
                 if c + advance < w {

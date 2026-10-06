@@ -5,7 +5,7 @@
 //! 放得下的;全都放不下取可用空间最大的方向并截断尺寸;交叉轴(与主方向正交)按
 //! [`MenuAlign`] 在锚点跨度内对齐,越界时向屏幕内 clamp。
 
-use mineral_config::MenuAlign;
+use crate::config::MenuAlign;
 use ratatui::layout::Rect;
 
 /// 弹出方向偏好(相对锚点矩形)。

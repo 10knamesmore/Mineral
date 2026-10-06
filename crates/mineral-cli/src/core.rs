@@ -7,7 +7,6 @@ use tokio::runtime::Runtime;
 
 use crate::error::{Error, Result};
 
-use crate::subcommands::action;
 use crate::subcommands::cache::{self, CacheCommand};
 use crate::subcommands::channel::{self, ChannelArgs};
 use crate::subcommands::config::{self, ConfigCommand};
@@ -32,16 +31,6 @@ pub struct Args {
 /// 顶层子命令。
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// run a named action registered in `mineral.action`
-    Action {
-        /// registered action name, e.g. "my.skip_short"
-        name: String,
-
-        /// positional arguments passed to the action callback (read via `ctx.args` in Lua); optional
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
-    },
-
     /// cache management
     Cache {
         /// cache subcommand
@@ -109,7 +98,6 @@ async fn run_async(command: Command) -> Result<ExitCode> {
 /// 分发没有自定义退出码契约的子命令。
 async fn run_plain(command: Command) -> Result<()> {
     match command {
-        Command::Action { name, args } => action::run(&name, &args).await,
         Command::Cache { cmd } => cache::run(cmd).await,
         Command::Channel(args) => channel::run(args).await,
         Command::Config { cmd } => config::run(cmd).await,

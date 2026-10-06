@@ -242,7 +242,7 @@ async fn prefetch_skip_vetoes_predicted_occurrence() -> color_eyre::Result<()> {
 async fn before_stream_records_hook_fire() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let (core, runtime) = core_with_script_stats(
         r#"mineral.hook("before_stream", function(ctx) end)"#,
@@ -266,7 +266,7 @@ async fn before_stream_records_hook_fire() -> color_eyre::Result<()> {
 async fn prefetch_rewrite_records_rewritten_then_armed() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
     let store = mineral_stats::StatsStore::open(&dir.path().join("stats.db")).await?;
-    let params = crate::params_from_config(mineral_config::Config::defaults()?.stats());
+    let params = crate::params_from_config(crate::config::DaemonConfig::defaults()?.stats());
     let (recorder, _actor) = crate::StatsRecorder::spawn(store.clone(), params);
     let replacement = dir.path().join("replacement.mp3");
     tokio::fs::write(&replacement, b"replacement").await?;

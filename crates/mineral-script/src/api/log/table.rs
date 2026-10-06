@@ -8,7 +8,7 @@ use super::{info, warn};
 ///
 /// # Params:
 ///   - `lua`: 目标 VM
-///   - `mineral`: 全局 `mineral` 表
+///   - `mineral`: daemon 或 TUI 的宿主模块表
 pub(crate) fn install(lua: &Lua, mineral: &Table) -> mlua::Result<()> {
     let log = lua.create_table()?;
     info::install(lua, &log)?;

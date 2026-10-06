@@ -26,7 +26,7 @@ pub(crate) struct SearchCtx<'a> {
     pub keymap: &'a Keymap,
 
     /// 结果列表与详情简介的滚动步长、结果分页预取半径。
-    pub behavior: &'a mineral_config::BehaviorConfig,
+    pub behavior: &'a crate::config::BehaviorConfig,
 
     /// detail 下钻 / 返回滑动拍数(App 从动画配置预算好传入)。
     pub sweep_ticks: u16,
@@ -95,7 +95,7 @@ pub(crate) enum SearchEffect {
 impl App {
     /// Search 布局态按键入口:就地构造只读 [`SearchCtx`]、交 Page 吃键、再落地它吐回的意图。
     pub(in crate::app) fn handle_channel_search_key(&mut self, key: &KeyEvent) {
-        let anim = self.state.cfg.tui().animation();
+        let anim = self.state.cfg.animation();
         let sweep_ticks =
             crate::render::anim::ticks16_from_ms(*anim.sweep_ms(), *anim.frame_tick_ms());
         // SearchCtx 就地构造:channel_search / caps / cfg 是 self.state 三个不相交字段,keymap 在
@@ -105,7 +105,7 @@ impl App {
             SearchCtx {
                 caps: &self.state.models.caps,
                 keymap: &self.keymap,
-                behavior: self.state.cfg.tui().behavior(),
+                behavior: self.state.cfg.behavior(),
                 sweep_ticks,
             },
         );

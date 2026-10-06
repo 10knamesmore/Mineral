@@ -356,11 +356,11 @@ fn album_prefetch_uses_current_radius_and_only_the_albums_section() -> color_eyr
     test.press(KeyCode::Char('l'));
     test.press(KeyCode::Char(']'));
     let tree = mineral_config::merge_tree(
-        mineral_config::default_tree()?,
-        serde_json::json!({"tui":{"behavior":{"search_prefetch_rows":2}}}),
+        crate::config::default_tui_tree()?,
+        serde_json::json!({"behavior":{"search_prefetch_rows":2}}),
     );
     test.app
-        .apply_pushed_config(mineral_protocol::BusValue::from_json(tree));
+        .apply_config(std::sync::Arc::new(crate::config::tui_from_tree(&tree)?));
     test.frame_mut()?.list_mut().set_sel(25);
     test.press(KeyCode::Char('j'));
     assert_eq!(test.requested_pages()?, vec![Page::default()]);

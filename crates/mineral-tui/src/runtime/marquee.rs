@@ -29,10 +29,10 @@ enum Mode {
 }
 
 /// 把配置的滚动方式映射成 [`Mode`](各方式独有节奏一并折算成拍)。
-fn marquee_mode(cfg: &mineral_config::MarqueeConfig, tick_ms: u64) -> Mode {
+fn marquee_mode(cfg: &crate::config::MarqueeConfig, tick_ms: u64) -> Mode {
     match *cfg.mode() {
-        mineral_config::MarqueeMode::Loop => Mode::Loop,
-        mineral_config::MarqueeMode::Bounce => Mode::Bounce {
+        crate::config::MarqueeMode::Loop => Mode::Loop,
+        crate::config::MarqueeMode::Bounce => Mode::Bounce {
             // ticks16_from_ms 下限 1 拍,edge_pause_ms = 0(直接折返)需保住 0 语义。
             edge_hold_ticks: if *cfg.bounce().edge_pause_ms() == 0 {
                 0
@@ -43,7 +43,7 @@ fn marquee_mode(cfg: &mineral_config::MarqueeConfig, tick_ms: u64) -> Mode {
                 ))
             },
         },
-        mineral_config::MarqueeMode::Off => Mode::Off,
+        crate::config::MarqueeMode::Off => Mode::Off,
     }
 }
 
@@ -65,7 +65,7 @@ struct Tempo {
 
 impl Tempo {
     /// 按本次配置折算节奏，仅作为相位采样的局部值。
-    fn from_config(cfg: &mineral_config::MarqueeConfig, tick_ms: u64) -> Self {
+    fn from_config(cfg: &crate::config::MarqueeConfig, tick_ms: u64) -> Self {
         use crate::render::anim::ticks16_from_ms;
         Self {
             mode: marquee_mode(cfg, tick_ms),
@@ -122,11 +122,11 @@ impl Marquee {
     pub(crate) fn dependencies(
         &self,
         inputs: &mut crate::render::memo::Dependencies<'_>,
-        anim: &mineral_config::AnimationConfig,
+        anim: &crate::config::AnimationConfig,
         now: Instant,
     ) {
         inputs.observe(&self.overflowing);
-        if self.overflowing && *anim.marquee().mode() != mineral_config::MarqueeMode::Off {
+        if self.overflowing && *anim.marquee().mode() != crate::config::MarqueeMode::Off {
             inputs.time(now);
         }
     }
@@ -138,7 +138,7 @@ impl Marquee {
         content_w: u16,
         window_w: u16,
         gap_w: u16,
-        anim: &mineral_config::AnimationConfig,
+        anim: &crate::config::AnimationConfig,
         now: Instant,
     ) -> Phase {
         let tick_ms = *anim.frame_tick_ms();

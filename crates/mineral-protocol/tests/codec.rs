@@ -2,15 +2,12 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
-use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, BitRate, Playlist, PlaylistId, SongId, SourceKind,
-};
+use mineral_model::{BitRate, PlaylistId, SongId, SourceKind};
 use mineral_protocol::{
-    AdvanceKind, CopyTemplateCtx, CopyTextFailure, CurrentSync, DownloadId, DownloadOrigin,
-    DownloadStatus, DownloadSummary, DownloadTarget, DownloadWave, FailureKind, KeyContext,
-    OperationFailure, PlayMode, PlayerSync, PlayerVersions, PlaylistRef, QueueSync, Request,
-    Response, ScriptBind, SegmentVersion, SongDownloadView, SongStatsWire, StoreValue, ViewKind,
-    framed, recv, send,
+    AdvanceKind, CurrentSync, DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary,
+    DownloadTarget, DownloadWave, FailureKind, OperationFailure, PlayMode, PlayerSync,
+    PlayerVersions, QueueSync, Request, Response, SegmentVersion, SongDownloadView, SongStatsWire,
+    StoreValue, framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use mineral_test::song;
@@ -188,9 +185,9 @@ async fn round_trip_simple_requests() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// store 读写与脚本动作触发(含 ctx)的 round-trip。
+/// store 读写的 round-trip。
 #[tokio::test]
-async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
+async fn round_trip_store() -> color_eyre::Result<()> {
     let id = SongId::new(SourceKind::NETEASE, "31");
     req_round_trips(Request::StoreGet {
         song: id.clone(),
@@ -206,64 +203,6 @@ async fn round_trip_store_and_invoke_action() -> color_eyre::Result<()> {
     resp_round_trips(Response::StoreValue(StoreValue::Real(2.5))).await?;
     resp_round_trips(Response::StoreValue(StoreValue::Nil)).await?;
 
-    // CLI 触发:无 ctx,带位置实参
-    req_round_trips(Request::InvokeAction {
-        name: "my.skip".to_owned(),
-        ctx: None,
-        args: Vec::from(["mode".to_owned(), "clock".to_owned()]),
-    })
-    .await?;
-    // TUI 触发:带按键瞬间上下文(builder 构造,getter 读;字段全 Some + 全 None 各一)
-    let ctx = KeyContext::builder()
-        .view(ViewKind::Tracks)
-        .selected_song(Some(Box::new(song("31"))))
-        .selected_playlist(Some(PlaylistRef {
-            id: PlaylistId::new(SourceKind::NETEASE, "p1"),
-            name: "日常".to_owned(),
-        }))
-        .now_playing(Some(Box::new(song("32"))))
-        .selected_loved(Some(true))
-        .search_query(Some("雨".to_owned()))
-        .build();
-    req_round_trips(Request::InvokeAction {
-        name: "my.rate".to_owned(),
-        ctx: Some(ctx),
-        args: Vec::new(),
-    })
-    .await?;
-    let empty = KeyContext::builder()
-        .view(ViewKind::Search)
-        .selected_song(None)
-        .selected_playlist(None)
-        .now_playing(None)
-        .selected_loved(None)
-        .search_query(None)
-        .build();
-    req_round_trips(Request::InvokeAction {
-        name: "my.global".to_owned(),
-        ctx: Some(empty),
-        args: Vec::new(),
-    })
-    .await?;
-    Ok(())
-}
-
-/// 脚本 bind 表拉取:请求无参,应答携带 key→动作名列表。
-#[tokio::test]
-async fn round_trip_script_binds() -> color_eyre::Result<()> {
-    req_round_trips(Request::ScriptBinds).await?;
-    resp_round_trips(Response::ScriptBinds(vec![
-        ScriptBind {
-            key: "X".to_owned(),
-            action: "bind#1".to_owned(),
-        },
-        ScriptBind {
-            key: "<C-g>".to_owned(),
-            action: "bind#2".to_owned(),
-        },
-    ]))
-    .await?;
-    resp_round_trips(Response::ScriptBinds(Vec::new())).await?;
     Ok(())
 }
 
@@ -536,53 +475,22 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
     ))
     .await?;
 
-    // 复制模板覆盖 Song、Playlist、Album 与 Artist 四种实体上下文。
-    req_round_trips(Request::RenderCopyTemplate {
-        index: 2,
-        ctx: CopyTemplateCtx::Song(Box::new(song("cp"))),
-    })
+    // 服务能力只携带可执行操作名称与采集可用性，不含配置树。
+    req_round_trips(Request::ServiceInfo).await?;
+    resp_round_trips(Response::ServiceInfo(mineral_protocol::ServiceInfo {
+        queue_transforms: vec!["去重".to_owned(), "按艺人排序".to_owned()],
+        play_counts: mineral_protocol::PlayCountAvailability {
+            enabled: true,
+            excluded_sources: vec!["local".to_owned()],
+        },
+    }))
     .await?;
-    req_round_trips(Request::RenderCopyTemplate {
-        index: 0,
-        ctx: CopyTemplateCtx::Playlist(Box::new(
-            Playlist::builder()
-                .id(PlaylistId::new(SourceKind::NETEASE, "pl"))
-                .name("收藏夹".to_owned())
-                .entries(vec![
-                    mineral_model::PlaylistEntry::builder()
-                        .index(mineral_model::CollectionIndex::new(0))
-                        .song(song("in-pl"))
-                        .build(),
-                ])
-                .build(),
-        )),
+    req_round_trips(Request::QueueEdit {
+        op: mineral_protocol::QueueOp::ApplyTransform {
+            name: "去重".to_owned(),
+            selected: Some(2),
+        },
     })
-    .await?;
-    req_round_trips(Request::RenderCopyTemplate {
-        index: 1,
-        ctx: CopyTemplateCtx::Album(Box::new(
-            Album::builder()
-                .id(AlbumId::new(SourceKind::NETEASE, "al"))
-                .name("专辑".to_owned())
-                .publish_time_ms(1_700_000_000_000)
-                .build(),
-        )),
-    })
-    .await?;
-    req_round_trips(Request::RenderCopyTemplate {
-        index: 3,
-        ctx: CopyTemplateCtx::Artist(Box::new(
-            Artist::builder()
-                .id(ArtistId::new(SourceKind::NETEASE, "ar"))
-                .name("乐队".to_owned())
-                .build(),
-        )),
-    })
-    .await?;
-    resp_round_trips(Response::CopyText(Ok("标题 - 歌手".to_owned()))).await?;
-    resp_round_trips(Response::CopyText(Err(CopyTextFailure::CallbackFailed {
-        detail: "模板下标越界".to_owned(),
-    })))
     .await?;
 
     req_round_trips(Request::TerminalState {

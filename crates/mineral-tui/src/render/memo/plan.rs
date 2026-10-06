@@ -46,7 +46,7 @@ impl std::fmt::Debug for PaintCache {
 /// 配置通过整树替换更新；保留 Arc 防止地址复用误判。
 struct ConfigIdentity(
     /// 上次绘制时的配置身份，不作为组件的配置数据源。
-    Arc<mineral_config::Config>,
+    Arc<crate::config::TuiConfig>,
 );
 
 impl Clone for ConfigIdentity {
