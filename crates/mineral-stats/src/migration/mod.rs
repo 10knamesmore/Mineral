@@ -2,7 +2,6 @@
 
 mod m20260906_stats;
 mod registry;
-mod stats_schema;
 
 pub(crate) use registry::Migrator;
 

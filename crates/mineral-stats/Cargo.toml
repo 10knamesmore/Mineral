@@ -20,6 +20,7 @@ sea-orm-migration = { workspace = true }
 async-trait   = { workspace = true }
 tokio         = { workspace = true }
 mineral-model = { workspace = true }
+mineral-log   = { workspace = true }
 rustc-hash    = { workspace = true }
 typed-builder = { workspace = true }
 serde         = { workspace = true }

@@ -3427,6 +3427,7 @@ dependencies = [
  "async-trait",
  "color-eyre",
  "criterion",
+ "mineral-log",
  "mineral-model",
  "mineral-test",
  "rustc-hash 2.1.2",
