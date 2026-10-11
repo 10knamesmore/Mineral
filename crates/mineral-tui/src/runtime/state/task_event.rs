@@ -5,7 +5,8 @@ use mineral_task::TaskEvent;
 use rustc_hash::FxHashSet;
 
 use super::AppState;
-use crate::runtime::view_model::PlaylistView;
+use crate::runtime::collection::CollectionId;
+use crate::runtime::view_model::{AlbumView, PlaylistView};
 
 impl AppState {
     /// 把任务或后台查询的 completion event 应用到状态。
@@ -16,7 +17,7 @@ impl AppState {
         match event {
             TaskEvent::LibrarySnapshot { playlists } => {
                 self.ui.browse.invalidate_expansions();
-                let position = self.playlist_list_position();
+                let position = self.collection_list_position();
                 let mut incoming_ids = FxHashSet::default();
                 // 保留 server 的快照顺序；ID 索引只用于判断旧歌单是否仍在列表中。
                 let incoming_playlists = playlists
@@ -35,10 +36,12 @@ impl AppState {
                     has_removed_playlists = true;
                     self.models.library.tracks.remove(id);
                     self.models.library.tracks_requested.remove(id);
-                    if self.ui.browse.nav.opened_playlist.as_ref() == Some(id) {
-                        self.ui.browse.nav.opened_playlist = None;
+                    if self.ui.browse.nav.opened_collection.as_ref()
+                        == Some(&CollectionId::Playlist(id.clone()))
+                    {
+                        self.ui.browse.nav.opened_collection = None;
                         self.ui.browse.nav.pending_track_restore = None;
-                        self.ui.browse.view.switch_to(super::View::Playlists);
+                        self.ui.browse.view.switch_to(super::View::Collections);
                     }
                 }
                 if has_removed_playlists {
@@ -46,10 +49,10 @@ impl AppState {
                         self.models.library.tracks_generation.wrapping_add(1);
                 }
                 self.models.library.playlists = incoming_playlists;
-                self.restore_playlist_list_position(position);
+                self.restore_collection_list_position(position);
             }
             // server 已聚合进 LibrarySnapshot,理论不会到 client。defensive:跳过。
-            TaskEvent::PlaylistsFetched { .. } => {}
+            TaskEvent::PlaylistsFetched { .. } | TaskEvent::AlbumsFetched { .. } => {}
             // 纯埋点信号,server 记录后不转发;client 永不收到,defensive:跳过。
             TaskEvent::FetchDone { .. } => {}
             TaskEvent::PlaylistDetailFetched { id, load, detail } => {
@@ -73,14 +76,15 @@ impl AppState {
                         return;
                     }
                 }
-                if self.ui.browse.view == super::View::Library
-                    && self.ui.browse.nav.opened_playlist.as_ref() == Some(id)
+                if self.ui.browse.view == super::View::Tracks
+                    && self.ui.browse.nav.opened_collection.as_ref()
+                        == Some(&CollectionId::Playlist(id.clone()))
                 {
                     self.ui.browse.invalidate_expansions();
                 }
-                let parent_position = self.playlist_list_position();
+                let parent_position = self.collection_list_position();
                 let playlist = &detail.playlist;
-                let selected_index = (self.ui.browse.view == super::View::Library)
+                let selected_index = (self.ui.browse.view == super::View::Tracks)
                     .then(|| {
                         self.selected_playlist()
                             .filter(|p| p.data.id == *id)
@@ -99,7 +103,7 @@ impl AppState {
                     .collect();
                 self.models.library.tracks.insert(
                     id.clone(),
-                    super::PlaylistTracks {
+                    super::CollectionTracks {
                         entries: decorated,
                         complete: detail.complete,
                         next_offset: detail.next_offset,
@@ -107,7 +111,7 @@ impl AppState {
                 );
                 self.models.library.tracks_generation =
                     self.models.library.tracks_generation.wrapping_add(1);
-                self.restore_playlist_list_position(parent_position);
+                self.restore_collection_list_position(parent_position);
                 let position = selected_index.and_then(|index| {
                     self.filtered_tracks()
                         .iter()
@@ -116,7 +120,7 @@ impl AppState {
                 if let Some(position) = position {
                     self.ui.browse.tracks.select(position);
                 }
-                self.apply_pending_restore(id);
+                self.apply_pending_restore(&CollectionId::Playlist(id.clone()));
                 // 搜索页保留的歌单帧按 ID 更新，切 source / kind 后也能收到曲目。
                 if detail.complete {
                     for results in self.ui.channel_search.retained_results_mut() {
@@ -176,7 +180,84 @@ impl AppState {
             TaskEvent::ArtistAlbumsPageFailed { id, page } => {
                 self.apply_artist_albums_page_failed(id, *page);
             }
-            TaskEvent::AlbumDetailFetched { id, album } => self.apply_album_detail(id, album),
+            TaskEvent::AlbumDetailFetched { id, album } => {
+                let position = self.collection_list_position();
+                let entries = album
+                    .tracks
+                    .iter()
+                    .cloned()
+                    .map(|entry| self.decorate_entry(entry))
+                    .collect();
+                self.models.library.album_tracks.insert(
+                    id.clone(),
+                    super::CollectionTracks {
+                        entries,
+                        complete: true,
+                        next_offset: None,
+                    },
+                );
+                self.models.library.albums_requested.remove(id);
+                if let Some(listed) = self
+                    .models
+                    .library
+                    .albums
+                    .iter_mut()
+                    .find(|a| a.data.id == *id)
+                {
+                    listed.data = (**album).clone();
+                }
+                self.models.library.tracks_generation =
+                    self.models.library.tracks_generation.wrapping_add(1);
+                self.ui.browse.invalidate_expansions();
+                self.restore_collection_list_position(position);
+                self.apply_pending_restore(&CollectionId::Album(id.clone()));
+                self.apply_album_detail(id, album);
+            }
+            TaskEvent::AlbumDetailFailed { id } => {
+                self.models
+                    .library
+                    .fail_album(id.clone(), self.ui.browse.nav.last_sel_change);
+            }
+            TaskEvent::SavedAlbumsSnapshot { albums } => {
+                let position = self.collection_list_position();
+                let ids: FxHashSet<_> = albums.iter().map(|a| a.id.clone()).collect();
+                self.models
+                    .library
+                    .album_tracks
+                    .retain(|id, _| ids.contains(id));
+                self.models
+                    .library
+                    .albums_requested
+                    .retain(|id, _| ids.contains(id));
+                self.models.library.albums = albums
+                    .iter()
+                    .map(|data| {
+                        let mut data = data.clone();
+                        if let Some(previous) = self
+                            .models
+                            .library
+                            .albums
+                            .iter()
+                            .find(|a| a.data.id == data.id)
+                        {
+                            data.track_count = data.track_count.or(previous.data.track_count);
+                        }
+                        AlbumView { data }
+                    })
+                    .collect();
+                if let Some(CollectionId::Album(id)) = &self.ui.browse.nav.opened_collection
+                    && !ids.contains(id)
+                {
+                    self.ui.browse.nav.opened_collection = None;
+                    self.ui.browse.nav.pending_track_restore = None;
+                    self.ui.browse.view.switch_to(super::View::Collections);
+                }
+                self.models.library.tracks_generation =
+                    self.models.library.tracks_generation.wrapping_add(1);
+                self.ui.browse.invalidate_expansions();
+                self.restore_collection_list_position(position);
+                mineral_log::debug!(target: "tui", albums = albums.len(), "saved album library updated");
+            }
             // 写成功后的列表收敛由 server 触发的 LibrarySnapshot 完成；完成事件本身不改 AppState。
             TaskEvent::PlaylistWriteDone { .. } => {}
         }

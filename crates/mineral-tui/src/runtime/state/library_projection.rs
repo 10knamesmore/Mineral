@@ -1,53 +1,66 @@
 //! 歌单曲目的用户数据装饰、延迟光标恢复与当前浏览列表投影。
 
-use mineral_model::{PlaylistId, Song, SourceKind};
+use crate::runtime::collection::{CollectionGroup, CollectionId, CollectionRef};
+use mineral_model::{Song, SourceKind};
 
-use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
+use crate::runtime::view_model::{CollectionTrackData, CollectionTrackView, PlaylistView};
 
 use super::{AppState, LibraryQueueProjection, View, browse, track_filter};
 
-/// 数据更新前外层歌单列表的选中身份与屏幕行，用于在新结果排序中恢复位置。
-pub(super) struct PlaylistListPosition {
-    /// 更新前选中的歌单。
-    playlist: PlaylistId,
+/// 数据更新前的一种类型的选择；未显示的类型也要保持同一项目。
+pub(super) struct CollectionListPosition {
+    /// 所属的列表类型。
+    group: CollectionGroup,
+
+    /// 更新前选中的项目；空列表不构造占位身份。
+    collection: Option<CollectionId>,
 
     /// 选中行相对视口顶部的位置。
     screen_row: usize,
 }
 
 impl AppState {
-    /// 在替换歌单或更新深度搜索数据前，记录父列表选择。
-    pub(super) fn playlist_list_position(&self) -> Option<PlaylistListPosition> {
-        Some(PlaylistListPosition {
-            playlist: self.selected_playlist_in_list()?.data.id.clone(),
-            screen_row: self
-                .ui
-                .browse
-                .playlists
-                .scroll()
-                .sel()
-                .saturating_sub(self.ui.browse.playlists.scroll().scroll_target()),
+    /// 在更新任何曲库数据前记录两种类型的选择。
+    pub(super) fn collection_list_position(&self) -> [CollectionListPosition; 2] {
+        let lists = &self.ui.browse.collections;
+        [CollectionGroup::Playlists, CollectionGroup::Albums].map(|group| {
+            let scroll = lists.scroll_for(group);
+            CollectionListPosition {
+                group,
+                collection: lists
+                    .items(&self.models.library, &self.cfg, group)
+                    .get(scroll.sel())
+                    .map(|item| item.id()),
+                screen_row: scroll.sel().saturating_sub(scroll.scroll_target()),
+            }
         })
     }
 
-    /// 让数据更新后的父列表仍指向同一歌单；目标消失时回到列表开头。
-    pub(super) fn restore_playlist_list_position(
+    /// 两种列表各自按身份恢复，目标被删除时回到该列表开头。
+    pub(super) fn restore_collection_list_position(
         &mut self,
-        position: Option<PlaylistListPosition>,
+        positions: [CollectionListPosition; 2],
     ) {
-        let resolved = position.and_then(|position| {
-            self.filtered_playlists()
-                .iter()
-                .position(|p| p.data.id == position.playlist)
-                .map(|index| (index, position.screen_row))
-        });
-        if let Some((index, screen_row)) = resolved {
-            if index != self.ui.browse.playlists.scroll().sel() {
-                mineral_log::debug!(target: "tui", previous_selection = self.ui.browse.playlists.scroll().sel(), selection = index, screen_row, "retain playlist selection after library update");
-                self.ui.browse.playlists.place(index, screen_row);
+        for position in positions {
+            let resolved = position.collection.and_then(|id| {
+                self.ui
+                    .browse
+                    .collections
+                    .items(&self.models.library, &self.cfg, position.group)
+                    .iter()
+                    .position(|item| item.id() == id)
+            });
+            if let Some(index) = resolved {
+                if index != self.ui.browse.collections.scroll_for(position.group).sel() {
+                    mineral_log::debug!(target: "tui", group = position.group.label(), selection = index, screen_row = position.screen_row, "retain collection selection after library update");
+                    self.ui
+                        .browse
+                        .collections
+                        .place_in(position.group, index, position.screen_row);
+                }
+            } else {
+                self.ui.browse.collections.place_in(position.group, 0, 0);
             }
-        } else {
-            self.ui.browse.playlists.place(0, 0);
         }
     }
 
@@ -58,28 +71,26 @@ impl AppState {
     ///
     /// # Params:
     ///   - `id`: 刚落 cache 的歌单
-    pub(super) fn apply_pending_restore(&mut self, id: &PlaylistId) {
+    pub(super) fn apply_pending_restore(&mut self, id: &CollectionId) {
         if self
             .ui
             .browse
             .nav
             .pending_track_restore
             .as_ref()
-            .is_none_or(|p| &p.playlist != id)
+            .is_none_or(|p| &p.collection != id)
         {
             return;
         }
         let Some(pending) = self.ui.browse.nav.pending_track_restore.take() else {
             return;
         };
-        let still_there = self.ui.browse.view == View::Library
-            && self
-                .selected_playlist()
-                .is_some_and(|p| p.data.id == pending.playlist);
+        let still_there = self.ui.browse.view == View::Tracks
+            && self.ui.browse.nav.opened_collection.as_ref() == Some(&pending.collection);
         if !still_there || self.ui.browse.tracks.scroll().sel() != 0 {
             return;
         }
-        let Some(tracks) = self.models.library.tracks.get(&pending.playlist) else {
+        let Some(tracks) = pending.collection.tracks(&self.models.library) else {
             return;
         };
         if !tracks.complete
@@ -96,7 +107,11 @@ impl AppState {
     }
 
     /// 给定一条 PlaylistEntry，根据当前 user-data 装饰 relation 指向的 Song。
-    pub(super) fn decorate_entry(&self, entry: mineral_model::PlaylistEntry) -> PlaylistEntryView {
+    pub(super) fn decorate_entry(
+        &self,
+        entry: impl Into<CollectionTrackData>,
+    ) -> CollectionTrackView {
+        let entry = entry.into();
         let loved = self.is_liked(&entry.song);
         let plays = self
             .models
@@ -104,7 +119,7 @@ impl AppState {
             .local_play_counts
             .get(&entry.song.id)
             .copied();
-        PlaylistEntryView {
+        CollectionTrackView {
             data: entry,
             loved,
             plays,
@@ -133,7 +148,13 @@ impl AppState {
     /// 下一次驻留会重新查询，不复用停采期间可能过期的缓存。
     pub(crate) fn clear_local_play_counts(&mut self) {
         self.models.library.local_play_counts.clear();
-        for tracks in self.models.library.tracks.values_mut() {
+        for tracks in self
+            .models
+            .library
+            .tracks
+            .values_mut()
+            .chain(self.models.library.album_tracks.values_mut())
+        {
             for entry in &mut tracks.entries {
                 entry.plays = None;
             }
@@ -170,36 +191,25 @@ impl AppState {
     }
 
     /// 某个 channel 的 user-data 到位 / 变化时,把 `library.tracks` 里属于该 source
-    /// 的 PlaylistEntryView 全部按当前 `decorate_entry` 重建一遍。
+    /// 的 CollectionTrackView 全部按当前 `decorate_entry` 重建一遍。
     /// 跨 source 的歌单不动(decoration data 是 per-source 的)。
     pub(super) fn redecorate_for_source(&mut self, source: SourceKind) {
-        let cache = std::mem::take(&mut self.models.library.tracks);
-        self.models.library.tracks = cache
-            .into_iter()
-            .map(|(pid, tracks)| {
-                let complete = tracks.complete;
-                let next_offset = tracks.next_offset;
-                let next = tracks
-                    .entries
-                    .into_iter()
-                    .map(|sv| {
-                        if sv.data.song.source() == source {
-                            self.decorate_entry(sv.data)
-                        } else {
-                            sv
-                        }
-                    })
-                    .collect();
-                (
-                    pid,
-                    super::PlaylistTracks {
-                        entries: next,
-                        complete,
-                        next_offset,
-                    },
-                )
-            })
-            .collect();
+        let liked = self.models.library.liked_ids.get(&source);
+        let counts = &self.models.library.local_play_counts;
+        for tracks in self
+            .models
+            .library
+            .tracks
+            .values_mut()
+            .chain(self.models.library.album_tracks.values_mut())
+        {
+            for entry in &mut tracks.entries {
+                if entry.data.song.source() == source {
+                    entry.loved = liked.is_some_and(|ids| ids.contains(&entry.data.song.id));
+                    entry.plays = counts.get(&entry.data.song.id).copied();
+                }
+            }
+        }
     }
 
     /// 构造 Browse 视图逻辑所需的只读模型借用(library + cfg);供下方 forwarder 调 BrowsePage。
@@ -208,6 +218,23 @@ impl AppState {
             library: &self.models.library,
             cfg: &self.cfg,
         }
+    }
+
+    /// 当前浏览项目，组头不对应实体。
+    pub(crate) fn selected_collection(&self) -> Option<CollectionRef<'_>> {
+        self.ui.browse.selected_collection(self.browse_model())
+    }
+
+    /// 父列表中的项目，供预览和菜单使用。
+    pub(crate) fn selected_collection_in_list(&self) -> Option<CollectionRef<'_>> {
+        self.ui
+            .browse
+            .selected_collection_in_list(self.browse_model())
+    }
+
+    /// 进入时保留的歌单或专辑。
+    pub(crate) fn opened_collection(&self) -> Option<CollectionRef<'_>> {
+        self.ui.browse.opened_collection(self.browse_model())
     }
 
     /// 当前选中歌单：外层按过滤列表光标，歌单内按打开时保存的身份。
@@ -222,15 +249,11 @@ impl AppState {
             .selected_playlist_in_list(self.browse_model())
     }
 
-    /// 已打开歌单；供曲目面板在进入与返回的整个动画期间读取。
-    pub fn opened_playlist(&self) -> Option<&PlaylistView> {
-        self.ui.browse.opened_playlist(self.browse_model())
-    }
-
     /// 当前可见(被 search 过滤)的歌单列表。
     ///
     /// 空 query → 原序;非空 query → fzf 风格模糊匹配(拼音/首字母也算命中),
     /// 按 score 降序排,**stable** 保证同分按原序。
+    #[cfg(test)]
     pub fn filtered_playlists(&self) -> Vec<&PlaylistView> {
         self.ui.browse.filtered_playlists(self.browse_model())
     }
@@ -281,13 +304,17 @@ mod tests {
                 .collect::<Vec<String>>()
         };
         assert_eq!(names(&s), vec!["甲", "乙"]);
-        s.ui.browse.playlists.select(1);
+        s.ui.browse.collections.select(1);
         // 新快照(重排 + 藏掉一个)整表替换:无重复、无挪尾,超界选中夹回 0。
         s.apply(&TaskEvent::LibrarySnapshot {
             playlists: vec![pl("p2", "乙")],
         });
         assert_eq!(names(&s), vec!["乙"], "整表替换,不残留旧条目");
-        assert_eq!(s.ui.browse.playlists.scroll().sel(), 0, "选中超界夹回");
+        assert_eq!(
+            s.ui.browse.collections.scroll().sel(),
+            0,
+            "按身份保留仍存在的歌单"
+        );
         Ok(())
     }
 
@@ -300,7 +327,7 @@ mod tests {
             playlist_view("b", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
         ];
-        s.ui.browse.playlists.test_search_mut().set_query("cry");
+        s.ui.browse.collections.test_search_mut().set_query("cry");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -319,7 +346,7 @@ mod tests {
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
         s.ui.browse
-            .playlists
+            .collections
             .test_search_mut()
             .set_query("chunying");
         let names: Vec<&str> = s
@@ -339,7 +366,7 @@ mod tests {
             playlist_view("a", "Ave Mujica", SourceKind::NETEASE, 1),
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
-        s.ui.browse.playlists.test_search_mut().set_query("my");
+        s.ui.browse.collections.test_search_mut().set_query("my");
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -353,7 +380,13 @@ mod tests {
     #[test]
     fn match_for_empty_query_returns_none() -> color_eyre::Result<()> {
         let s = AppState::test_default()?;
-        assert!(s.ui.browse.playlists.search().match_for("春日影").is_none());
+        assert!(
+            s.ui.browse
+                .collections
+                .search()
+                .match_for("春日影")
+                .is_none()
+        );
         Ok(())
     }
 
@@ -369,18 +402,18 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.ui.browse.view.switch_to(View::Library);
-        s.ui.browse.playlists.select(0); // p1
+        s.ui.browse.view.switch_to(View::Tracks);
+        s.ui.browse.collections.select(0); // p1
         s.ui.browse.tracks.select(0);
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
-        s.ui.browse.nav.opened_playlist = Some(pid.clone());
+        s.ui.browse.nav.opened_collection = Some(pid.clone().into());
         let tracks = endserenading(5);
         let anchor = tracks
             .get(2)
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 3 首"))?;
         s.ui.browse.nav.pending_track_restore = Some(PendingRestore {
-            playlist: pid.clone(),
+            collection: pid.clone().into(),
             pos: TrackPos {
                 song_id: anchor,
                 index: 2,
@@ -423,18 +456,18 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.ui.browse.view.switch_to(View::Library);
-        s.ui.browse.playlists.select(0);
+        s.ui.browse.view.switch_to(View::Tracks);
+        s.ui.browse.collections.select(0);
         s.ui.browse.tracks.select(1); // 已离开进入时的第 0 行
         let pid = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
-        s.ui.browse.nav.opened_playlist = Some(pid.clone());
+        s.ui.browse.nav.opened_collection = Some(pid.clone().into());
         let tracks = endserenading(5);
         let anchor = tracks
             .get(3)
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 不足 4 首"))?;
         s.ui.browse.nav.pending_track_restore = Some(PendingRestore {
-            playlist: pid.clone(),
+            collection: pid.clone().into(),
             pos: TrackPos {
                 song_id: anchor,
                 index: 3,
@@ -477,19 +510,19 @@ mod tests {
         use crate::test_support::{endserenading, state_with_playlists};
 
         let mut s = state_with_playlists()?;
-        s.ui.browse.view.switch_to(View::Library);
-        s.ui.browse.playlists.select(0);
+        s.ui.browse.view.switch_to(View::Tracks);
+        s.ui.browse.collections.select(0);
         s.ui.browse.tracks.select(0);
         let target = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p1");
         let other = PlaylistId::new(mineral_model::SourceKind::NETEASE, "p2");
-        s.ui.browse.nav.opened_playlist = Some(target.clone());
+        s.ui.browse.nav.opened_collection = Some(target.clone().into());
         let tracks = endserenading(5);
         let anchor = tracks
             .first()
             .map(|t| t.id.clone())
             .ok_or_else(|| color_eyre::eyre::eyre!("fixture 为空"))?;
         s.ui.browse.nav.pending_track_restore = Some(PendingRestore {
-            playlist: target.clone(),
+            collection: target.clone().into(),
             pos: TrackPos {
                 song_id: anchor,
                 index: 0,
@@ -515,7 +548,7 @@ mod tests {
                 .nav
                 .pending_track_restore
                 .as_ref()
-                .is_some_and(|p| p.playlist == target),
+                .is_some_and(|p| p.collection == target.clone().into()),
             "非目标歌单到达不应消费 pending"
         );
         Ok(())

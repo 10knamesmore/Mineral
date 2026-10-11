@@ -8,6 +8,9 @@ pub(crate) struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(super::m20260906_stats::Migration)]
+        vec![
+            Box::new(super::m20260906_stats::Migration),
+            Box::new(super::m20261007_saved_albums::Migration),
+        ]
     }
 }

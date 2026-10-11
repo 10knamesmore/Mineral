@@ -55,7 +55,7 @@ impl crate::components::lifecycle::Prepare for NowPlaying {
         if cover_in_flight {
             return;
         }
-        let from = input.playlist_cover.as_ref();
+        let from = input.collection_cover.as_ref();
         let to = input
             .track
             .and_then(|entry| entry.data.song.cover_url.as_ref());
@@ -98,16 +98,23 @@ pub(crate) fn draw(
 ) {
     let view = &state.input.switch;
     if view.at_min() {
-        draw_view(frame, area, state, theme, View::Playlists, cover_in_flight);
+        draw_view(
+            frame,
+            area,
+            state,
+            theme,
+            View::Collections,
+            cover_in_flight,
+        );
     } else if view.at_max() {
-        draw_view(frame, area, state, theme, View::Library, cover_in_flight);
+        draw_view(frame, area, state, theme, View::Tracks, cover_in_flight);
     } else {
         // 两端只画文字，封面在合成后统一绘制，避免离屏帧持有终端图片。
         let from = transition::capture(frame, area, |frame| {
-            draw_view(frame, area, state, theme, View::Playlists, true);
+            draw_view(frame, area, state, theme, View::Collections, true);
         });
         let to = transition::capture(frame, area, |frame| {
-            draw_view(frame, area, state, theme, View::Library, true);
+            draw_view(frame, area, state, theme, View::Tracks, true);
         });
         transition::panel(frame, Some(&from), Some(&to), area, view.raw(), theme);
         if !cover_in_flight {
@@ -126,11 +133,11 @@ fn draw_view(
     cover_in_flight: bool,
 ) {
     match view {
-        View::Playlists => match state.input.playlist {
+        View::Collections => match state.input.collection {
             Some(p) => playlist::draw(frame, area, p, state, theme, cover_in_flight),
             None => paint_empty(frame, area, theme),
         },
-        View::Library => match state.input.track {
+        View::Tracks => match state.input.track {
             Some(sv) => {
                 let current_id = state.input.playing;
                 track::draw(frame, area, sv, current_id, state, theme, cover_in_flight);

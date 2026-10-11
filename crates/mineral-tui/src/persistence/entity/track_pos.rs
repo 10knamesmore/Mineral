@@ -1,23 +1,40 @@
-//! track_pos 的持久化实体。
+//! 歌单与专辑内光标位置的持久化实体。
 
 use sea_orm::{
-    ActiveModelBehavior, DeriveEntityModel, DerivePrimaryKey, DeriveRelation, EntityTrait,
-    EnumIter, PrimaryKeyTrait,
+    ActiveModelBehavior, DeriveActiveEnum, DeriveEntityModel, DerivePrimaryKey, DeriveRelation,
+    EntityTrait, EnumIter, PrimaryKeyTrait,
 };
+
+/// 光标位置所属的集合类型，映射为数据库中的固定文本值。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum CollectionKind {
+    /// 歌单内的位置。
+    #[sea_orm(string_value = "playlist")]
+    Playlist,
+
+    /// 专辑内的位置。
+    #[sea_orm(string_value = "album")]
+    Album,
+}
 
 /// 一条完整的数据库记录。
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "track_pos")]
+#[sea_orm(table_name = "collection_pos")]
 pub struct Model {
-    /// 歌单来源。
+    /// 项目类型，区分同一来源内同值的歌单和专辑。
     #[sea_orm(primary_key, auto_increment = false)]
-    #[sea_orm(column_type = "Text")]
-    pub playlist_namespace: String,
+    pub collection_kind: CollectionKind,
 
-    /// 来源内歌单身份。
+    /// 项目来源。
     #[sea_orm(primary_key, auto_increment = false)]
     #[sea_orm(column_type = "Text")]
-    pub playlist_value: String,
+    pub collection_namespace: String,
+
+    /// 来源内项目身份。
+    #[sea_orm(primary_key, auto_increment = false)]
+    #[sea_orm(column_type = "Text")]
+    pub collection_value: String,
 
     /// 歌曲来源。
     #[sea_orm(column_type = "Text")]

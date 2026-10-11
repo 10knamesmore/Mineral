@@ -4,3 +4,5 @@ mod m20260906_client;
 mod migrator;
 
 pub(crate) use migrator::TuiMigrator;
+
+mod m20261007_collection_positions;

@@ -1,13 +1,13 @@
 //! 歌单曲目的已加载数据与请求状态；首批结果不满足整张操作。
 
-use crate::runtime::view_model::PlaylistEntryView;
+use crate::runtime::view_model::CollectionTrackView;
 use mineral_channel_core::PlaylistLoad;
 
 /// 一张歌单已到达的曲目；像曲目列表一样读取，同时保留完整性。
 #[derive(Clone, Debug)]
-pub struct PlaylistTracks {
+pub struct CollectionTracks {
     /// 按歌单原始位置排列的已加载条目。
-    pub entries: Vec<PlaylistEntryView>,
+    pub entries: Vec<CollectionTrackView>,
 
     /// channel 是否已检查整个歌单。
     pub complete: bool,
@@ -16,14 +16,14 @@ pub struct PlaylistTracks {
     pub next_offset: Option<u64>,
 }
 
-impl std::ops::Deref for PlaylistTracks {
-    type Target = Vec<PlaylistEntryView>;
+impl std::ops::Deref for CollectionTracks {
+    type Target = Vec<CollectionTrackView>;
     fn deref(&self) -> &Self::Target {
         &self.entries
     }
 }
 
-impl std::ops::DerefMut for PlaylistTracks {
+impl std::ops::DerefMut for CollectionTracks {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.entries
     }

@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use mineral_model::PlaylistId;
+use crate::runtime::collection::CollectionId;
 
-use crate::runtime::view_model::PlaylistEntryView;
+use crate::runtime::view_model::CollectionTrackView;
 
 use super::search::SearchState;
 
@@ -18,7 +18,7 @@ pub(crate) struct TrackFilterCache {
 /// 一份过滤结果及其失效条件。
 struct CachedTracks {
     /// 结果所属歌单，区分同一版本下的不同集合。
-    playlist: PlaylistId,
+    collection: CollectionId,
 
     /// 曲目内容版本；收藏、播放次数等装饰变化不影响匹配。
     generation: u64,
@@ -36,7 +36,7 @@ struct CachedTracks {
 /// 借用原始曲目的过滤视图；复制视图只共享行顺序，不复制歌曲。
 pub(crate) struct FilteredTracks<'a> {
     /// 包含实时装饰值的原始曲目。
-    entries: &'a [PlaylistEntryView],
+    entries: &'a [CollectionTrackView],
 
     /// 有查询时的可见行顺序；无查询时直接按原始下标访问。
     order: Option<Arc<[usize]>>,
@@ -68,7 +68,7 @@ impl<'a> FilteredTracks<'a> {
     }
 
     /// 按过滤后的下标借用一条 relation，保留其原始 CollectionIndex。
-    pub(crate) fn get(&self, index: usize) -> Option<&'a PlaylistEntryView> {
+    pub(crate) fn get(&self, index: usize) -> Option<&'a CollectionTrackView> {
         let raw = match &self.order {
             Some(order) => *order.get(index)?,
             None => index,
@@ -78,12 +78,12 @@ impl<'a> FilteredTracks<'a> {
 
     /// 测试读取当前过滤视图的首行。
     #[cfg(test)]
-    pub(crate) fn first(&self) -> Option<&'a PlaylistEntryView> {
+    pub(crate) fn first(&self) -> Option<&'a CollectionTrackView> {
         self.get(/*index*/ 0)
     }
 
     /// 按显示顺序借用全部曲目；需要发送歌曲时由调用方显式复制。
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &'a PlaylistEntryView> + '_ {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &'a CollectionTrackView> + '_ {
         (0..self.len()).filter_map(|index| self.get(index))
     }
 
@@ -97,7 +97,7 @@ impl TrackFilterCache {
     /// 获取当前视图；数据与查询未变时复用排序结果和时长合计。
     ///
     /// # Params:
-    ///   - `playlist`: 当前歌单身份
+    ///   - `collection`: 当前歌单或专辑身份
     ///   - `generation`: 曲目内容版本
     ///   - `entries`: 当前原始曲目与装饰
     ///   - `search`: 当前查询及可复用的匹配器
@@ -106,19 +106,19 @@ impl TrackFilterCache {
     ///   借用当前曲目的视图，不持有缓存的可变借用。
     pub(crate) fn view<'a>(
         &mut self,
-        playlist: &PlaylistId,
+        collection: &CollectionId,
         generation: u64,
-        entries: &'a [PlaylistEntryView],
+        entries: &'a [CollectionTrackView],
         search: &SearchState,
     ) -> FilteredTracks<'a> {
         let cached = self
             .cached
-            .get_or_insert_with(|| Self::rebuild(playlist, generation, entries, search));
-        if cached.playlist != *playlist
+            .get_or_insert_with(|| Self::rebuild(collection, generation, entries, search));
+        if cached.collection != *collection
             || cached.generation != generation
             || cached.query != search.query()
         {
-            *cached = Self::rebuild(playlist, generation, entries, search);
+            *cached = Self::rebuild(collection, generation, entries, search);
         }
         FilteredTracks {
             entries,
@@ -129,9 +129,9 @@ impl TrackFilterCache {
 
     /// 查询或曲目变化时重建下标顺序；同分项保持 relation 的原始顺序。
     fn rebuild(
-        playlist: &PlaylistId,
+        collection: &CollectionId,
         generation: u64,
-        entries: &[PlaylistEntryView],
+        entries: &[CollectionTrackView],
         search: &SearchState,
     ) -> CachedTracks {
         let started = std::time::Instant::now();
@@ -168,14 +168,14 @@ impl TrackFilterCache {
         };
         mineral_log::debug!(
             target: "filter",
-            playlist = %playlist.qualified(),
+            collection = %collection.qualified(),
             tracks = entries.len(),
             matches = order.as_ref().map_or(entries.len(), |order| order.len()),
             elapsed_us = started.elapsed().as_micros(),
             "rebuilt track filter"
         );
         CachedTracks {
-            playlist: playlist.clone(),
+            collection: collection.clone(),
             generation,
             query: search.query().to_owned(),
             order,
@@ -218,8 +218,8 @@ mod tests {
                 .name("歌单".to_owned())
                 .build(),
         }];
-        state.ui.browse.nav.opened_playlist = Some(id.clone());
-        state.ui.browse.view.switch_to(View::Library);
+        state.ui.browse.nav.opened_collection = Some(id.clone().into());
+        state.ui.browse.view.switch_to(View::Tracks);
         let matching = mineral_test::with_duration(
             mineral_test::with_name(mineral_test::song("same"), "春日影"),
             60_000,

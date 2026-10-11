@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use super::NowPlayingView;
 use crate::image::ImageContent;
 use crate::render::theme::Theme;
-use crate::runtime::view_model::PlaylistView;
+use crate::runtime::collection::CollectionRef;
 
 /// 渲染歌单详情(right pane)到 `area`。
 ///
@@ -18,7 +18,7 @@ use crate::runtime::view_model::PlaylistView;
 pub(crate) fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
-    p: &PlaylistView,
+    p: CollectionRef<'_>,
     state: &NowPlayingView<'_>,
     theme: &Theme,
     cover_in_flight: bool,
@@ -35,7 +35,7 @@ pub(crate) fn draw(
 
     if !cover_in_flight {
         // Mineral 聚合歌单无自带封面：拼贴就绪时显示合成图，未就绪时留空。
-        let cover = &state.input.playlist_cover;
+        let cover = &state.input.collection_cover;
         state.images.render(
             ImageContent::Display {
                 url: cover.as_ref(),
@@ -54,14 +54,28 @@ pub(crate) fn draw(
         },
     );
 
-    let src = p.data.source();
+    let src = p.source();
     // 标题行:歌单名(text + bold);meta 行:源(源色)· tracks · 总时长(overlay)。居中。
+    let artists = p
+        .artists()
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" / ");
     let kv = vec![
         Line::from(Span::styled(
-            p.data.name.clone(),
+            p.name().to_owned(),
             Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
+            Span::styled(
+                if artists.is_empty() {
+                    String::new()
+                } else {
+                    format!("{artists} · ")
+                },
+                Style::new().fg(theme.subtext),
+            ),
             Span::styled(
                 src.label(),
                 Style::new().fg(crate::render::theme::resolve_source_color(
@@ -71,7 +85,11 @@ pub(crate) fn draw(
                 )),
             ),
             Span::styled(
-                format!(" · {} tracks · {len_label}", p.data.track_count),
+                format!(
+                    " · {} tracks · {len_label}",
+                    p.track_count()
+                        .map_or_else(|| "—".to_owned(), |n| n.to_string())
+                ),
                 Style::new().fg(theme.overlay),
             ),
         ]),
@@ -81,8 +99,7 @@ pub(crate) fn draw(
     // 底行:歌单简介首个非空行(overlay,居中截断);无简介显占位——详情面板不放按键
     // 提示(发现交给 ? 帮助浮层),占位语义与 no match found 同款措辞。
     let desc = p
-        .data
-        .description
+        .description()
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty());
@@ -119,13 +136,13 @@ mod tests {
         entry.cover_url = Some(url.clone());
         app.state.models.library.tracks.insert(
             pid,
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: entry_views(vec![entry]),
                 complete: true,
                 next_offset: None,
             },
         );
-        app.state.ui.browse.playlists.select(0);
+        app.state.ui.browse.collections.select(0);
         // 入口曲图入 cache——否则 prewarm 无操作(它只对已解码在缓存的图提前编码)。
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
         app.state

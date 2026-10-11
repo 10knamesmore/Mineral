@@ -7,6 +7,7 @@ use crate::components::layout::browse::now_playing::{
 use crate::components::lifecycle::ComponentView;
 use crate::image::{ImageNeeds, ReadyImages};
 use crate::render::theme::Theme;
+use crate::runtime::collection::CollectionRef;
 use crate::runtime::playback::Playback;
 use crate::runtime::state::BrowseModel;
 use crate::runtime::state::{AppState, BrowsePage, LibraryData, View};
@@ -24,17 +25,21 @@ fn input<'a>(
     images: ReadyImages<'_>,
 ) -> NowPlayingInput<'a> {
     let model = BrowseModel { library, cfg };
-    let playlist = browse.selected_playlist_in_list(model);
+    let collection = browse.selected_collection_in_list(model);
     let track = browse
         .filtered_tracks(model)
         .get(browse.tracks.scroll().sel());
-    let tracks = playlist.and_then(|p| library.tracks.get(&p.data.id));
+    let tracks = collection.and_then(|item| item.id().tracks(library));
     NowPlayingInput {
-        playlist,
+        collection,
         track,
         playing: playback.track.as_ref().map(|song| &song.id),
-        playlist_cover: playlist
-            .and_then(|p| crate::image::collage::effective_cover_url(library, images, &p.data)),
+        collection_cover: collection.and_then(|item| match item {
+            CollectionRef::Playlist(p) => {
+                crate::image::collage::effective_cover_url(library, images, &p.data)
+            }
+            CollectionRef::Album(a) => a.data.cover_url.clone(),
+        }),
         upcoming_cover: tracks
             .and_then(|tracks| tracks.first())
             .and_then(|entry| entry.data.song.cover_url.clone()),
@@ -144,15 +149,15 @@ pub(crate) fn url(state: &AppState) -> Option<MediaUrl> {
 ///   - `view`: Playlists 取歌单封面，Library 取选中曲目封面
 pub(crate) fn url_for_view(state: &AppState, view: View) -> Option<MediaUrl> {
     match view {
-        View::Playlists => {
-            let playlist = state.selected_playlist_in_list()?;
-            crate::image::collage::effective_cover_url(
+        View::Collections => match state.selected_collection_in_list()? {
+            CollectionRef::Playlist(p) => crate::image::collage::effective_cover_url(
                 &state.models.library,
                 state.resources.images.ready(),
-                &playlist.data,
-            )
-        }
-        View::Library => {
+                &p.data,
+            ),
+            CollectionRef::Album(a) => a.data.cover_url.clone(),
+        },
+        View::Tracks => {
             let tracks = state.filtered_tracks();
             let song = &tracks.get(state.ui.browse.tracks.scroll().sel())?.data.song;
             song.cover_url.clone()

@@ -3,23 +3,24 @@
 use super::NowPlaying;
 use crate::components::frame::FrameEnv;
 use crate::image::{ImageRenderPhase, ReadyImages};
+use crate::runtime::collection::CollectionRef;
 use crate::runtime::state::ViewSwitch;
-use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
+use crate::runtime::view_model::CollectionTrackView;
 use mineral_model::{MediaUrl, SongId};
 
 /// 浏览页当前选择与过渡两端的数据。
 pub(crate) struct NowPlayingInput<'a> {
     /// 外层选中的歌单。
-    pub(crate) playlist: Option<&'a PlaylistView>,
+    pub(crate) collection: Option<CollectionRef<'a>>,
 
     /// 内层选中的曲目。
-    pub(crate) track: Option<&'a PlaylistEntryView>,
+    pub(crate) track: Option<&'a CollectionTrackView>,
 
     /// 当前播放歌曲身份。
     pub(crate) playing: Option<&'a SongId>,
 
     /// 歌单原图或已完成的拼贴身份。
-    pub(crate) playlist_cover: Option<MediaUrl>,
+    pub(crate) collection_cover: Option<MediaUrl>,
 
     /// 可预热的入口曲封面。
     pub(crate) upcoming_cover: Option<MediaUrl>,
@@ -57,10 +58,14 @@ impl crate::components::lifecycle::PaintView for NowPlayingView<'_> {
         _env: FrameEnv<'_>,
         inputs: &mut crate::render::memo::Dependencies<'_>,
     ) {
-        inputs.optional(self.input.playlist);
+        match self.input.collection {
+            Some(CollectionRef::Playlist(p)) => inputs.borrowed(p),
+            Some(CollectionRef::Album(a)) => inputs.borrowed(a),
+            None => {}
+        }
         inputs.optional(self.input.track);
         inputs.optional(self.input.playing);
-        inputs.observe(&self.input.playlist_cover);
+        inputs.observe(&self.input.collection_cover);
         inputs.observe(&self.input.duration_ms);
         inputs.observe(&self.input.switch.raw());
         inputs.observe(&self.phase);
@@ -70,7 +75,7 @@ impl crate::components::lifecycle::PaintView for NowPlayingView<'_> {
         self.images.dependencies(
             inputs,
             [
-                self.input.playlist_cover.clone(),
+                self.input.collection_cover.clone(),
                 self.input
                     .track
                     .and_then(|entry| entry.data.song.cover_url.clone()),

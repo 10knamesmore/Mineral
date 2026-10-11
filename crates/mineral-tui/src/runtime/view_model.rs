@@ -1,9 +1,6 @@
-//! 渲染层共享的 UI 装饰类型 — 不依赖任何具体 channel。
-//!
-//! 真实 channel 接入时,把 `mineral_model::Playlist` / `PlaylistEntry` 包装成
-//! [`PlaylistView`] / [`PlaylistEntryView`]；额外字段(`loved` / `plays`)由本地 user-data 装饰。
+//! 曲库项目的显示模型，以及按歌曲身份补充的喜欢和播放次数。
 
-use mineral_model::{Playlist, PlaylistEntry};
+use mineral_model::{Album, AlbumTrack, CollectionIndex, Playlist, PlaylistEntry, Song};
 
 /// 一条歌单 + UI 装饰。
 #[derive(Clone, Debug, PartialEq)]
@@ -12,13 +9,48 @@ pub struct PlaylistView {
     pub data: Playlist,
 }
 
-/// 一条 Playlist membership + Song UI 装饰。
-///
-/// Relation 保留 authoritative CollectionIndex；non-collection Song 不伪造 membership。
+/// 收藏专辑的元信息；详情曲目由曲库缓存按专辑身份保存。
 #[derive(Clone, Debug, PartialEq)]
-pub struct PlaylistEntryView {
-    /// 底层 model relation。
-    pub data: PlaylistEntry,
+pub struct AlbumView {
+    /// 音乐来源映射后的统一专辑模型。
+    pub data: Album,
+}
+
+/// 列表绘制需要的曲目关系投影，所属专辑或歌单由外层身份区分。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionTrackData {
+    /// 来源给出的集合内绝对位置，保留重复曲目及缺失位置。
+    pub index: CollectionIndex,
+
+    /// 此位置对应的歌曲。
+    pub song: Song,
+}
+
+impl From<PlaylistEntry> for CollectionTrackData {
+    fn from(entry: PlaylistEntry) -> Self {
+        Self {
+            index: entry.index,
+            song: entry.song,
+        }
+    }
+}
+
+impl From<AlbumTrack> for CollectionTrackData {
+    fn from(track: AlbumTrack) -> Self {
+        Self {
+            index: track.index,
+            song: track.song,
+        }
+    }
+}
+
+/// 一条集合内曲目及其用户数据装饰。
+///
+/// 保留来源的 CollectionIndex；歌单或专辑身份由所属列表提供。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionTrackView {
+    /// 曲目与来源给定的集合内位置。
+    pub data: CollectionTrackData,
 
     /// 该 relation 指向的 Song 是否已收藏。
     pub loved: bool,

@@ -4,21 +4,32 @@
 //! 拉失败,渲染端按 loading / 缺省处理。
 
 use std::collections::hash_map::Entry;
+use std::time::Instant;
 
-use mineral_model::{Lyrics, PlaylistId, SongId, SourceKind};
+use mineral_model::{AlbumId, Lyrics, PlaylistId, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::playlist_tracks::{PlaylistRequests, PlaylistTracks};
-use crate::runtime::view_model::PlaylistView;
+use super::playlist_tracks::{CollectionTracks, PlaylistRequests};
+use crate::runtime::collection::CollectionId;
+use crate::runtime::view_model::{AlbumView, PlaylistView};
 use mineral_channel_core::PlaylistLoad;
 
 /// 数据镜像/缓存域([`AppState`](crate::runtime::state::AppState) 的数据域)。
 pub struct LibraryData {
+    /// 服务端合并后的收藏专辑列表。
+    pub albums: Vec<AlbumView>,
+
+    /// 专辑详情的已装饰曲目。
+    pub album_tracks: FxHashMap<AlbumId, CollectionTracks>,
+
+    /// 已提交的详情请求；失败后离开并重新选择才重试。
+    pub(crate) albums_requested: FxHashMap<AlbumId, AlbumRequest>,
+
     /// 已加载的歌单(跨 channel 合并;按到达顺序 append)。
     pub playlists: Vec<PlaylistView>,
 
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
-    pub tracks: FxHashMap<PlaylistId, PlaylistTracks>,
+    pub tracks: FxHashMap<PlaylistId, CollectionTracks>,
 
     /// `tracks` 内容版本:每次歌单曲目落 cache 自增。深度搜索缓存按此失效;
     /// 纯装饰重建(`redecorate_for_source`)不动文本,不 bump。
@@ -40,13 +51,58 @@ pub struct LibraryData {
     pub(crate) local_play_counts: LocalPlayCounts,
 }
 
+/// 专辑详情请求的生命周期，失败只在下一次导航后重试。
+pub(crate) enum AlbumRequest {
+    /// 请求仍在后端运行。
+    Loading,
+
+    /// 当前光标停留期间已经失败。
+    Failed(Instant),
+}
+
 impl LibraryData {
-    /// 正在补齐的歌单数；同一歌单的预览不会额外计入索引进度。
-    pub(crate) fn completing_playlists(&self) -> usize {
+    /// 只有未加载且未在途的详情需要提交，失败后等待新的导航。
+    pub(crate) fn needs_album(&self, id: &AlbumId, changed_at: Instant) -> bool {
+        !self.album_tracks.contains_key(id)
+            && match self.albums_requested.get(id) {
+                None => true,
+                Some(AlbumRequest::Loading) => false,
+                Some(AlbumRequest::Failed(at)) => *at != changed_at,
+            }
+    }
+
+    /// 专辑详情失败时给界面结构化状态，不暴露后端错误文本。
+    pub(crate) fn collection_load_failed(&self, id: &CollectionId) -> bool {
+        match id {
+            CollectionId::Album(id) => {
+                matches!(self.albums_requested.get(id), Some(AlbumRequest::Failed(_)))
+            }
+            CollectionId::Playlist(_) => false,
+        }
+    }
+
+    /// 提交详情后登记在途状态。
+    pub(crate) fn request_album(&mut self, id: AlbumId) {
+        self.albums_requested.insert(id, AlbumRequest::Loading);
+    }
+
+    /// 失败收束后，在当前导航位置停止重试。
+    pub(crate) fn fail_album(&mut self, id: AlbumId, changed_at: Instant) {
+        self.albums_requested
+            .insert(id, AlbumRequest::Failed(changed_at));
+    }
+
+    /// 正在补齐的歌单与专辑数；歌单预览不计入索引进度。
+    pub(crate) fn completing_collections(&self) -> usize {
         self.tracks_requested
             .values()
             .filter(|requests| requests.completing())
             .count()
+            + self
+                .albums_requested
+                .values()
+                .filter(|request| matches!(request, AlbumRequest::Loading))
+                .count()
     }
 
     /// 判断现有数据与在途请求是否已经覆盖加载意图。
@@ -110,6 +166,9 @@ impl LibraryData {
     pub(crate) fn new() -> Self {
         Self {
             playlists: Vec::new(),
+            albums: Vec::new(),
+            album_tracks: FxHashMap::default(),
+            albums_requested: FxHashMap::default(),
             tracks: FxHashMap::default(),
             tracks_generation: 0,
             tracks_requested: FxHashMap::default(),

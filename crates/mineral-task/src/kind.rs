@@ -91,6 +91,12 @@ pub enum ChannelFetchKind {
         /// 专辑 id(自带 namespace)。
         id: AlbumId,
     },
+
+    /// 拉取当前账号收藏的专辑。
+    MyAlbums {
+        /// 目标音乐来源。
+        source: SourceKind,
+    },
 }
 
 impl ChannelFetchKind {
@@ -100,6 +106,7 @@ impl ChannelFetchKind {
     /// 只有 source 的形态(无 id 可派生)仍显式拼 `{source:?}`。
     fn dedup_part(&self) -> String {
         match self {
+            Self::MyAlbums { source } => format!("{source:?}:my_albums"),
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),
             Self::PlaylistDetail { id, load } => {
                 format!("playlist_detail:{}:{load:?}", id.qualified())
@@ -127,7 +134,9 @@ impl ChannelFetchKind {
     /// 带 id 的形态从 id 的 namespace 派生;只有 source 的形态直接返回。
     pub fn source(&self) -> SourceKind {
         match self {
-            Self::MyPlaylists { source } | Self::Search { source, .. } => *source,
+            Self::MyAlbums { source }
+            | Self::MyPlaylists { source }
+            | Self::Search { source, .. } => *source,
             Self::PlaylistDetail { id, .. } => id.namespace(),
             Self::Lyrics { song_id } | Self::RemotePlayCount { song_id } => song_id.namespace(),
             Self::ArtistDetail { id } | Self::ArtistAlbums { id, .. } => id.namespace(),
@@ -138,7 +147,7 @@ impl ChannelFetchKind {
     /// 取数目标的 qualified 引用(埋点 fetches.target_ref 用);只有 source 的形态无目标。
     pub fn target_ref(&self) -> Option<String> {
         match self {
-            Self::MyPlaylists { .. } | Self::Search { .. } => None,
+            Self::MyAlbums { .. } | Self::MyPlaylists { .. } | Self::Search { .. } => None,
             Self::PlaylistDetail { id, .. } => Some(id.qualified()),
             Self::Lyrics { song_id } | Self::RemotePlayCount { song_id } => {
                 Some(song_id.qualified())
@@ -177,6 +186,9 @@ pub enum ChannelFetchKindTag {
 
     /// 对应 [`ChannelFetchKind::AlbumDetail`]。
     AlbumDetail,
+
+    /// 当前账号收藏的专辑列表。
+    MyAlbums,
 }
 
 impl ChannelFetchKindTag {
@@ -185,6 +197,7 @@ impl ChannelFetchKindTag {
     pub fn of(kind: &ChannelFetchKind) -> Self {
         match kind {
             ChannelFetchKind::MyPlaylists { .. } => Self::MyPlaylists,
+            ChannelFetchKind::MyAlbums { .. } => Self::MyAlbums,
             ChannelFetchKind::PlaylistDetail { .. } => Self::PlaylistDetail,
             ChannelFetchKind::Lyrics { .. } => Self::Lyrics,
             ChannelFetchKind::RemotePlayCount { .. } => Self::RemotePlayCount,
@@ -200,6 +213,7 @@ impl ChannelFetchKindTag {
     pub fn name(self) -> &'static str {
         match self {
             Self::MyPlaylists => "my_playlists",
+            Self::MyAlbums => "my_albums",
             Self::PlaylistDetail => "playlist_detail",
             Self::Lyrics => "lyrics",
             Self::RemotePlayCount => "remote_play_count",

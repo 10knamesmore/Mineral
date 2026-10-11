@@ -14,7 +14,7 @@ use image::DynamicImage;
 use mineral_model::{MediaUrl, Playlist, SourceKind};
 
 use crate::runtime::state::AppState;
-use crate::runtime::view_model::PlaylistEntryView;
+use crate::runtime::view_model::CollectionTrackView;
 
 use super::resize::resize_to_fill;
 
@@ -107,7 +107,7 @@ pub(crate) fn effective_cover_url(
 }
 
 /// 歌单内前 [`MAX_TILES`] 首**有封面**的歌的 `(来源, 封面 URL)`(按歌单顺序,早停)。
-fn member_covers(tracks: &[PlaylistEntryView]) -> Vec<(SourceKind, &MediaUrl)> {
+fn member_covers(tracks: &[CollectionTrackView]) -> Vec<(SourceKind, &MediaUrl)> {
     tracks
         .iter()
         .filter_map(|entry| {
@@ -334,7 +334,7 @@ mod tests {
         let tracks = entry_views(songs);
         s.models.library.tracks.insert(
             pid,
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: tracks,
                 complete: true,
                 next_offset: None,

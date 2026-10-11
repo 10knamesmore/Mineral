@@ -7,7 +7,7 @@
 use crate::app::AppOverlay;
 
 use crate::config::{CopyContext, CopyTemplate};
-use mineral_model::{Album, Artist, ArtistRef, Song};
+use mineral_model::{Album, Artist, ArtistRef, PlaylistEntry, Song};
 use mineral_protocol::{QueueAnchor, QueueOp, QueuePos};
 use mineral_script::CopyTemplateCtx;
 use mineral_task::SearchPayload;
@@ -16,6 +16,7 @@ use ratatui::layout::Rect;
 use crate::components::layout::search::detail::detail_list_area;
 use crate::components::layout::shared::compute::{compute, compute_search};
 use crate::components::popup::{ContainerRef, MenuAction, MenuItem, Placement, PopMenu};
+use crate::runtime::collection::CollectionRef;
 use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::scroll::viewport::pin_cursor;
 use crate::runtime::state::{EntityRef, SearchFocus, View};
@@ -37,11 +38,11 @@ pub(crate) enum MenuKind {
 /// 容器「进入」browse=激活歌单 ≠ search=下钻)。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SurfaceKind {
-    /// 浏览态 Library 曲目列表。
-    BrowseLibrary,
+    /// 浏览态曲目列表。
+    BrowseTracks,
 
-    /// 浏览态 Playlists 歌单列表。
-    BrowsePlaylists,
+    /// 浏览态分组曲库列表。
+    BrowseCollections,
 
     /// 搜索态结果列。
     SearchResults,
@@ -103,15 +104,15 @@ impl App {
             };
         }
         match self.state.ui.browse.view.current() {
-            View::Library => Some(ListSelection {
+            View::Tracks => Some(ListSelection {
                 entity: EntityRef::Song(Box::new(self.selected_track_song()?)),
                 anchor: self.library_row_anchor(),
-                surface: SurfaceKind::BrowseLibrary,
+                surface: SurfaceKind::BrowseTracks,
             }),
-            View::Playlists => Some(ListSelection {
-                entity: EntityRef::Playlist(Box::new(self.state.selected_playlist()?.data.clone())),
-                anchor: self.playlist_row_anchor(),
-                surface: SurfaceKind::BrowsePlaylists,
+            View::Collections => Some(ListSelection {
+                entity: self.state.selected_collection()?.entity(),
+                anchor: self.collection_row_anchor(),
+                surface: SurfaceKind::BrowseCollections,
             }),
         }
     }
@@ -315,7 +316,7 @@ impl App {
     /// 取整列结果(仅歌曲 kind)，并在同一 projection 上携带 exact target coordinate。
     fn surface_queue(&self, surface: SurfaceKind) -> Option<SurfaceQueue> {
         match surface {
-            SurfaceKind::BrowseLibrary => {
+            SurfaceKind::BrowseTracks => {
                 self.state
                     .library_queue_projection()
                     .map(|projection| SurfaceQueue {
@@ -350,7 +351,7 @@ impl App {
                     songs: frame.song_list(),
                     target: frame.list().sel(),
                 }),
-            SurfaceKind::BrowsePlaylists => None,
+            SurfaceKind::BrowseCollections => None,
         }
     }
 
@@ -359,16 +360,13 @@ impl App {
     /// Playlists 面选中的是容器本身(不在此起单曲队列)→ `Unknown`。
     fn surface_play_context(&self, surface: SurfaceKind) -> mineral_protocol::QueueContextWire {
         match surface {
-            SurfaceKind::BrowseLibrary => self.state.selected_playlist().map_or(
+            SurfaceKind::BrowseTracks => self.state.selected_collection().map_or(
                 mineral_protocol::QueueContextWire::Unknown,
-                |p| mineral_protocol::QueueContextWire::Playlist {
-                    id: p.data.id.clone(),
-                    name: Some(p.data.name.clone()),
-                },
+                CollectionRef::play_context,
             ),
             SurfaceKind::SearchResults => self.state.ui.channel_search.search_context(),
             SurfaceKind::SearchDetail => self.state.ui.channel_search.detail_context(),
-            SurfaceKind::BrowsePlaylists => mineral_protocol::QueueContextWire::Unknown,
+            SurfaceKind::BrowseCollections => mineral_protocol::QueueContextWire::Unknown,
         }
     }
 
@@ -404,8 +402,13 @@ impl App {
                         .map(|views| {
                             views
                                 .iter()
-                                .map(|entry| entry.data.clone())
-                                .collect::<Vec<mineral_model::PlaylistEntry>>()
+                                .map(|entry| {
+                                    PlaylistEntry::builder()
+                                        .index(entry.data.index)
+                                        .song(entry.data.song.clone())
+                                        .build()
+                                })
+                                .collect::<Vec<PlaylistEntry>>()
                         })
                         .unwrap_or_default();
                 }
@@ -466,7 +469,7 @@ impl App {
     fn search_row_anchor(&self) -> Option<Rect> {
         let panel = compute_search(self.state.ui.frame_area, self.state.cfg.layout()).left;
         let kr = self.state.ui.channel_search.active_results()?;
-        Some(row_anchor(panel, kr.list(), kr.len()))
+        Some(row_anchor(panel, kr.list(), kr.len(), 1))
     }
 
     /// Search detail 面板当前区选中行的屏幕矩形（detail 焦点 `y`/`o` 贴行下方弹）。
@@ -501,15 +504,16 @@ impl App {
             self.left_panel(),
             self.state.ui.browse.tracks.scroll(),
             self.state.filtered_tracks().len(),
+            1,
         )
     }
 
-    /// Playlists 选中行的屏幕矩形。
-    fn playlist_row_anchor(&self) -> Rect {
-        row_anchor(
+    /// 分组曲库选中行的屏幕矩形，与常驻组头之后的实际视口共用投影。
+    fn collection_row_anchor(&self) -> Rect {
+        self.state.ui.browse.collections.selected_row_area(
             self.left_panel(),
-            self.state.ui.browse.playlists.scroll(),
-            self.state.filtered_playlists().len(),
+            &self.state.models.library,
+            &self.state.cfg,
         )
     }
 
@@ -527,16 +531,16 @@ impl App {
 ///   - `panel`: 列表面板矩形(含边框)
 ///   - `list`: 该列表的光标 + 视口滚动态
 ///   - `len`: 列表总行数
-fn row_anchor(panel: Rect, list: &ScrollList, len: usize) -> Rect {
+///   - `header_rows`: 内容区顶部固定的表头行数
+fn row_anchor(panel: Rect, list: &ScrollList, len: usize, header_rows: u16) -> Rect {
     // 与渲染端同款视口数学:高 - 上下边框 - 表头。
-    let viewport = usize::from(panel.height.saturating_sub(3));
+    let viewport = usize::from(panel.height.saturating_sub(2 + header_rows));
     let offset = list.offset(len, viewport);
     let pinned = pin_cursor(list.sel(), offset, viewport);
     let dy = u16::try_from(pinned.saturating_sub(offset)).unwrap_or(0);
     Rect::new(
         panel.x.saturating_add(1),
-        // +1 边框 +1 表头。
-        panel.y.saturating_add(2).saturating_add(dy),
+        panel.y.saturating_add(1 + header_rows).saturating_add(dy),
         panel.width.saturating_sub(2),
         1,
     )

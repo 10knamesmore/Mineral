@@ -38,7 +38,7 @@ pub(crate) use list_expansion::{FilteredListFrame, ListExpansion, ListExpansionS
 pub use lyric::LyricExtra;
 pub use overlay_reveal::OverlayReveal;
 pub use player::PlayerMirror;
-pub use playlist_tracks::PlaylistTracks;
+pub use playlist_tracks::CollectionTracks;
 pub use search::SearchState;
 pub use view_context::{PageKind, View};
 

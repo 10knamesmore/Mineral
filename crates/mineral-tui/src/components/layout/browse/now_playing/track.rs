@@ -12,7 +12,7 @@ use crate::components::layout::shared::marquee::MarqueeCtx;
 use crate::image::ImageContent;
 use crate::render::theme::Theme;
 use crate::runtime::format::format_ms_opt;
-use crate::runtime::view_model::PlaylistEntryView;
+use crate::runtime::view_model::CollectionTrackView;
 
 /// 渲染曲目详情(right pane)到 `area`。
 ///
@@ -22,7 +22,7 @@ use crate::runtime::view_model::PlaylistEntryView;
 pub(crate) fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
-    entry: &PlaylistEntryView,
+    entry: &CollectionTrackView,
     current_id: Option<&SongId>,
     state: &NowPlayingView<'_>,
     theme: &Theme,

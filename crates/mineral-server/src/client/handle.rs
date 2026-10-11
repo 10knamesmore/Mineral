@@ -240,6 +240,11 @@ impl ClientHandle {
             });
         }
         if subscriptions.contains(&Subscription::Task) {
+            if let Some(albums) = self.player.library().cached_saved_albums() {
+                frames.push(Event::Task(Box::new(TaskEvent::SavedAlbumsSnapshot {
+                    albums,
+                })));
+            }
             if let Some(playlists) = self.player.library().cached_snapshot() {
                 frames.push(Event::Task(Box::new(TaskEvent::LibrarySnapshot {
                     playlists,

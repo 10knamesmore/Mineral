@@ -4,11 +4,14 @@
 //! 全屏与 `/` 过滤都是这一页的内部子模式(同一套导航面),不另起独立页。
 
 use crate::config::{AnimationConfig, TrailTimingConfig};
-use mineral_model::{PlaylistId, Song};
+#[cfg(test)]
+use crate::runtime::collection::CollectionGroup;
+use crate::runtime::collection::{CollectionId, CollectionRef};
+use mineral_model::Song;
 
 use crate::render::anim::{Toggle, TrailLeg, TrailingToggle, ticks16_from_ms};
 use crate::runtime::deep_search::DeepHit;
-use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
+use crate::runtime::view_model::{CollectionTrackView, PlaylistView};
 
 use super::View;
 use super::library::LibraryData;
@@ -17,7 +20,7 @@ use super::search::SearchState;
 use super::track_filter::FilteredTracks;
 use super::view_switch::ViewSwitch;
 use crate::components::layout::browse::lyrics::LyricsPanel;
-use crate::components::layout::browse::sidebar::{library::TrackList, playlists::PlaylistList};
+use crate::components::layout::browse::sidebar::{collections::CollectionList, library::TrackList};
 use crate::components::lifecycle::Component;
 
 /// Browse 视图逻辑所需的只读模型借用:歌曲库 + 配置——过滤 / 深度搜索 / 选中都读它,
@@ -65,7 +68,7 @@ pub struct BrowsePage {
     pub nav: NavState,
 
     /// 歌单列表组件，返回时保留自己的查询和光标。
-    pub(crate) playlists: Component<PlaylistList>,
+    pub(crate) collections: Component<CollectionList>,
 
     /// 已打开歌单的曲目列表组件。
     pub(crate) tracks: Component<TrackList>,
@@ -89,28 +92,31 @@ impl BrowsePage {
             ),
             lyrics: Component::new(LyricsPanel::new()),
             nav: NavState::new(),
-            playlists: Component::new(PlaylistList::new()),
+            collections: Component::new(CollectionList::new(ticks16_from_ms(
+                *anim.sweep_ms(),
+                tick_ms,
+            ))),
             tracks: Component::new(TrackList::new()),
         }
     }
 
     /// 数据或尺寸改变后，两份旧显示输入均失效。
     pub(crate) fn invalidate_expansions(&mut self) {
-        self.playlists.invalidate();
+        self.collections.invalidate();
         self.tracks.invalidate();
     }
 
     /// 输入立即接管正在展开的列表。
     pub(crate) fn interrupt_expansions(&mut self) {
-        self.playlists.interrupt();
+        self.collections.interrupt();
         self.tracks.interrupt();
     }
 
     /// 当前接受按键的列表查询；离屏面板应直接读取自己的搜索状态。
     pub fn active_search(&self) -> &SearchState {
         match self.view.current() {
-            View::Playlists => self.playlists.search(),
-            View::Library => self.tracks.search(),
+            View::Collections => self.collections.search(),
+            View::Tracks => self.tracks.search(),
         }
     }
 
@@ -118,8 +124,8 @@ impl BrowsePage {
     #[cfg(test)]
     pub(crate) fn active_search_mut(&mut self) -> &mut SearchState {
         match self.view.current() {
-            View::Playlists => self.playlists.test_search_mut(),
-            View::Library => self.tracks.test_search_mut(),
+            View::Collections => self.collections.test_search_mut(),
+            View::Tracks => self.tracks.test_search_mut(),
         }
     }
 
@@ -128,10 +134,19 @@ impl BrowsePage {
         &self,
         model: BrowseModel<'a>,
     ) -> crate::components::layout::browse::sidebar::library::TrackInput<'a> {
-        let playlist = self.opened_playlist(model);
+        let collection = self.opened_collection(model);
         crate::components::layout::browse::sidebar::library::TrackInput {
-            playlist,
-            tracks: playlist.and_then(|playlist| model.library.tracks.get(&playlist.data.id)),
+            collection,
+            tracks: self
+                .nav
+                .opened_collection
+                .as_ref()
+                .and_then(|id| id.tracks(model.library)),
+            load_failed: self
+                .nav
+                .opened_collection
+                .as_ref()
+                .is_some_and(|id| model.library.collection_load_failed(id)),
             generation: model.library.tracks_generation,
             playing: None,
         }
@@ -152,8 +167,10 @@ impl BrowsePage {
         self.lyrics.extra_press.retempo(anim);
         let tick_ms = *anim.frame_tick_ms();
         let trail = anim.ambient_trail();
-        self.playlists
-            .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
+        self.collections.retempo(
+            ticks16_from_ms(*anim.list_scroll_ms(), tick_ms),
+            ticks16_from_ms(*anim.sweep_ms(), tick_ms),
+        );
         self.tracks
             .retempo(ticks16_from_ms(*anim.list_scroll_ms(), tick_ms));
         self.view
@@ -178,65 +195,100 @@ fn trail_leg(timing: &TrailTimingConfig, tick_ms: u64) -> TrailLeg {
 /// 视图逻辑:把过滤词 / 选中(本页状态)作用到歌曲库(借入的 model),算出当前可见 / 选中视图。
 /// 外层聚合态留同名 forwarder 供渲染直读;本页执行器(按键路径)直接调这些。
 impl BrowsePage {
-    /// 当前选中歌单：外层取搜索结果中的光标，歌单内按进入时保存的身份取值。
-    pub fn selected_playlist<'a>(&self, model: BrowseModel<'a>) -> Option<&'a PlaylistView> {
+    /// 当前列表项目或已打开的曲目集合。
+    pub(crate) fn selected_collection<'a>(
+        &self,
+        model: BrowseModel<'a>,
+    ) -> Option<CollectionRef<'a>> {
         match self.view.current() {
-            View::Playlists => self.selected_playlist_in_list(model),
-            View::Library => self.opened_playlist(model),
+            View::Collections => self.selected_collection_in_list(model),
+            View::Tracks => self.opened_collection(model),
         }
     }
 
-    /// 外层列表光标指向的歌单；过渡期间绘制 Playlists 端时不跟随目标视图。
+    /// 父列表中的项目，进入曲目后仍保留选择。
+    pub(crate) fn selected_collection_in_list<'a>(
+        &self,
+        model: BrowseModel<'a>,
+    ) -> Option<CollectionRef<'a>> {
+        self.collections
+            .rows(model.library, model.cfg)
+            .get(self.collections.scroll().sel())
+            .copied()
+    }
+
+    /// 按进入时保存的类型化身份解析当前项目。
+    pub(crate) fn opened_collection<'a>(
+        &self,
+        model: BrowseModel<'a>,
+    ) -> Option<CollectionRef<'a>> {
+        self.nav.opened_collection.as_ref()?.resolve(model.library)
+    }
+
+    /// 只返回真实歌单，供歌单管理操作使用。
+    pub fn selected_playlist<'a>(&self, model: BrowseModel<'a>) -> Option<&'a PlaylistView> {
+        match self.selected_collection(model)? {
+            CollectionRef::Playlist(p) => Some(p),
+            CollectionRef::Album(_) => None,
+        }
+    }
+
+    /// 父列表光标指向真实歌单时返回其模型。
     pub fn selected_playlist_in_list<'a>(
         &self,
         model: BrowseModel<'a>,
     ) -> Option<&'a PlaylistView> {
-        self.filtered_playlists(model)
-            .get(self.playlists.scroll().sel())
-            .copied()
-    }
-
-    /// 已打开歌单；返回动画期间仍保留，避免离场的曲目面板跟随外层光标变化。
-    pub fn opened_playlist<'a>(&self, model: BrowseModel<'a>) -> Option<&'a PlaylistView> {
-        let id = self.nav.opened_playlist.as_ref()?;
-        model.library.playlists.iter().find(|p| &p.data.id == id)
+        match self.selected_collection_in_list(model)? {
+            CollectionRef::Playlist(p) => Some(p),
+            CollectionRef::Album(_) => None,
+        }
     }
 
     /// 已打开歌单的曲目槽位(`None` = 尚未进入歌单或还没拉到)。
     pub fn current_tracks_slot<'a>(
         &self,
         model: BrowseModel<'a>,
-    ) -> Option<&'a Vec<PlaylistEntryView>> {
-        self.opened_playlist(model)
-            .and_then(|p| model.library.tracks.get(&p.data.id))
+    ) -> Option<&'a Vec<CollectionTrackView>> {
+        self.nav
+            .opened_collection
+            .as_ref()
+            .and_then(|id| id.tracks(model.library))
             .map(|tracks| &tracks.entries)
     }
 
     /// 已打开歌单的曲目列表(slot 未到位时返回空)。
-    pub fn current_tracks<'a>(&self, model: BrowseModel<'a>) -> &'a [PlaylistEntryView] {
+    pub fn current_tracks<'a>(&self, model: BrowseModel<'a>) -> &'a [CollectionTrackView] {
         self.current_tracks_slot(model).map_or(&[], Vec::as_slice)
     }
 
     /// 借用歌单列表组件维护的过滤结果。
+    #[cfg(test)]
     pub fn filtered_playlists<'a>(&self, model: BrowseModel<'a>) -> Vec<&'a PlaylistView> {
-        self.playlists.rows(model.library, model.cfg)
+        self.collections
+            .items(model.library, model.cfg, CollectionGroup::Playlists)
+            .into_iter()
+            .filter_map(|item| match item {
+                CollectionRef::Playlist(p) => Some(p),
+                CollectionRef::Album(_) => None,
+            })
+            .collect()
     }
 
     /// 借用该歌单的深度命中展示内容。
-    pub fn deep_hit_for(&self, id: &PlaylistId) -> Option<DeepHit> {
-        self.playlists.deep_hit_for(id)
+    pub fn deep_hit_for(&self, id: impl Into<CollectionId>) -> Option<DeepHit> {
+        self.collections.deep_hit_for(id)
     }
 
     /// 当前可见(被 search 过滤)的曲目列表。命中规则:歌名 / 别名 / 任一艺人 / 专辑名取最高分。
     pub(crate) fn filtered_tracks<'a>(&self, model: BrowseModel<'a>) -> FilteredTracks<'a> {
-        let Some(playlist) = self.opened_playlist(model) else {
+        let Some(playlist) = self.opened_collection(model) else {
             return FilteredTracks::empty();
         };
-        let Some(entries) = model.library.tracks.get(&playlist.data.id) else {
+        let Some(entries) = playlist.id().tracks(model.library) else {
             return FilteredTracks::empty();
         };
         self.tracks
-            .filtered(&playlist.data.id, model.library.tracks_generation, entries)
+            .filtered(&playlist.id(), model.library.tracks_generation, entries)
     }
 
     /// 按 `behavior.filter_play_scope` 建立 Library 起播队列，并保留过滤结果中选中的 exact

@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::widgets::{StatefulWidget, Table, TableState};
+use ratatui::widgets::{StatefulWidget, Table, TableState, Widget};
 
 use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::scroll::viewport::pin_cursor;
@@ -85,7 +85,6 @@ pub(crate) struct PreparedMinimap {
 impl PreparedTable {
     /// 从准备结果绘制旧视图；所有临时 widget 状态都局限于本次调用。
     pub(crate) fn paint(&self, buffer: &mut Buffer) {
-        use ratatui::widgets::Widget;
         if let Some((area, block)) = &self.border {
             block.clone().render(*area, buffer);
         }

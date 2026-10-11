@@ -5,14 +5,14 @@
 
 use std::time::Instant;
 
-use mineral_model::PlaylistId;
+use crate::runtime::collection::CollectionId;
 
 use crate::runtime::track_pos::{PendingRestore, TrackPosMap};
 
 /// 列表浏览态([`AppState`](crate::runtime::state::AppState) 的导航域)。
 pub struct NavState {
     /// 已打开歌单的身份；进入时设置，返回期间保留供离场曲目面板绘制。
-    pub opened_playlist: Option<PlaylistId>,
+    pub opened_collection: Option<CollectionId>,
 
     /// 各歌单的光标位置记忆(`behavior.remember_track_pos` 非 off 时退出 Library
     /// 记录、再进恢复;persist 档启动时灌入落盘值)。
@@ -31,7 +31,7 @@ impl NavState {
     /// 构造初始浏览态(光标在首行、视口未滚、无位置记忆)。
     pub(crate) fn new() -> Self {
         Self {
-            opened_playlist: None,
+            opened_collection: None,
             track_pos: TrackPosMap::default(),
             pending_track_restore: None,
             last_sel_change: Instant::now(),

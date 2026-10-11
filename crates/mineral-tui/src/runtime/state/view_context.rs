@@ -7,11 +7,11 @@ use super::{AppState, SearchFocus};
 /// 左栏当前展示的视图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
-    /// 歌单列表(默认)。
-    Playlists,
+    /// 按歌单和专辑分组的曲库根列表。
+    Collections,
 
-    /// 已选歌单内的曲目列表。
-    Library,
+    /// 已进入的歌单或专辑曲目。
+    Tracks,
 }
 
 /// 当前激活的页(浮层栈之下),供按键路由分流到对应 [`Page`](crate::app) 实现。

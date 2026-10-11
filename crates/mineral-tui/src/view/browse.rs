@@ -2,8 +2,8 @@
 
 use crate::components::frame::{FrameEnv, PrepareCx};
 use crate::components::layout::browse::sidebar::{
+    collections::{CollectionInput, CollectionView},
     library::{TrackInput, TrackView},
-    playlists::{PlaylistInput, PlaylistView},
     sweep,
 };
 use crate::components::layout::shared::thumbnails::thumbnail_phase;
@@ -18,10 +18,23 @@ pub(crate) fn tracks<'a>(
     state: &'a AppState,
     theme: &'a Theme,
 ) -> ComponentView<'a, TrackView<'a>> {
-    let playlist = state.opened_playlist();
+    let collection = state.opened_collection();
     let input = TrackInput {
-        playlist,
-        tracks: playlist.and_then(|playlist| state.models.library.tracks.get(&playlist.data.id)),
+        collection,
+        tracks: state
+            .ui
+            .browse
+            .nav
+            .opened_collection
+            .as_ref()
+            .and_then(|id| id.tracks(&state.models.library)),
+        load_failed: state
+            .ui
+            .browse
+            .nav
+            .opened_collection
+            .as_ref()
+            .is_some_and(|id| state.models.library.collection_load_failed(id)),
         generation: state.models.library.tracks_generation,
         playing: state.models.playback.track.as_ref().map(|song| &song.id),
     };
@@ -39,15 +52,15 @@ pub(crate) fn tracks<'a>(
 pub(crate) fn playlists<'a>(
     state: &'a AppState,
     theme: &'a Theme,
-) -> ComponentView<'a, PlaylistView<'a>> {
+) -> ComponentView<'a, CollectionView<'a>> {
     let env = FrameEnv {
         config: &state.cfg,
         theme,
         now: state.ui.frame_now,
     };
-    state.ui.browse.playlists.bind_view(env, |list| {
+    state.ui.browse.collections.bind_view(env, |list| {
         list.view(
-            PlaylistInput {
+            CollectionInput {
                 library: &state.models.library,
                 loading: state.models.tasks_snapshot.running > 0,
             },
@@ -60,7 +73,8 @@ pub(crate) fn playlists<'a>(
 /// 页面形变中的列表保留稳定视口目标。
 fn motion(state: &AppState) -> crate::runtime::scroll::list::ScrollMotion {
     use crate::runtime::scroll::list::ScrollMotion;
-    if state.ui.browse.fullscreen.at_min()
+    if state.ui.browse.collections.drawer_settled()
+        && state.ui.browse.fullscreen.at_min()
         && state.ui.channel_search.active.at_min()
         && (state.ui.browse.view.at_min() || state.ui.browse.view.at_max())
     {
@@ -95,9 +109,9 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
         advance,
     };
     if !state.ui.browse.view.at_max() {
-        state.ui.browse.playlists.prepare(
+        state.ui.browse.collections.prepare(
             area,
-            PlaylistInput {
+            CollectionInput {
                 library: &state.models.library,
                 loading: state.models.tasks_snapshot.running > 0,
             },
@@ -105,18 +119,29 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
         );
     }
     if !state.ui.browse.view.at_min() {
-        let playlist = state.ui.browse.nav.opened_playlist.as_ref().and_then(|id| {
-            state
-                .models
-                .library
-                .playlists
-                .iter()
-                .find(|playlist| &playlist.data.id == id)
-        });
+        let collection = state
+            .ui
+            .browse
+            .nav
+            .opened_collection
+            .as_ref()
+            .and_then(|id| id.resolve(&state.models.library));
         let input = TrackInput {
-            playlist,
-            tracks: playlist
-                .and_then(|playlist| state.models.library.tracks.get(&playlist.data.id)),
+            collection,
+            tracks: state
+                .ui
+                .browse
+                .nav
+                .opened_collection
+                .as_ref()
+                .and_then(|id| id.tracks(&state.models.library)),
+            load_failed: state
+                .ui
+                .browse
+                .nav
+                .opened_collection
+                .as_ref()
+                .is_some_and(|id| state.models.library.collection_load_failed(id)),
             generation: state.models.library.tracks_generation,
             playing: state.models.playback.track.as_ref().map(|song| &song.id),
         };
@@ -128,7 +153,7 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
 /// 浏览页组合：分别借入两个子列表视图。
 pub(crate) struct BrowseView<'a> {
     /// 歌单列表。
-    playlists: ComponentView<'a, PlaylistView<'a>>,
+    playlists: ComponentView<'a, CollectionView<'a>>,
 
     /// 曲目列表。
     tracks: ComponentView<'a, TrackView<'a>>,

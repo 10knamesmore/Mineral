@@ -60,7 +60,7 @@ impl PaintView for RootLayer<'_> {
             app.images.dependencies(
                 inputs,
                 [
-                    app.selected.input.playlist_cover.clone(),
+                    app.selected.input.collection_cover.clone(),
                     app.selected
                         .input
                         .track

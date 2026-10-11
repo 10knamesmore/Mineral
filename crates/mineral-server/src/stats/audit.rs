@@ -104,12 +104,14 @@ fn audit_script_cmd(cmd: &ScriptCmd) -> TrackingDecision {
     }
 }
 
-/// 取数 task 入口的埋点归属(穷尽)。搜索有专表,其余归 `fetches`。
+/// 取数 task 入口的埋点归属
 fn audit_fetch_kind(kind: &ChannelFetchKind) -> TrackingDecision {
     use TrackingDecision::Recorded;
     match kind {
         ChannelFetchKind::Search { .. } => Recorded("searches"),
-        ChannelFetchKind::MyPlaylists { .. } => Recorded("fetches"),
+        ChannelFetchKind::MyAlbums { .. } | ChannelFetchKind::MyPlaylists { .. } => {
+            Recorded("fetches")
+        }
         ChannelFetchKind::PlaylistDetail { .. } => Recorded("fetches"),
         ChannelFetchKind::Lyrics { .. } => Recorded("fetches"),
         ChannelFetchKind::RemotePlayCount { .. } => Recorded("fetches"),

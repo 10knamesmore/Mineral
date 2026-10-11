@@ -2,7 +2,7 @@
 //!
 //! 实现 `App` 的播放控制、love 与下载；入口由 `App::dispatch` 调用。
 
-use mineral_model::Song;
+use mineral_model::{PlaylistEntry, Song};
 use mineral_protocol::DownloadTarget;
 use mineral_task::TaskEvent;
 
@@ -124,7 +124,7 @@ impl App {
             },
             PageKind::Browse => {
                 if self.state.ui.browse.fullscreen.on()
-                    || self.state.ui.browse.view.current() != View::Library
+                    || self.state.ui.browse.view.current() != View::Tracks
                 {
                     return;
                 }
@@ -240,17 +240,16 @@ impl App {
             return;
         }
         match self.state.ui.browse.view.current() {
-            View::Playlists => {
+            View::Collections => {
                 let id = self
                     .state
-                    .filtered_playlists()
-                    .get(self.state.ui.browse.playlists.scroll().sel())
+                    .selected_playlist_in_list()
                     .map(|p| p.data.id.clone());
                 if let Some(id) = id {
                     self.client.download(DownloadTarget::Playlist(id));
                 }
             }
-            View::Library => {
+            View::Tracks => {
                 let song = self
                     .state
                     .filtered_tracks()
@@ -283,8 +282,7 @@ impl App {
         self.pending_container.insert(fetch.dedup_key(), mode);
     }
 
-    /// 容器曲目若已在手则返回(免冗余拉取):歌单退查 library 缓存;专辑 / artist 本地无缓存,
-    /// 恒 `None`(走拉取)。
+    /// 整张操作复用曲库中完整的歌单或专辑曲目；艺人热曲由详情任务获取。
     fn container_loaded_songs(&self, container: &ContainerRef) -> Option<Vec<Song>> {
         match container {
             ContainerRef::Playlist(p) => {
@@ -294,7 +292,14 @@ impl App {
                 }
                 Some(views.iter().map(|entry| entry.data.song.clone()).collect())
             }
-            ContainerRef::Album(_) | ContainerRef::Artist(_) => None,
+            ContainerRef::Album(album) => self
+                .state
+                .models
+                .library
+                .album_tracks
+                .get(&album.id)
+                .map(|tracks| tracks.iter().map(|entry| entry.data.song.clone()).collect()),
+            ContainerRef::Artist(_) => None,
         }
     }
 
@@ -332,7 +337,10 @@ impl App {
                 .then(|| self.state.ui.browse.active_search().query().to_owned());
                 self.pending_playlist_play = Some(PendingPlaylistPlay {
                     playlist: id.clone(),
-                    target: entry.data.clone(),
+                    target: PlaylistEntry::builder()
+                        .index(entry.data.index)
+                        .song(entry.data.song.clone())
+                        .build(),
                     query,
                     name: name.clone(),
                 });

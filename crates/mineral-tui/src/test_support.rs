@@ -25,7 +25,7 @@ use crate::render::anim::Toggle;
 use crate::render::theme::Theme;
 use crate::runtime::backend::{Backend, BackendBootstrap, Completion, CompletionQueue};
 use crate::runtime::state::{AppState, LyricExtra, View};
-use crate::runtime::view_model::{PlaylistEntryView, PlaylistView};
+use crate::runtime::view_model::{CollectionTrackView, PlaylistView};
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
@@ -71,12 +71,12 @@ pub(crate) fn mixed_source_songs() -> Vec<Song> {
     vec![netease, bilibili, local]
 }
 
-/// 按输入顺序枚举 0-based PlaylistEntry，并包成无装饰 PlaylistEntryView。
-pub(crate) fn entry_views(songs: Vec<Song>) -> Vec<PlaylistEntryView> {
+/// 按输入顺序枚举 0-based PlaylistEntry，并包成无装饰 CollectionTrackView。
+pub(crate) fn entry_views(songs: Vec<Song>) -> Vec<CollectionTrackView> {
     PlaylistEntry::enumerate(songs)
         .into_iter()
-        .map(|data| PlaylistEntryView {
-            data,
+        .map(|data| CollectionTrackView {
+            data: data.into(),
             loved: false,
             plays: None,
         })
@@ -94,18 +94,18 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
         SourceKind::MINERAL,
         3,
     )];
-    s.ui.browse.nav.opened_playlist = Some(pid.clone());
-    s.ui.browse.view.switch_to(View::Library);
+    s.ui.browse.nav.opened_collection = Some(pid.clone().into());
+    s.ui.browse.view.switch_to(View::Tracks);
     let views = entry_views(mixed_source_songs())
         .into_iter()
-        .map(|entry| PlaylistEntryView {
+        .map(|entry| CollectionTrackView {
             loved: true,
             ..entry
         })
         .collect();
     s.models.library.tracks.insert(
         pid,
-        crate::runtime::state::PlaylistTracks {
+        crate::runtime::state::CollectionTracks {
             entries: views,
             complete: true,
             next_offset: None,
@@ -130,15 +130,15 @@ pub(crate) fn state_with_playlists() -> color_eyre::Result<AppState> {
 /// 当前在播标记),view = Library,选中第 1 首。
 pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     let mut s = state_with_playlists()?;
-    s.ui.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "p1"));
-    s.ui.browse.view.switch_to(View::Library);
+    s.ui.browse.nav.opened_collection = Some(PlaylistId::new(SourceKind::NETEASE, "p1").into());
+    s.ui.browse.view.switch_to(View::Tracks);
     let tracks = endserenading(3);
     let plays = [1200_u32, 999, 88];
     let views = PlaylistEntry::enumerate(tracks.clone())
         .into_iter()
         .enumerate()
-        .map(|(i, data)| PlaylistEntryView {
-            data,
+        .map(|(i, data)| CollectionTrackView {
+            data: data.into(),
             loved: i == 1,
             plays: plays.get(i).copied(),
         })
@@ -146,7 +146,7 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     s.models.player.current = tracks.first().cloned();
     s.models.library.tracks.insert(
         PlaylistId::new(SourceKind::NETEASE, "p1"),
-        crate::runtime::state::PlaylistTracks {
+        crate::runtime::state::CollectionTracks {
             entries: views,
             complete: true,
             next_offset: None,
@@ -599,7 +599,8 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
         playlist_view("p3", "本地音乐", SourceKind::LOCAL, 5),
     ];
-    app.state.ui.browse.view.switch_to(View::Playlists);
+    app.state.ui.browse.view.switch_to(View::Collections);
+    app.state.ui.browse.collections.select(0);
     Ok((app, submitted))
 }
 
@@ -608,7 +609,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
 pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Result<App> {
     let mut app = test_app()?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-    app.state.ui.browse.nav.opened_playlist = Some(pid.clone());
+    app.state.ui.browse.nav.opened_collection = Some(pid.clone().into());
     app.state.models.library.playlists = vec![PlaylistView {
         data: Playlist::builder()
             .id(pid.clone())
@@ -620,17 +621,17 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     let views = entry_views(tracks);
     app.state.models.library.tracks.insert(
         pid,
-        crate::runtime::state::PlaylistTracks {
+        crate::runtime::state::CollectionTracks {
             entries: views,
             complete: true,
             next_offset: None,
         },
     );
-    app.state.ui.browse.view.switch_to(View::Library);
+    app.state.ui.browse.view.switch_to(View::Tracks);
     while !app.state.ui.browse.view.at_max() {
         app.state.ui.browse.view.tick();
     }
-    app.state.ui.browse.playlists.select(0);
+    app.state.ui.browse.collections.select(0);
     app.state.ui.browse.tracks.select(sel_track);
     Ok(app)
 }
@@ -731,7 +732,7 @@ pub(crate) fn app_with_library_probed(
     };
     let mut app = test_app_with(Arc::new(client))?;
     let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
-    app.state.ui.browse.nav.opened_playlist = Some(pid.clone());
+    app.state.ui.browse.nav.opened_collection = Some(pid.clone().into());
     app.state.models.library.playlists = vec![playlist_view(
         "p1",
         "EndSerenading",
@@ -741,13 +742,13 @@ pub(crate) fn app_with_library_probed(
     let views = entry_views(endserenading(len));
     app.state.models.library.tracks.insert(
         pid,
-        crate::runtime::state::PlaylistTracks {
+        crate::runtime::state::CollectionTracks {
             entries: views,
             complete: true,
             next_offset: None,
         },
     );
-    app.state.ui.browse.view.switch_to(View::Library);
+    app.state.ui.browse.view.switch_to(View::Tracks);
     while !app.state.ui.browse.view.at_max() {
         app.state.ui.browse.view.tick();
     }
@@ -770,7 +771,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
     let views = entry_views(songs);
     app.state.models.library.tracks.insert(
         pid,
-        crate::runtime::state::PlaylistTracks {
+        crate::runtime::state::CollectionTracks {
             entries: views,
             complete: true,
             next_offset: None,

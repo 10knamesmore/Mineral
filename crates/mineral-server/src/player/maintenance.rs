@@ -5,6 +5,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use mineral_task::{ChannelFetchKind, Priority, TaskKind};
+
 use super::PlayerCore;
 use crate::gapless;
 
@@ -32,6 +34,10 @@ impl PlayerCore {
         for ch in &self.inner.channels {
             let source = ch.source();
             self.submit_my_playlists(source);
+            self.inner.scheduler.submit(
+                TaskKind::ChannelFetch(ChannelFetchKind::MyAlbums { source }),
+                Priority::User,
+            );
             let this = self.clone();
             let channel = Arc::clone(ch);
             tokio::spawn(async move {

@@ -35,15 +35,16 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
     let playlist_id = playlist.data.id.clone();
     let mut selected = with_name(song("selected"), "Track detail");
     selected.cover_url = Some(to.clone());
-    state.ui.browse.nav.opened_playlist = Some(playlist_id.clone());
+    state.ui.browse.nav.opened_collection = Some(playlist_id.clone().into());
     state.models.library.tracks.insert(
         playlist_id,
-        crate::runtime::state::PlaylistTracks {
+        crate::runtime::state::CollectionTracks {
             entries: entry_views(vec![song("entry"), selected]),
             complete: true,
             next_offset: None,
         },
     );
+    state.ui.browse.collections.select(0);
     state.ui.browse.tracks.select(1);
     state.ui.browse.view.retempo(4);
     if cache_playlist {
@@ -81,9 +82,9 @@ fn cover_url(state: &AppState, view: View) -> color_eyre::Result<MediaUrl> {
 fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
     let mut state = state_with_covers(true, true)?;
     let theme = default_theme()?;
-    let from = cover_url(&state, View::Playlists)?;
-    let to = cover_url(&state, View::Library)?;
-    state.ui.browse.view.switch_to(View::Library);
+    let from = cover_url(&state, View::Collections)?;
+    let to = cover_url(&state, View::Tracks)?;
+    state.ui.browse.view.switch_to(View::Tracks);
     state.ui.browse.view.tick();
     render(&mut state, &theme, false)?;
     let pending = state.resources.images.encode_pending.clone();
@@ -104,7 +105,7 @@ fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
 fn cover_in_flight_suppresses_local_encode_requests() -> color_eyre::Result<()> {
     let mut state = state_with_covers(true, true)?;
     let theme = default_theme()?;
-    state.ui.browse.view.switch_to(View::Library);
+    state.ui.browse.view.switch_to(View::Tracks);
     for _ in 0..=4 {
         render(&mut state, &theme, true)?;
         assert!(

@@ -8,7 +8,8 @@
 //! (全量补拉由进搜索态时的 [`crate::app::App`] 触发,结果渐进到达后经
 //! `tracks_generation` 失效自然并入)。
 
-use mineral_model::{PlaylistId, Song};
+use crate::runtime::collection::CollectionId;
+use mineral_model::Song;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -66,18 +67,18 @@ pub struct DeepSearchCache {
     key: Option<CacheKey>,
 
     /// 歌单 id → 命中载荷;不在 map 里 = 该歌单无歌曲命中(或曲目未拉到)。
-    hits: FxHashMap<PlaylistId, DeepHit>,
+    hits: FxHashMap<CollectionId, DeepHit>,
 }
 
 impl DeepSearchCache {
     /// 某歌单的加权深度分;无命中返回 `None`。
-    pub fn score_of(&self, id: &PlaylistId) -> Option<f64> {
-        self.hits.get(id).map(|h| h.score)
+    pub fn score_of(&self, id: impl Into<CollectionId>) -> Option<f64> {
+        self.hits.get(&id.into()).map(|h| h.score)
     }
 
     /// 某歌单的命中载荷引用;无命中返回 `None`。
-    pub fn hit_of(&self, id: &PlaylistId) -> Option<&DeepHit> {
-        self.hits.get(id)
+    pub fn hit_of(&self, id: impl Into<CollectionId>) -> Option<&DeepHit> {
+        self.hits.get(&id.into())
     }
 
     /// 是否存在任何深度命中(渲染端据此决定 match 列要不要占位)。
@@ -169,10 +170,20 @@ fn build(
     search: &SearchState,
     library: &LibraryData,
     cfg: &crate::config::TuiConfig,
-) -> FxHashMap<PlaylistId, DeepHit> {
+) -> FxHashMap<CollectionId, DeepHit> {
     let weights = FieldWeights::from_cfg(cfg.search().deep().weights());
     let mut out = FxHashMap::default();
-    for (pid, tracks) in &library.tracks {
+    for (pid, tracks) in library
+        .tracks
+        .iter()
+        .map(|(id, tracks)| (CollectionId::Playlist(id.clone()), tracks))
+        .chain(
+            library
+                .album_tracks
+                .iter()
+                .map(|(id, tracks)| (CollectionId::Album(id.clone()), tracks)),
+        )
+    {
         let mut best: Option<SongHit<'_>> = None;
         let mut matched = 0usize;
         for sv in &tracks.entries {
@@ -336,12 +347,12 @@ mod tests {
         PlaylistId::new(SourceKind::NETEASE, "p2")
     }
 
-    /// 把裸 Song 列表包成 PlaylistEntryView 塞进某歌单的 library.tracks 并 bump 版本。
+    /// 把裸 Song 列表包成 CollectionTrackView 塞进某歌单的 library.tracks 并 bump 版本。
     fn fill_tracks(s: &mut AppState, id: &PlaylistId, tracks: Vec<mineral_model::Song>) {
         let views = entry_views(tracks);
         s.models.library.tracks.insert(
             id.clone(),
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: views,
                 complete: true,
                 next_offset: None,
@@ -368,7 +379,7 @@ mod tests {
     #[test]
     fn song_name_hit_surfaces_playlist() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.ui.browse.playlists.test_search_mut().set_query("春日");
+        s.ui.browse.collections.test_search_mut().set_query("春日");
         let names = s
             .filtered_playlists()
             .iter()
@@ -377,8 +388,8 @@ mod tests {
         assert_eq!(names, vec!["The Power of Failing".to_owned()], "仅 p2 命中");
         let hit =
             s.ui.browse
-                .playlists
-                .deep_hit_for(&p2())
+                .collections
+                .deep_hit_for(p2())
                 .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
         assert_eq!(hit.name, "春日影");
         assert_eq!(hit.second.as_deref(), Some("CRYCHIC"));
@@ -393,12 +404,12 @@ mod tests {
     #[test]
     fn artist_hit_lands_in_second_segment() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.ui.browse.playlists.test_search_mut().set_query("mygo");
+        s.ui.browse.collections.test_search_mut().set_query("mygo");
         let _ = s.filtered_playlists();
         let hit =
             s.ui.browse
-                .playlists
-                .deep_hit_for(&p2())
+                .collections
+                .deep_hit_for(p2())
                 .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
         assert_eq!(hit.name, "迷星叫");
         assert_eq!(hit.second.as_deref(), Some("MyGO!!!!!"));
@@ -417,12 +428,12 @@ mod tests {
             "Mayoiuta",
         );
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.ui.browse.playlists.test_search_mut().set_query("mayo");
+        s.ui.browse.collections.test_search_mut().set_query("mayo");
         let _ = s.filtered_playlists();
         let hit =
             s.ui.browse
-                .playlists
-                .deep_hit_for(&p2())
+                .collections
+                .deep_hit_for(p2())
                 .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有别名深度命中"))?;
         assert_eq!(hit.name, "迷星叫");
         assert_eq!(hit.alias.as_deref(), Some("Mayoiuta"));
@@ -452,12 +463,12 @@ mod tests {
         )];
         let t = with_alias(with_name(song("s2"), "迷星叫"), "Mayoiuta");
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.ui.browse.playlists.test_search_mut().set_query("mayo");
+        s.ui.browse.collections.test_search_mut().set_query("mayo");
         assert!(
             s.filtered_playlists().is_empty(),
             "alias 权重 0:纯别名命中不应捞出歌单"
         );
-        assert!(s.ui.browse.playlists.deep_hit_for(&p2()).is_none());
+        assert!(s.ui.browse.collections.deep_hit_for(p2()).is_none());
         Ok(())
     }
 
@@ -466,12 +477,12 @@ mod tests {
     #[test]
     fn extra_counts_additional_matched_songs() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.ui.browse.playlists.test_search_mut().set_query("迷");
+        s.ui.browse.collections.test_search_mut().set_query("迷");
         let _ = s.filtered_playlists();
         let hit =
             s.ui.browse
-                .playlists
-                .deep_hit_for(&p2())
+                .collections
+                .deep_hit_for(p2())
                 .ok_or_else(|| color_eyre::eyre::eyre!("p2 应有深度命中"))?;
         assert_eq!(hit.extra, 1, "除最佳外还有一首命中");
         Ok(())
@@ -497,12 +508,12 @@ mod tests {
         )];
         let t = with_artist(with_name(song("s2"), "迷星叫"), "MyGO!!!!!");
         fill_tracks(&mut s, &p2(), vec![t]);
-        s.ui.browse.playlists.test_search_mut().set_query("mygo");
+        s.ui.browse.collections.test_search_mut().set_query("mygo");
         assert!(
             s.filtered_playlists().is_empty(),
             "artist 权重 0:纯艺人命中不应捞出歌单"
         );
-        assert!(s.ui.browse.playlists.deep_hit_for(&p2()).is_none());
+        assert!(s.ui.browse.collections.deep_hit_for(p2()).is_none());
         Ok(())
     }
 
@@ -517,7 +528,10 @@ mod tests {
         ];
         let inner_id = PlaylistId::new(SourceKind::NETEASE, "inner");
         fill_tracks(&mut s, &inner_id, vec![with_name(song("s1"), "春日影")]);
-        s.ui.browse.playlists.test_search_mut().set_query("春日影");
+        s.ui.browse
+            .collections
+            .test_search_mut()
+            .set_query("春日影");
         let names = s
             .filtered_playlists()
             .iter()
@@ -535,7 +549,7 @@ mod tests {
     #[test]
     fn new_tracks_invalidate_cache() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
-        s.ui.browse.playlists.test_search_mut().set_query("春日");
+        s.ui.browse.collections.test_search_mut().set_query("春日");
         assert_eq!(s.filtered_playlists().len(), 1, "初始仅 p2 命中");
         // p1 的曲目此刻到达,内含同名命中曲。
         let p1 = PlaylistId::new(SourceKind::NETEASE, "p1");

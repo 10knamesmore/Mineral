@@ -2,7 +2,7 @@
 //!
 //! 三件:
 //! - **cover**:供主图与 Kitty 列表缩略图显示
-//! - **tracks**:歌单的 length 标签在 sidebar 列表上直接可见(`—` vs 真值)
+//! - **tracks**:歌单和专辑的 length 标签在 sidebar 列表上直接可见(`—` vs 真值)
 //! - **local play count**:Selected 展示当前歌曲在 Mineral 中自然播完的次数
 //!
 //! 封面路径只选择候选并做单批 URL 去重，请求生命周期由图片引擎管理；其余路径用各自的
@@ -14,15 +14,17 @@ use mineral_channel_core::{Page, PlaylistLoad};
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
+use crate::runtime::collection::{CollectionGroup, CollectionId, CollectionRef};
 use crate::runtime::state::{AppState, DetailFetch, View};
 
-/// 每 tick 调一次:封面 + 歌单 tracks + 选中歌本地完整播放次数三路 prefetch,
+/// 每 tick 调一次:封面 + 歌单/专辑 tracks + 选中歌本地完整播放次数三路 prefetch,
 /// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::image::collage`])。
 /// `queue_covers` 来自浮层的过滤视图,与 Browse 和在播候选合并后统一提交。
 pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(SourceKind, MediaUrl)>) {
     request_covers(state, queue_covers);
     request_playback_cover_decodes(state);
     request_playlist_tracks(state, client);
+    request_album_tracks(state, client);
     request_play_count(state, client);
     request_detail(state, client);
     request_detail_covers(state);
@@ -60,17 +62,17 @@ fn collect_cover_candidates(
         push_if_new(Some((source, &url)), &mut out);
     }
     match state.ui.browse.view.current() {
-        View::Playlists => {
+        View::Collections => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
-            let filtered = state.filtered_playlists();
-            let sel = state.ui.browse.playlists.scroll().sel();
+            let filtered = state
+                .ui
+                .browse
+                .collections
+                .rows(&state.models.library, &state.cfg);
+            let sel = state.ui.browse.collections.scroll().sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
-                filtered.get(i).and_then(|p| {
-                    p.data
-                        .cover_url
-                        .as_ref()
-                        .map(|u| (p.data.id.namespace(), u))
-                })
+                let item = filtered.get(i)?;
+                item.cover_url().map(|url| (item.source(), url))
             };
             push_if_new(get(sel), &mut out);
             for d in 1..=radius {
@@ -84,13 +86,14 @@ fn collect_cover_candidates(
             // remembered-pos / deep-hit 的其他入口按常规取图路径加载。
             if let Some(first) = filtered
                 .get(sel)
-                .and_then(|p| state.models.library.tracks.get(&p.data.id))
+                .copied()
+                .and_then(|item| item.id().tracks(&state.models.library))
                 .and_then(|tracks| tracks.first())
             {
                 push_if_new(song_cover(&first.data.song), &mut out);
             }
         }
-        View::Library => {
+        View::Tracks => {
             // sel 与邻居均按过滤视图下标读取；视图借用曲目，不复制整个歌单。
             let filtered = state.filtered_tracks();
             let sel = state.ui.browse.tracks.scroll().sel();
@@ -178,7 +181,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             load: PlaylistLoad::Preview,
         }));
     }
-    if state.ui.browse.view == View::Library {
+    if state.ui.browse.view == View::Tracks {
         let Some(id) = selected else { return };
         let load = if let Some(tracks) = state.models.library.tracks.get(&id) {
             let Some(offset) = tracks.next_offset else {
@@ -245,7 +248,7 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
 /// 成功值跨 selection 命中 cache；失败结果只在当前 selection 内抑制逐 tick 重试，离开
 /// 后再选中会重查。Daemon 未提供统计或排除了该 source 时不查询，字段始终缺失。
 pub(crate) fn request_play_count(state: &mut AppState, client: &dyn Backend) {
-    if state.ui.browse.view != View::Library {
+    if state.ui.browse.view != View::Tracks {
         state.models.library.local_play_counts.leave_selection();
         return;
     }
@@ -413,22 +416,90 @@ fn selected_track_id(state: &AppState) -> Option<SongId> {
         .map(|entry| entry.data.song.id.clone())
 }
 
+/// 邻近专辑预取详情；深度搜索时补齐全部专辑，曲目页只加载当前专辑。
+fn request_album_tracks(state: &mut AppState, client: &dyn Backend) {
+    if state.ui.channel_search.active.on() {
+        return;
+    }
+    let selected = state.selected_collection().map(CollectionRef::id);
+    let deep = state.ui.browse.view == View::Collections
+        && state.ui.browse.collections.group() == CollectionGroup::Albums
+        && !state.ui.browse.collections.search().query().is_empty()
+        && *state.cfg.search().deep().enabled();
+    let ids: Vec<_> = if deep {
+        state
+            .models
+            .library
+            .albums
+            .iter()
+            .map(|a| a.data.id.clone())
+            .collect()
+    } else if state.ui.browse.view == View::Collections {
+        nearby_collections(state)
+            .into_iter()
+            .filter_map(|item| match item {
+                CollectionRef::Album(album) => Some(album.data.id.clone()),
+                CollectionRef::Playlist(_) => None,
+            })
+            .collect()
+    } else if let Some(CollectionId::Album(id)) = &selected {
+        vec![id.clone()]
+    } else {
+        Vec::new()
+    };
+    for id in ids {
+        if !state
+            .models
+            .library
+            .needs_album(&id, state.ui.browse.nav.last_sel_change)
+        {
+            continue;
+        }
+        let priority = if selected.as_ref() == Some(&CollectionId::Album(id.clone())) {
+            Priority::User
+        } else {
+            Priority::Background
+        };
+        mineral_log::debug!(target: "prefetch", album = %id, ?priority, "request library album tracks");
+        client.submit_task(
+            TaskKind::ChannelFetch(ChannelFetchKind::AlbumDetail { id: id.clone() }),
+            priority,
+        );
+        state.models.library.request_album(id);
+    }
+}
+
 /// sel 周围 `prefetch.radius` 内、既未 cache 也未请求过的歌单(sel 优先,再向两侧外扩)。
 fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
-    let radius = *state.cfg.prefetch().radius();
-    let filtered = state.filtered_playlists();
-    let sel = state.ui.browse.playlists.scroll().sel();
-    let mut out = Vec::new();
-    let mut consider = |idx: usize| {
-        if let Some(p) = filtered.get(idx) {
-            let id = &p.data.id;
-            if state
+    nearby_collections(state)
+        .into_iter()
+        .filter_map(|item| {
+            let CollectionRef::Playlist(playlist) = item else {
+                return None;
+            };
+            let id = &playlist.data.id;
+            state
                 .models
                 .library
                 .needs_playlist(id, PlaylistLoad::Preview, false)
-            {
-                out.push(id.clone());
-            }
+                .then(|| id.clone())
+        })
+        .collect()
+}
+
+/// 按过滤后的列表选择预取候选：光标优先，再向两侧扩展 `prefetch.radius` 行。
+fn nearby_collections(state: &AppState) -> Vec<CollectionRef<'_>> {
+    let radius = *state.cfg.prefetch().radius();
+    let filtered = state
+        .ui
+        .browse
+        .collections
+        .rows(&state.models.library, &state.cfg);
+    let sel = state.ui.browse.collections.scroll().sel();
+    let mut out = Vec::new();
+    let mut consider = |idx: usize| {
+        if let Some(item) = filtered.get(idx).copied() {
+            out.push(item);
         }
     };
     consider(sel);
@@ -486,8 +557,8 @@ mod tests {
         state.ui.browse.nav.last_sel_change = Instant::now() - std::time::Duration::from_secs(1);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "停留不请求完整歌单");
-        state.ui.browse.nav.opened_playlist = Some(id.clone());
-        state.ui.browse.view.switch_to(View::Library);
+        state.ui.browse.nav.opened_collection = Some(id.clone().into());
+        state.ui.browse.view.switch_to(View::Tracks);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "进入歌单不升级为全量，也不重复首批");
         // 20 个位置仅有 19 首返回详情，下一批必须从来源指定的 20 开始。
@@ -555,8 +626,8 @@ mod tests {
         let mut state = crate::test_support::state_with_playlists()?;
         let client = TestClient::default();
         let id = PlaylistId::new(SourceKind::NETEASE, "p1");
-        state.ui.browse.nav.opened_playlist = Some(id.clone());
-        state.ui.browse.view.switch_to(View::Library);
+        state.ui.browse.nav.opened_collection = Some(id.clone().into());
+        state.ui.browse.view.switch_to(View::Tracks);
         deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 20, Some(20));
         state.ui.browse.tracks.select(19);
         super::request_playlist_tracks(&mut state, &client);
@@ -851,9 +922,9 @@ mod tests {
         });
         request_play_count(&mut state, &client);
 
-        state.ui.browse.view.switch_to(View::Playlists);
+        state.ui.browse.view.switch_to(View::Collections);
         request_play_count(&mut state, &client);
-        state.ui.browse.view.switch_to(View::Library);
+        state.ui.browse.view.switch_to(View::Tracks);
         request_play_count(&mut state, &client);
 
         assert_eq!(state.models.library.local_play_counts.get(&id), None);
@@ -908,7 +979,7 @@ mod tests {
     #[test]
     fn collects_playing_track_and_queue_neighbors() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.ui.browse.view.switch_to(View::Playlists);
+        state.ui.browse.view.switch_to(View::Collections);
         let queue = (0..10)
             .map(song_with_cover)
             .collect::<color_eyre::Result<Vec<Song>>>()?;
@@ -932,7 +1003,7 @@ mod tests {
     #[test]
     fn collects_playing_track_even_when_absent_from_queue() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
-        state.ui.browse.view.switch_to(View::Playlists);
+        state.ui.browse.view.switch_to(View::Collections);
         state.models.player.queue = Vec::new();
         state.models.playback.track = Some(song_with_cover(42)?);
 
@@ -1009,7 +1080,7 @@ mod tests {
         use crate::test_support::entry_views;
 
         let mut state = AppState::test_default()?;
-        state.ui.browse.view.switch_to(View::Playlists);
+        state.ui.browse.view.switch_to(View::Collections);
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         state.models.library.playlists = vec![PlaylistView {
             data: Playlist::builder()
@@ -1024,13 +1095,13 @@ mod tests {
         let views = entry_views(songs);
         state.models.library.tracks.insert(
             pid,
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: views,
                 complete: true,
                 next_offset: None,
             },
         );
-        state.ui.browse.playlists.select(0);
+        state.ui.browse.collections.select(0);
 
         assert!(
             collected_has(&state, 0)?,

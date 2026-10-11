@@ -4,7 +4,7 @@
 //! 有数据生效,被藏的歌单永不丢失。管线经串行锁逐结论推进,消除并发重算
 //! 竞态;任何 transform 失败都透传原列表(fail-open)。
 
-use mineral_model::{Playlist, PlaylistId, SourceKind};
+use mineral_model::{Album, Playlist, PlaylistId, SourceKind};
 use mineral_script::{CurateOutcome, CuratedEntry, PlaylistBrief, QueryId, ResolveValue};
 use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind, TaskOutcome};
 use parking_lot::Mutex;
@@ -26,6 +26,9 @@ pub(crate) struct Library {
 
 /// [`Library`] 的可变态。
 struct LibraryInner {
+    /// 各来源最近一次成功拉取的收藏专辑，重拉失败时保留。
+    saved_albums: FxHashMap<SourceKind, Vec<Album>>,
+
     /// 各源**原始**列表(键存在 = 该源已结论;失败 / 不支持 = 空贡献)。
     raw: FxHashMap<SourceKind, Vec<Playlist>>,
 
@@ -43,11 +46,41 @@ struct LibraryInner {
 }
 
 impl Library {
+    /// 用某来源的新收藏列表替换旧贡献，再按注册顺序合并。
+    pub(crate) fn replace_saved_albums(
+        &self,
+        source: SourceKind,
+        albums: Vec<Album>,
+    ) -> Vec<Album> {
+        let mut state = self.state.lock();
+        state.saved_albums.insert(source, albums);
+        self.order
+            .iter()
+            .filter_map(|source| state.saved_albums.get(source))
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
+    /// 新客户端重放已成功拉取的专辑；首次拉取前不发送空快照。
+    pub(crate) fn cached_saved_albums(&self) -> Option<Vec<Album>> {
+        let state = self.state.lock();
+        (!state.saved_albums.is_empty()).then(|| {
+            self.order
+                .iter()
+                .filter_map(|source| state.saved_albums.get(source))
+                .flatten()
+                .cloned()
+                .collect()
+        })
+    }
+
     /// 建聚合态;`order` 即 channel 注册序,启动时全部源计入在途。
     pub(crate) fn new(order: Vec<SourceKind>) -> Self {
         let pending = order.iter().copied().collect::<FxHashSet<SourceKind>>();
         Self {
             state: Mutex::new(LibraryInner {
+                saved_albums: FxHashMap::default(),
                 raw: FxHashMap::default(),
                 curated: FxHashMap::default(),
                 pending,
@@ -221,6 +254,10 @@ impl PlayerCore {
 
     /// 新 client 接入的即时快照(有缓存才推,避免连接瞬间显示空库假象)。
     pub(crate) fn push_cached_library_snapshot(&self) {
+        if let Some(albums) = self.library().cached_saved_albums() {
+            self.notify()
+                .task_event(TaskEvent::SavedAlbumsSnapshot { albums });
+        }
         if let Some(playlists) = self.library().cached_snapshot() {
             self.notify()
                 .task_event(TaskEvent::LibrarySnapshot { playlists });

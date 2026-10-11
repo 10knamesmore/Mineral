@@ -7,7 +7,8 @@
 
 use std::time::Instant;
 
-use crossterm::event::KeyEvent;
+use crate::runtime::collection::{CollectionGroup, CollectionRef};
+use crossterm::event::{KeyCode, KeyEvent};
 use mineral_model::{PlaylistId, Song};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
@@ -86,7 +87,24 @@ impl Page for BrowsePage {
             Some(Action::Scroll(step)) => self.scroll(step, ctx.model),
             Some(Action::EnterSearch) => self.enter_search(ctx.model),
             Some(Action::ActivateSelection) => self.activate_selection(ctx.model),
-            Some(Action::BackOrClearSearch) => self.back_or_clear_search(ctx.model),
+            Some(Action::BackOrClearSearch) => {
+                if key.code == KeyCode::Esc
+                    && self.view == View::Collections
+                    && !self.collections.choosing_type()
+                    && self.active_search().query().is_empty()
+                {
+                    BrowseEffect::None
+                } else {
+                    self.back_or_clear_search(ctx.model)
+                }
+            }
+            Some(
+                Action::OpenActionMenu
+                | Action::OpenCopyMenu
+                | Action::DownloadSelection
+                | Action::ToggleLoveSelection
+                | Action::JumpToCurrent,
+            ) if self.collections.choosing_type() && !self.fullscreen.on() => BrowseEffect::None,
             Some(action) => BrowseEffect::Dispatch(action),
             None => BrowseEffect::None,
         }
@@ -101,15 +119,21 @@ impl BrowsePage {
         if self.fullscreen.on() {
             return;
         }
+        if self.collections.choosing_type() {
+            self.collections.move_type(mv);
+            return;
+        }
         self.nav.last_sel_change = Instant::now();
         // len 先算(释放对 model 的不可变借用),再取列表态可变借用。
         let len = match self.view.current() {
-            View::Playlists => self.filtered_playlists(model).len(),
-            View::Library => self.filtered_tracks(model).len(),
+            View::Collections => self.collections.rows(model.library, model.cfg).len(),
+            View::Tracks => self.filtered_tracks(model).len(),
         };
         match self.view.current() {
-            View::Playlists => self.playlists.move_selection(mv, len),
-            View::Library => self.tracks.move_selection(mv, len),
+            View::Collections => {
+                self.collections.move_selection(mv, len);
+            }
+            View::Tracks => self.tracks.move_selection(mv, len),
         }
     }
 
@@ -119,31 +143,40 @@ impl BrowsePage {
         if self.fullscreen.on() {
             return BrowseEffect::ScrollLyrics(step);
         }
+        if self.collections.choosing_type() {
+            self.collections.move_type(match step {
+                ScrollStep::LineUp | ScrollStep::PageUp => SelectionMove::First,
+                ScrollStep::LineDown | ScrollStep::PageDown => SelectionMove::Last,
+            });
+            return BrowseEffect::None;
+        }
         let delta = scroll::viewport::step_delta(step, model.cfg.behavior());
         let anim = model.cfg.animation();
         let ticks = ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms());
         // len 先算(释放 model 借用),再取列表态可变借用;page 同移视口 + 光标(vim `<C-d>` 语义)。
         let len = match self.view.current() {
-            View::Playlists => self.filtered_playlists(model).len(),
-            View::Library => self.filtered_tracks(model).len(),
+            View::Collections => self.collections.rows(model.library, model.cfg).len(),
+            View::Tracks => self.filtered_tracks(model).len(),
         };
         self.nav.last_sel_change = Instant::now();
         match self.view.current() {
-            View::Playlists => self.playlists.scroll_by(delta, len, ticks),
-            View::Library => self.tracks.scroll_by(delta, len, ticks),
+            View::Collections => {
+                self.collections.scroll_by(delta, len, ticks);
+            }
+            View::Tracks => self.tracks.scroll_by(delta, len, ticks),
         }
         BrowseEffect::None
     }
 
     /// 进入搜索输入态并清词;全屏态屏蔽(屏上无列表可滤)。同时吐出待补拉歌单(深度搜索数据保障)。
     fn enter_search(&mut self, model: BrowseModel<'_>) -> BrowseEffect {
-        if self.fullscreen.on() {
+        if self.fullscreen.on() || self.collections.choosing_type() {
             return BrowseEffect::None;
         }
         self.clear_search(model);
         match self.view.current() {
-            View::Playlists => self.playlists.set_typing(true),
-            View::Library => self.tracks.set_typing(true),
+            View::Collections => self.collections.set_typing(true),
+            View::Tracks => self.tracks.set_typing(true),
         }
         let pending = self.deep_search_pending(model);
         if pending.is_empty() {
@@ -156,7 +189,10 @@ impl BrowsePage {
     /// 深度搜索数据保障:Playlists 视图 + deep 开启时,列出所有未拉取 / 未请求的歌单(待补拉);
     /// 非该状态返回空；落地端交给统一提交层并去重，容量不足由提交层重试。
     fn deep_search_pending(&self, model: BrowseModel<'_>) -> Vec<PlaylistId> {
-        if self.view != View::Playlists || !*model.cfg.search().deep().enabled() {
+        if self.view != View::Collections
+            || self.collections.group() != CollectionGroup::Playlists
+            || !*model.cfg.search().deep().enabled()
+        {
             return Vec::new();
         }
         model
@@ -176,8 +212,10 @@ impl BrowsePage {
     /// 页面将输入交给当前列表，列表自己更新过滤词、光标和展开动画。
     fn handle_search_key(&mut self, key: &KeyEvent, model: BrowseModel<'_>) {
         let changed = match self.view.current() {
-            View::Playlists => self.playlists.on_filter_key(key, model.library, model.cfg),
-            View::Library => {
+            View::Collections => self
+                .collections
+                .on_filter_key(key, model.library, model.cfg),
+            View::Tracks => {
                 let input = self.track_input(model);
                 self.tracks.on_filter_key(key, input, model.cfg)
             }
@@ -199,18 +237,23 @@ impl BrowsePage {
                 BrowseEffect::None
             };
         }
+        if self.collections.choosing_type() {
+            self.collections.confirm_type();
+            self.nav.last_sel_change = Instant::now();
+            return BrowseEffect::None;
+        }
         self.nav.last_sel_change = Instant::now();
         match self.view.current() {
-            View::Playlists => {
+            View::Collections => {
                 // 上一次进歌单挂的延迟恢复(曲目未到就退出来了)就此作废。
                 self.nav.pending_track_restore = None;
                 let mut sel_track = 0usize;
                 // 记忆恢复时的屏上相对行;None = 默认落位(光标上方留 scrolloff)。
                 let mut screen_anchor: Option<usize> = None;
-                let Some(target_id) = self
-                    .filtered_playlists(model)
-                    .get(self.playlists.scroll().sel())
-                    .map(|p| p.data.id.clone())
+                let rows = self.collections.rows(model.library, model.cfg);
+                let Some(target_id) = rows
+                    .get(self.collections.scroll().sel())
+                    .map(|item| item.id())
                 else {
                     return BrowseEffect::None;
                 };
@@ -218,11 +261,11 @@ impl BrowsePage {
                 let locate = (*model.cfg.search().deep().locate_on_enter())
                     .then(|| self.deep_hit_for(&target_id).map(|h| h.song_id))
                     .flatten();
-                self.nav.opened_playlist = Some(target_id.clone());
+                self.nav.opened_collection = Some(target_id.clone());
                 self.tracks.reset_query();
                 self.tracks.set_typing(false);
                 if let Some(idx) = locate.and_then(|song_id| {
-                    model.library.tracks.get(&target_id).and_then(|entries| {
+                    target_id.tracks(model.library).and_then(|entries| {
                         entries
                             .iter()
                             .position(|entry| entry.data.song.id == song_id)
@@ -233,7 +276,7 @@ impl BrowsePage {
                     && let Some(pos) = self.nav.track_pos.get(&target_id).cloned()
                 {
                     // 深度命中优先于历史位置；尚未加载到记忆曲目时延迟恢复。
-                    if let Some(tracks) = model.library.tracks.get(&target_id).filter(|tracks| {
+                    if let Some(tracks) = target_id.tracks(model.library).filter(|tracks| {
                         tracks.complete
                             || tracks.iter().any(|entry| entry.data.song.id == pos.song_id)
                     }) {
@@ -241,37 +284,34 @@ impl BrowsePage {
                         screen_anchor = Some(pos.screen_row);
                     } else {
                         self.nav.pending_track_restore = Some(PendingRestore {
-                            playlist: target_id.clone(),
+                            collection: target_id.clone(),
                             pos,
                         });
                     }
                 }
                 mineral_log::debug!(
                     target: "tui",
-                    playlist = %target_id,
-                    filtered = !self.playlists.search().query().is_empty(),
-                    playlist_selection = self.playlists.scroll().sel(),
-                    playlist_scroll = self.playlists.scroll().scroll_target(),
+                    collection = ?target_id,
+                    filtered = !self.collections.search().query().is_empty(),
+                    playlist_selection = self.collections.scroll().sel(),
+                    playlist_scroll = self.collections.scroll().scroll_target(),
                     track_selection = sel_track,
-                    "open playlist with retained list context"
+                    "open collection with retained list context"
                 );
-                self.view.switch_to(View::Library);
+                self.view.switch_to(View::Tracks);
                 // 光标落位 + 视口瞬时定位(记忆按屏上相对行还原;命中歌上方留 scrolloff;无命中即从头看)。
                 let anchor =
                     screen_anchor.unwrap_or_else(|| usize::from(*model.cfg.behavior().scrolloff()));
                 self.tracks.place(sel_track, anchor);
                 BrowseEffect::None
             }
-            View::Library => {
+            View::Tracks => {
                 let Some(projection) = self.library_queue_projection(model) else {
                     return BrowseEffect::None;
                 };
-                let context = self.opened_playlist(model).map_or(
+                let context = self.opened_collection(model).map_or(
                     mineral_protocol::QueueContextWire::Unknown,
-                    |p| mineral_protocol::QueueContextWire::Playlist {
-                        id: p.data.id.clone(),
-                        name: Some(p.data.name.clone()),
-                    },
+                    CollectionRef::play_context,
                 );
                 // Server 端按 PlayMode 决定要不要洗牌;client 只发原始 queue + target。
                 BrowseEffect::PlayQueue {
@@ -286,8 +326,8 @@ impl BrowsePage {
     /// 页面只选择接收者，由列表按自己的行身份清除过滤。
     fn clear_search(&mut self, model: BrowseModel<'_>) {
         match self.view.current() {
-            View::Playlists => self.playlists.clear_filter(model.library, model.cfg),
-            View::Library => {
+            View::Collections => self.collections.clear_filter(model.library, model.cfg),
+            View::Tracks => {
                 let input = self.track_input(model);
                 self.tracks.clear_filter(input, model.cfg);
             }
@@ -295,21 +335,25 @@ impl BrowsePage {
     }
 
     /// 返回时恢复父列表中的已打开歌单；异步刷新改变排序时按身份重新定位。
-    fn restore_playlist_selection(&mut self, model: BrowseModel<'_>) {
-        let index = self.nav.opened_playlist.as_ref().and_then(|id| {
-            self.filtered_playlists(model)
+    fn restore_collection_selection(&mut self, model: BrowseModel<'_>) {
+        if let Some(id) = &self.nav.opened_collection {
+            self.collections.select_group(id.group());
+        }
+        let index = self.nav.opened_collection.as_ref().and_then(|id| {
+            self.collections
+                .rows(model.library, model.cfg)
                 .iter()
-                .position(|p| &p.data.id == id)
+                .position(|row| row.id() == *id)
         });
         if let Some(index) = index
-            && index != self.playlists.scroll().sel()
+            && index != self.collections.scroll().sel()
         {
             let screen_row = self
-                .playlists
+                .collections
                 .scroll()
                 .sel()
-                .saturating_sub(self.playlists.scroll().scroll_target());
-            self.playlists.place(index, screen_row);
+                .saturating_sub(self.collections.scroll().scroll_target());
+            self.collections.place(index, screen_row);
         }
     }
 
@@ -318,27 +362,33 @@ impl BrowsePage {
         if self.fullscreen.on() {
             return BrowseEffect::None;
         }
+        if self.collections.choosing_type() {
+            self.collections.close_types();
+            return BrowseEffect::None;
+        }
         self.nav.last_sel_change = Instant::now();
         if !self.active_search().query().is_empty() {
             self.clear_search(model);
             return BrowseEffect::None;
         }
-        if matches!(self.view.current(), View::Library) {
+        if matches!(self.view.current(), View::Tracks) {
             let persist = self.remember_track_pos(model);
             self.nav.pending_track_restore = None;
-            self.restore_playlist_selection(model);
+            self.restore_collection_selection(model);
             mineral_log::debug!(
                 target: "tui",
-                playlist = ?self.nav.opened_playlist,
-                filtered = !self.playlists.search().query().is_empty(),
-                selection = self.playlists.scroll().sel(),
-                scroll = self.playlists.scroll().scroll_target(),
-                "return to retained playlist list"
+                collection = ?self.nav.opened_collection,
+                filtered = !self.collections.search().query().is_empty(),
+                selection = self.collections.scroll().sel(),
+                scroll = self.collections.scroll().scroll_target(),
+                "return to retained library list"
             );
-            self.view.switch_to(View::Playlists);
+            self.view.switch_to(View::Collections);
             if persist {
                 return BrowseEffect::PersistTrackPos;
             }
+        } else {
+            self.collections.open_types();
         }
         BrowseEffect::None
     }
@@ -350,10 +400,10 @@ impl BrowsePage {
     /// 有效位置抹成空。搜索过滤态下 `nav.sel_track` 指向 filtered 列表,记忆统一锚定到 raw 下标。
     fn remember_track_pos(&mut self, model: BrowseModel<'_>) -> bool {
         let mem = *model.cfg.behavior().remember_track_pos();
-        if !mem.enabled() || self.view != View::Library {
+        if !mem.enabled() || self.view != View::Tracks {
             return false;
         }
-        let Some(pid) = self.selected_playlist(model).map(|p| p.data.id.clone()) else {
+        let Some(pid) = self.selected_collection(model).map(CollectionRef::id) else {
             return false;
         };
         let Some(song_id) = self
@@ -428,8 +478,7 @@ impl App {
             BrowseEffect::SubmitDeepSearch(ids) => {
                 let selected = self
                     .state
-                    .filtered_playlists()
-                    .get(self.state.ui.browse.playlists.scroll().sel())
+                    .selected_playlist_in_list()
                     .map(|playlist| playlist.data.id.clone());
                 for id in ids {
                     let priority = if selected.as_ref() == Some(&id) {
@@ -469,7 +518,7 @@ impl App {
     /// 缓动滚过去;歌单面 / 全屏态与无在播 / 无命中时空操作。
     pub(in crate::app) fn jump_to_current(&mut self) {
         if self.state.ui.browse.fullscreen.on()
-            || self.state.ui.browse.view.current() != View::Library
+            || self.state.ui.browse.view.current() != View::Tracks
         {
             return;
         }
@@ -615,7 +664,7 @@ mod tests {
             .ui
             .browse
             .view
-            .switch_to(crate::runtime::state::View::Playlists);
+            .switch_to(crate::runtime::state::View::Collections);
         app.state.models.library.playlists = vec![
             crate::test_support::playlist_view("p1", "A", SourceKind::NETEASE, 1),
             crate::test_support::playlist_view("p2", "B", SourceKind::NETEASE, 1),
@@ -623,20 +672,28 @@ mod tests {
         ];
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(
-            app.state.ui.browse.playlists.scroll().sel(),
+            app.state.ui.browse.collections.scroll().sel(),
             1,
             "j 下移一行"
         );
         press(&mut app, KeyCode::Char('G'));
-        assert_eq!(app.state.ui.browse.playlists.scroll().sel(), 2, "G 跳末行");
+        assert_eq!(
+            app.state.ui.browse.collections.scroll().sel(),
+            2,
+            "G 跳末行"
+        );
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(
-            app.state.ui.browse.playlists.scroll().sel(),
+            app.state.ui.browse.collections.scroll().sel(),
             1,
             "k 上移一行"
         );
         press(&mut app, KeyCode::Char('g'));
-        assert_eq!(app.state.ui.browse.playlists.scroll().sel(), 0, "g 跳首行");
+        assert_eq!(
+            app.state.ui.browse.collections.scroll().sel(),
+            0,
+            "g 跳首行"
+        );
         Ok(())
     }
 
@@ -675,11 +732,11 @@ mod tests {
             .ui
             .browse
             .view
-            .switch_to(crate::runtime::state::View::Playlists);
-        app.state.ui.browse.playlists.select(1);
+            .switch_to(crate::runtime::state::View::Collections);
+        app.state.ui.browse.collections.select(1);
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(
-            app.state.ui.browse.playlists.scroll().sel(),
+            app.state.ui.browse.collections.scroll().sel(),
             1,
             "歌单光标不动"
         );
@@ -700,13 +757,13 @@ mod tests {
             .ui
             .browse
             .view
-            .switch_to(crate::runtime::state::View::Playlists);
-        app.state.ui.browse.playlists.select(0);
+            .switch_to(crate::runtime::state::View::Collections);
+        app.state.ui.browse.collections.select(0);
 
         press(&mut app, KeyCode::Char('l'));
         assert_eq!(
             app.state.ui.browse.view,
-            crate::runtime::state::View::Library,
+            crate::runtime::state::View::Tracks,
             "l 应进 Library"
         );
         assert_eq!(
@@ -718,7 +775,7 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(
             app.state.ui.browse.view,
-            crate::runtime::state::View::Library,
+            crate::runtime::state::View::Tracks,
             "Enter 播放不切视图"
         );
         Ok(())
@@ -948,7 +1005,7 @@ mod tests {
         let views = entry_views(songs);
         app.state.models.library.tracks.insert(
             pid,
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: views,
                 complete: true,
                 next_offset: None,
@@ -964,7 +1021,7 @@ mod tests {
         press(&mut app, KeyCode::Enter); // activate 选中歌单
         assert_eq!(
             app.state.ui.browse.view,
-            crate::runtime::state::View::Library,
+            crate::runtime::state::View::Tracks,
             "Enter 应进 Library"
         );
         assert_eq!(
@@ -977,7 +1034,7 @@ mod tests {
             "进入后展示完整曲目"
         );
         assert_eq!(
-            app.state.ui.browse.playlists.search().query(),
+            app.state.ui.browse.collections.search().query(),
             "春日影",
             "父列表查询保留"
         );
@@ -1009,7 +1066,7 @@ mod tests {
         let views = entry_views(songs);
         app.state.models.library.tracks.insert(
             pid,
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: views,
                 complete: true,
                 next_offset: None,
@@ -1071,8 +1128,9 @@ mod tests {
             .ui
             .browse
             .view
-            .switch_to(crate::runtime::state::View::Library);
-        app.state.ui.browse.nav.opened_playlist = Some(PlaylistId::new(SourceKind::NETEASE, "p1"));
+            .switch_to(crate::runtime::state::View::Tracks);
+        app.state.ui.browse.nav.opened_collection =
+            Some(PlaylistId::new(SourceKind::NETEASE, "p1").into());
         app.state.models.library.tracks_requested.clear();
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
@@ -1089,7 +1147,7 @@ mod tests {
         let id = PlaylistId::new(SourceKind::NETEASE, "p1");
         app.state.models.library.tracks.insert(
             id.clone(),
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: crate::test_support::entry_views(vec![mineral_test::song("1")]),
                 complete: false,
                 next_offset: None,
@@ -1141,7 +1199,7 @@ mod tests {
         press(&mut app, KeyCode::Char('h'));
         assert_eq!(
             app.state.ui.browse.view,
-            crate::runtime::state::View::Playlists,
+            crate::runtime::state::View::Collections,
             "h 退回 Playlists"
         );
         press(&mut app, KeyCode::Char('l'));
@@ -1166,7 +1224,7 @@ mod tests {
             .ui
             .browse
             .view
-            .switch_to(crate::runtime::state::View::Library);
+            .switch_to(crate::runtime::state::View::Tracks);
         for _ in 0..40 {
             app.state.ui.browse.view.tick();
         }
@@ -1267,7 +1325,7 @@ mod tests {
         let views = entry_views(songs);
         app.state.models.library.tracks.insert(
             pid.clone(),
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: views,
                 complete: true,
                 next_offset: None,
@@ -1275,7 +1333,7 @@ mod tests {
         );
         app.state.models.library.tracks_generation = 1;
         app.state.ui.browse.nav.track_pos.insert(
-            pid,
+            pid.into(),
             TrackPos {
                 song_id: song("甲").id,
                 index: 0,
@@ -1309,7 +1367,7 @@ mod tests {
         let (mut app, _submitted) = crate::test_support::app_with_playlists_probed()?;
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         app.state.ui.browse.nav.track_pos.insert(
-            pid.clone(),
+            pid.clone().into(),
             TrackPos {
                 song_id: song("丙").id,
                 index: 2,
@@ -1329,7 +1387,7 @@ mod tests {
                 .nav
                 .pending_track_restore
                 .as_ref()
-                .is_some_and(|p| p.playlist == pid),
+                .is_some_and(|p| p.collection == pid.clone().into()),
             "应挂起该歌单的 pending 恢复"
         );
 

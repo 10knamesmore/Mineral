@@ -1,5 +1,6 @@
 //! 本列表实例的交互、搜索与显示状态。
 
+use crate::runtime::collection::CollectionId;
 use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::state::{ListExpansionState, SearchState};
 use mineral_model::CollectionIndex;
@@ -41,12 +42,12 @@ impl TrackList {
     /// 借用原始曲目；只缓存过滤顺序，不复制歌曲。
     pub(crate) fn filtered<'a>(
         &self,
-        playlist: &mineral_model::PlaylistId,
+        collection: &CollectionId,
         generation: u64,
-        entries: &'a [crate::runtime::view_model::PlaylistEntryView],
+        entries: &'a [crate::runtime::view_model::CollectionTrackView],
     ) -> crate::runtime::state::FilteredTracks<'a> {
         self.filtered
             .borrow_mut()
-            .view(playlist, generation, entries, &self.search)
+            .view(collection, generation, entries, &self.search)
     }
 }

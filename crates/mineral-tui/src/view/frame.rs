@@ -346,8 +346,8 @@ fn backdrop_skip(
 fn now_playing_cover_skip(app: &FrameView<'_>, right: Option<Rect>) -> Option<Rect> {
     let right = nonempty(right?)?;
     let url = match app.selected.input.switch.current() {
-        crate::runtime::state::View::Playlists => app.selected.input.playlist_cover.as_ref(),
-        crate::runtime::state::View::Library => app
+        crate::runtime::state::View::Collections => app.selected.input.collection_cover.as_ref(),
+        crate::runtime::state::View::Tracks => app
             .selected
             .input
             .track

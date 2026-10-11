@@ -49,6 +49,7 @@ fn submit_playlist_name(
 #[cfg(test)]
 mod tests {
     use super::App;
+    use crate::runtime::collection::CollectionRef;
     use crate::runtime::{action::Action, state::View, view_model::PlaylistView};
     use crate::test_support::{TestClient, app_with_queue};
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -131,7 +132,8 @@ mod tests {
         app.state.models.library.playlists = vec![PlaylistView {
             data: original_playlist.clone(),
         }];
-        app.state.ui.browse.view.switch_to(View::Playlists);
+        app.state.ui.browse.view.switch_to(View::Collections);
+        app.state.ui.browse.collections.select(0);
         key(&mut app, KeyCode::Char('o'));
         key(&mut app, KeyCode::Char('r'));
         assert!(app.overlays.in_text_input());
@@ -199,19 +201,25 @@ mod tests {
                     detail: Box::new(mineral_channel_core::PlaylistDetail::complete(data.clone())),
                 });
         }
-        app.state.ui.browse.nav.opened_playlist = Some(id.clone());
-        app.state.ui.browse.view.switch_to(View::Library);
+        app.state.ui.browse.nav.opened_collection = Some(id.clone().into());
+        app.state.ui.browse.view.switch_to(View::Tracks);
         let mut renamed = playlist;
         renamed.name = "New".to_owned();
         app.state.apply(&mineral_task::TaskEvent::LibrarySnapshot {
             playlists: vec![retained.clone(), renamed.clone()],
         });
-        assert_eq!(app.state.opened_playlist().map(|p| &p.data), Some(&renamed));
+        assert_eq!(
+            app.state.opened_collection().and_then(|item| match item {
+                CollectionRef::Playlist(p) => Some(&p.data),
+                _ => None,
+            }),
+            Some(&renamed)
+        );
         assert!(app.state.models.library.playlist_complete(&id));
         app.state.apply(&mineral_task::TaskEvent::LibrarySnapshot {
             playlists: vec![retained.clone()],
         });
-        assert!(app.state.opened_playlist().is_none());
+        assert!(app.state.opened_collection().is_none());
         assert!(!app.state.models.library.tracks.contains_key(&id));
         assert!(!app.state.models.library.tracks_requested.contains_key(&id));
         assert!(app.state.models.library.playlist_complete(&retained.id));
@@ -222,7 +230,7 @@ mod tests {
                 .tracks_requested
                 .contains_key(&retained.id)
         );
-        assert_eq!(app.state.ui.browse.view.current(), View::Playlists);
+        assert_eq!(app.state.ui.browse.view.current(), View::Collections);
         app.state.apply(&mineral_task::TaskEvent::LibrarySnapshot {
             playlists: Vec::new(),
         });

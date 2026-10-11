@@ -11,12 +11,12 @@ use super::View;
 /// 左栏视图切换态([`AppState`](crate::runtime::state::AppState) 的视图域)。
 ///
 /// `current()` 给路由 / 选中语义,`at_min` / `at_max` / `eased_in_out` 给渲染。
-/// 实现 `PartialEq<View>`,故 `state.browse.view == View::Library` 直接可比,无需显式 `current()`。
+/// 实现 `PartialEq<View>`,故 `state.browse.view == View::Tracks` 直接可比,无需显式 `current()`。
 #[derive(Clone, Copy, Debug)]
 pub struct ViewSwitch(Toggle);
 
 impl ViewSwitch {
-    /// 构造一个停在 [`View::Playlists`] 的切换态。`ticks` 为切到 Library 所需拍数。
+    /// 构造一个停在 [`View::Collections`] 的切换态。`ticks` 为切到 Library 所需拍数。
     pub(crate) fn new(ticks: u16) -> Self {
         Self(Toggle::new(ticks))
     }
@@ -24,16 +24,16 @@ impl ViewSwitch {
     /// 当前逻辑视图(目标方向):`on` = Library、否则 Playlists。立即反映 [`Self::switch_to`]。
     pub fn current(&self) -> View {
         if self.0.on() {
-            View::Library
+            View::Tracks
         } else {
-            View::Playlists
+            View::Collections
         }
     }
 
     /// 切到目标视图并驱动横向过渡(切 Library 朝满值、回 Playlists 朝 `0`);
     /// 中途反向只改目标不跳变。
     pub fn switch_to(&mut self, view: View) {
-        self.0.set(view == View::Library);
+        self.0.set(view == View::Tracks);
         mineral_log::debug!(target: "tui", ?view, progress = self.raw(), "browse view transition");
     }
 

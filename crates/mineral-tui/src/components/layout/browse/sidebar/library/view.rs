@@ -3,18 +3,21 @@
 use super::TrackList;
 use crate::components::frame::FrameEnv;
 use crate::image::ReadyImages;
-use crate::runtime::state::{FilteredTracks, PlaylistTracks};
-use crate::runtime::view_model::PlaylistView;
+use crate::runtime::collection::CollectionRef;
+use crate::runtime::state::{CollectionTracks, FilteredTracks};
 use mineral_model::SongId;
 
 /// 一个已打开歌单的共享数据；列表不拥有模型或后端连接。
 #[derive(Clone, Copy)]
 pub(crate) struct TrackInput<'a> {
     /// 当前歌单，尚未进入时为空。
-    pub(crate) playlist: Option<&'a PlaylistView>,
+    pub(crate) collection: Option<CollectionRef<'a>>,
 
     /// 已加载曲目和续页状态，缺失表示仍在等待首批数据。
-    pub(crate) tracks: Option<&'a PlaylistTracks>,
+    pub(crate) tracks: Option<&'a CollectionTracks>,
+
+    /// 本次详情请求已经失败，等待用户重新选择后重试。
+    pub(crate) load_failed: bool,
 
     /// 曲目内容版本，用于复用过滤索引。
     pub(crate) generation: u64,
@@ -56,9 +59,9 @@ impl TrackList {
 
     /// 读取本次数据对应的过滤顺序，缓存只保存索引。
     pub(crate) fn rows<'a>(&self, input: TrackInput<'a>) -> FilteredTracks<'a> {
-        match (input.playlist, input.tracks) {
+        match (input.collection, input.tracks) {
             (Some(playlist), Some(tracks)) => {
-                self.filtered(&playlist.data.id, input.generation, &tracks.entries)
+                self.filtered(&playlist.id(), input.generation, &tracks.entries)
             }
             _ => FilteredTracks::empty(),
         }
@@ -73,8 +76,13 @@ impl crate::components::lifecycle::PaintView for TrackView<'_> {
         _env: FrameEnv<'_>,
         inputs: &mut crate::render::memo::Dependencies<'_>,
     ) {
-        inputs.optional(self.input.playlist);
+        match self.input.collection {
+            Some(CollectionRef::Playlist(p)) => inputs.borrowed(p),
+            Some(CollectionRef::Album(a)) => inputs.borrowed(a),
+            None => {}
+        }
         inputs.observe(&self.input.generation);
+        inputs.observe(&self.input.load_failed);
         inputs.optional(self.input.playing);
         inputs.observe(
             &self

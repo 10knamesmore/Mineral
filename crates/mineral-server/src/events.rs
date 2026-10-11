@@ -43,6 +43,10 @@ impl PlayerCore {
                 TaskEvent::PlaylistsFetched { source, playlists } => {
                     self.library_concluded(source, Some(playlists));
                 }
+                TaskEvent::AlbumsFetched { source, albums } => {
+                    let albums = self.library().replace_saved_albums(source, albums);
+                    forward.push(TaskEvent::SavedAlbumsSnapshot { albums });
+                }
                 TaskEvent::SearchResults {
                     source,
                     kind,
@@ -149,6 +153,7 @@ impl PlayerCore {
     ) {
         // task 层取数种类 → 埋点词汇(穷尽:task 加变体必须在此表态归属)。
         let fetch_kind = match kind {
+            mineral_task::ChannelFetchKindTag::MyAlbums => mineral_stats::FetchKind::MyAlbums,
             mineral_task::ChannelFetchKindTag::MyPlaylists => mineral_stats::FetchKind::MyPlaylists,
             mineral_task::ChannelFetchKindTag::PlaylistDetail => {
                 mineral_stats::FetchKind::PlaylistDetail

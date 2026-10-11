@@ -5,6 +5,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use mineral_audio::AudioBackend;
 use mineral_task::ChannelFetchKindTag;
@@ -42,7 +43,7 @@ impl StatusInput<'_> {
     }
 }
 
-/// 渲染状态行到给定 [`Rect`]。`queue_open` 由浮层栈给出,决定是否显示 `[queue]` tab。
+/// 渲染浏览页签、后台任务与播放状态。
 pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme: &Theme) {
     let [left, right] =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(60)]).areas(area);
@@ -79,17 +80,17 @@ const UNFOCUS_BLEND_PERMILLE: u64 = 550;
 /// 顶栏展示的版本号。
 const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// 左侧:`mineral vX` + `[playlists]` / `[tracks]` tabs。
+/// 左侧:`mineral vX` + `[library]` / `[tracks]` tabs。
 fn paint_left(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme: &Theme) {
-    let active_pl = state.view == View::Playlists;
-    let active_lib = state.view == View::Library;
+    let active_pl = state.view == View::Collections;
+    let active_lib = state.view == View::Tracks;
     let spans = vec![
         Span::styled(
             format!("▌ mineral v{DISPLAY_VERSION}  "),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled("│  ", Style::new().fg(theme.surface1)),
-        Span::styled("[playlists]", tab_style(active_pl, theme)),
+        Span::styled("[library]", tab_style(active_pl, theme)),
         Span::raw("  "),
         Span::styled("[tracks]", tab_style(active_lib, theme)),
     ];
@@ -143,6 +144,7 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme
     // 固定顺序渲染,避免 hashmap 迭代顺序抖动。
     for (tag, label) in [
         (ChannelFetchKindTag::MyPlaylists, "pl"),
+        (ChannelFetchKindTag::MyAlbums, "al"),
         (ChannelFetchKindTag::PlaylistDetail, "tr"),
         (ChannelFetchKindTag::Lyrics, "lyr"),
     ] {
@@ -182,7 +184,6 @@ fn paint_right(frame: &mut Frame<'_>, area: Rect, state: &StatusInput<'_>, theme
 
 /// Fits the CPAL name into terminal cells without splitting UTF-8 characters.
 fn fit_device_name(name: &str, width: usize) -> String {
-    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
     if name.width() <= width {
         return name.to_owned();
     }

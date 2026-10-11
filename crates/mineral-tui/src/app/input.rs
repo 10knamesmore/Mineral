@@ -569,7 +569,13 @@ mod tests {
         press(&mut app, KeyCode::Char('y'));
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         assert_eq!(
-            app.state.ui.browse.nav.track_pos.get(&pid).map(|p| p.index),
+            app.state
+                .ui
+                .browse
+                .nav
+                .track_pos
+                .get(&pid.clone().into())
+                .map(|p| p.index),
             Some(4),
             "退出转场起点应补记 Library 光标位置"
         );
@@ -622,7 +628,7 @@ mod tests {
                 .ui
                 .browse
                 .view
-                .switch_to(crate::runtime::state::View::Library);
+                .switch_to(crate::runtime::state::View::Tracks);
             (app, shutdowns)
         };
         press(&mut app, KeyCode::Char('/'));
@@ -731,7 +737,7 @@ mod tests {
             .is_some_and(|sv| sv.loved);
         assert!(
             loved_after_first,
-            "第一次按 f 后 PlaylistEntryView.loved 应为 true"
+            "第一次按 f 后 CollectionTrackView.loved 应为 true"
         );
 
         // 再按 f → 翻转回 not loved。
@@ -752,7 +758,7 @@ mod tests {
             .is_some_and(|sv| sv.loved);
         assert!(
             !loved_after_second,
-            "第二次按 f 后 PlaylistEntryView.loved 应为 false"
+            "第二次按 f 后 CollectionTrackView.loved 应为 false"
         );
 
         Ok(())
@@ -1529,11 +1535,11 @@ mod tests {
 
         /// 后台 Browse 保留视图、过滤输入、两个列表的位置和所有歌曲的喜欢态。
         fn assert_browse_unchanged(app: &App) {
-            assert_eq!(app.state.ui.browse.view.current(), View::Library);
+            assert_eq!(app.state.ui.browse.view.current(), View::Tracks);
             assert_eq!(app.state.ui.browse.active_search().query(), "Track");
             assert!(!app.state.ui.browse.active_search().typing);
-            assert_eq!(app.state.ui.browse.playlists.scroll().sel(), 0);
-            assert_eq!(app.state.ui.browse.playlists.scroll().scroll_target(), 0);
+            assert_eq!(app.state.ui.browse.collections.scroll().sel(), 0);
+            assert_eq!(app.state.ui.browse.collections.scroll().scroll_target(), 0);
             assert_eq!(app.state.ui.browse.tracks.scroll().sel(), 22);
             assert_eq!(app.state.ui.browse.tracks.scroll().scroll_target(), 18);
             assert!(

@@ -8,6 +8,9 @@ pub(crate) struct TuiMigrator;
 #[async_trait::async_trait]
 impl MigratorTrait for TuiMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(super::m20260906_client::Migration)]
+        vec![
+            Box::new(super::m20260906_client::Migration),
+            Box::new(super::m20261007_collection_positions::Migration),
+        ]
     }
 }

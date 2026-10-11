@@ -54,7 +54,7 @@ impl AppState {
     /// 氛围背景滞后跟随、搜索布局、marquee 相位、失焦渐变、歌词滚动。
     pub fn tick_frame(&mut self) {
         self.ui.browse.view.tick();
-        self.ui.browse.playlists.tick();
+        self.ui.browse.collections.tick();
         self.ui.browse.tracks.tick();
         self.ui.browse.fullscreen.tick();
         self.ui.browse.lyrics.extra_press.tick();

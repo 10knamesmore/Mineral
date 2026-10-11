@@ -227,7 +227,7 @@ mod tests {
 
         let mut map = TrackPosMap::default();
         map.insert(
-            PlaylistId::new(SourceKind::NETEASE, "p1"),
+            PlaylistId::new(SourceKind::NETEASE, "p1").into(),
             TrackPos {
                 song_id: mineral_test::song("甲").id,
                 index: 7,

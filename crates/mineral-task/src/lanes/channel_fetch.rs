@@ -206,6 +206,11 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
                 query: query.clone(),
                 page: *page,
             }),
+            ChannelFetchKind::AlbumDetail { id } => {
+                event_tx
+                    .lock()
+                    .push(TaskEvent::AlbumDetailFailed { id: id.clone() });
+            }
             ChannelFetchKind::ArtistAlbums { id, page } => {
                 event_tx.lock().push(TaskEvent::ArtistAlbumsPageFailed {
                     id: id.clone(),
@@ -235,6 +240,20 @@ async fn execute(
     event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
 ) -> TaskOutcome {
     match kind {
+        ChannelFetchKind::MyAlbums { source } => match channel.my_albums().await {
+            Ok(albums) => {
+                mineral_log::info!(target: "channel_fetch", ?source, albums = albums.len(), "saved album list fetched");
+                event_tx.lock().push(TaskEvent::AlbumsFetched {
+                    source: *source,
+                    albums,
+                });
+                TaskOutcome::Ok
+            }
+            Err(error) => {
+                mineral_log::warn!(target: "channel_fetch", ?source, op = "my_albums", error = mineral_log::chain(&error), "channel fetch failed");
+                TaskOutcome::Failed
+            }
+        },
         ChannelFetchKind::MyPlaylists { source } => match channel.my_playlists().await {
             Ok(playlists) => {
                 event_tx.lock().push(TaskEvent::PlaylistsFetched {

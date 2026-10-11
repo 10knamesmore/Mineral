@@ -29,7 +29,7 @@ pub(super) fn draw(
     let Some([cover_area, _, _]) = main_cover::sections(area) else {
         return;
     };
-    let from = &state.input.playlist_cover;
+    let from = &state.input.collection_cover;
     let to = state
         .input
         .track

@@ -1,18 +1,19 @@
-//! 歌单内光标位置记忆:退出曲目列表时按歌单记一条 [`TrackPos`] 双锚,下次进入
-//! 恢复;`behavior.remember_track_pos = "persist"` 档经 `tui.db` 的 `track_pos`
+//! 集合内光标位置记忆:退出曲目列表时按集合记一条 [`TrackPos`] 双锚,下次进入
+//! 恢复;`behavior.remember_track_pos = "persist"` 档经 `tui.db` 的 `collection_pos`
 //! 专表落盘(结构化行,库层禁 JSON blob)。
 //!
 //! 双锚语义:优先按 `song_id` 在当前曲目里定位(歌单增删后仍指向同一首),
 //! 该歌已被删则退回 `index` 并钳到末行——纯 index 会在增删后指错歌,纯 id 会在
 //! 歌被删后彻底失锚,两者互补。
 
-use mineral_model::{PlaylistId, SongId};
+use crate::runtime::collection::CollectionId;
+use mineral_model::SongId;
 use rustc_hash::FxHashMap;
 
-use crate::runtime::view_model::PlaylistEntryView;
+use crate::runtime::view_model::CollectionTrackView;
 
-/// 歌单 id → 记忆位置 的内存表。
-pub type TrackPosMap = FxHashMap<PlaylistId, TrackPos>;
+/// 集合身份 → 记忆位置 的内存表。
+pub type TrackPosMap = FxHashMap<CollectionId, TrackPos>;
 
 /// 一个歌单的记忆位置(双锚 + 屏上相对行)。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,7 +38,7 @@ impl TrackPos {
     ///
     /// # Return:
     ///   恢复后的光标行下标。
-    pub fn resolve(&self, tracks: &[PlaylistEntryView]) -> usize {
+    pub fn resolve(&self, tracks: &[CollectionTrackView]) -> usize {
         tracks
             .iter()
             .position(|entry| entry.data.song.id == self.song_id)
@@ -47,27 +48,27 @@ impl TrackPos {
 
 /// 进歌单时曲目未就绪而挂起的恢复:曲目到达且光标未被用户动过时补落位。
 pub struct PendingRestore {
-    /// 目标歌单(曲目到达时与事件的歌单 id 比对)。
-    pub playlist: PlaylistId,
+    /// 目标集合(曲目到达时与事件的集合身份 比对)。
+    pub collection: CollectionId,
 
     /// 待恢复的位置。
     pub pos: TrackPos,
 }
 
-/// 内存表 → `track_pos` 表行(落盘用)。
+/// 内存表 → `collection_pos` 表行(落盘用)。
 ///
 /// # Params:
 ///   - `map`: 内存表
 ///
 /// # Return:
-///   结构化行(顺序不定;主键 = 歌单 id);下标溢出 i64(理论不可达)返回 `Err`。
+///   结构化行(顺序不定;主键 = 集合身份);下标溢出 i64(理论不可达)返回 `Err`。
 pub fn to_rows(
     map: &TrackPosMap,
 ) -> Result<Vec<crate::persistence::TrackPosRow>, std::num::TryFromIntError> {
     map.iter()
         .map(|(playlist, pos)| {
             Ok(crate::persistence::TrackPosRow {
-                playlist: playlist.clone(),
+                collection: playlist.clone(),
                 song: pos.song_id.clone(),
                 index: u64::try_from(pos.index)?,
                 screen_row: u64::try_from(pos.screen_row)?,
@@ -76,7 +77,7 @@ pub fn to_rows(
         .collect()
 }
 
-/// `track_pos` 表行 → 内存表(启动读回用)。
+/// `collection_pos` 表行 → 内存表(启动读回用)。
 ///
 /// # Params:
 ///   - `rows`: 库中全部行
@@ -89,7 +90,7 @@ pub fn from_rows(
     rows.into_iter()
         .map(|row| {
             Ok((
-                row.playlist,
+                row.collection,
                 TrackPos {
                     song_id: row.song,
                     index: usize::try_from(row.index)?,
@@ -104,17 +105,17 @@ pub fn from_rows(
 mod tests {
     use mineral_model::{PlaylistId, SourceKind};
 
-    use crate::runtime::view_model::PlaylistEntryView;
+    use crate::runtime::view_model::CollectionTrackView;
     use crate::test_support::song;
 
     use super::{TrackPos, TrackPosMap, from_rows, to_rows};
 
-    /// 把若干歌名包成 PlaylistEntryView 列表(loved / plays 取默认)。
-    fn views(names: &[&str]) -> Vec<PlaylistEntryView> {
+    /// 把若干歌名包成 CollectionTrackView 列表(loved / plays 取默认)。
+    fn views(names: &[&str]) -> Vec<CollectionTrackView> {
         mineral_model::PlaylistEntry::enumerate(names.iter().map(|name| song(name)).collect())
             .into_iter()
-            .map(|data| PlaylistEntryView {
-                data,
+            .map(|data| CollectionTrackView {
+                data: data.into(),
                 loved: false,
                 plays: None,
             })
@@ -146,7 +147,7 @@ mod tests {
     fn rows_round_trip() -> color_eyre::Result<()> {
         let mut map = TrackPosMap::default();
         map.insert(
-            PlaylistId::new(SourceKind::NETEASE, "p1"),
+            PlaylistId::new(SourceKind::NETEASE, "p1").into(),
             TrackPos {
                 song_id: song("甲").id,
                 index: 3,
@@ -154,7 +155,7 @@ mod tests {
             },
         );
         map.insert(
-            PlaylistId::new(SourceKind::LOCAL, "p1"),
+            PlaylistId::new(SourceKind::LOCAL, "p1").into(),
             TrackPos {
                 song_id: song("乙").id,
                 index: 0,

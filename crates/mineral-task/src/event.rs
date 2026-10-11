@@ -2,7 +2,8 @@
 
 use mineral_channel_core::Page;
 use mineral_model::{
-    Album, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
+    Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
+    SourceKind,
 };
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -214,6 +215,27 @@ pub enum TaskEvent {
 
         /// 耗时 ms。
         latency_ms: u64,
+    },
+
+    /// 某来源的账号收藏专辑已拉取，交给服务端保存和合并。
+    AlbumsFetched {
+        /// 音乐来源。
+        source: SourceKind,
+
+        /// 来源内的收藏顺序。
+        albums: Vec<Album>,
+    },
+
+    /// 各来源收藏专辑的完整快照，客户端按此替换列表。
+    SavedAlbumsSnapshot {
+        /// 按来源注册顺序合并的收藏专辑。
+        albums: Vec<Album>,
+    },
+
+    /// 专辑详情请求失败或取消，客户端释放在途状态。
+    AlbumDetailFailed {
+        /// 请求的专辑身份。
+        id: AlbumId,
     },
 }
 

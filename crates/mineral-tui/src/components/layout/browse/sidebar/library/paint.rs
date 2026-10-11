@@ -25,9 +25,10 @@ use crate::components::layout::shared::thumbnails::{
     THUMBNAIL_COLUMNS, declare_table_thumbnails, render_table_thumbnails,
 };
 use crate::render::theme::Theme;
+use crate::runtime::collection::CollectionRef;
 use crate::runtime::format::format_ms_opt;
 use crate::runtime::scroll::list::ScrollMotion;
-use crate::runtime::view_model::PlaylistEntryView;
+use crate::runtime::view_model::CollectionTrackView;
 
 /// Table 选中符；列矩形求解使用同一显示宽度。
 const HIGHLIGHT_SYMBOL: &str = "▌ ";
@@ -42,6 +43,9 @@ struct TrackLayout {
     /// 聚合面(source = mineral 的跨源歌单,如全源收藏合集):宽档在 album 后插
     /// 每首歌的 source 徽标列，窄档省去。普通单源歌单为 `false`。
     aggregate: bool,
+
+    /// 专辑内无需重复显示相同专辑名称。
+    album: bool,
 
     /// 当前协议支持 Kitty 缩略图时，在 title 前保留图片列。
     thumbnails: bool,
@@ -60,6 +64,7 @@ impl TrackLayout {
         Self {
             full: width >= full_threshold,
             aggregate,
+            album: false,
             thumbnails,
         }
     }
@@ -78,7 +83,9 @@ impl TrackLayout {
         cells.push(Cell::from("title"));
         if self.full {
             cells.push(Cell::from("artist"));
-            cells.push(Cell::from("album"));
+            if !self.album {
+                cells.push(Cell::from("album"));
+            }
             if self.aggregate {
                 cells.push(Cell::from("source"));
             }
@@ -95,11 +102,10 @@ impl TrackLayout {
             widths.push(Constraint::Length(THUMBNAIL_COLUMNS));
         }
         if self.full {
-            widths.extend([
-                Constraint::Fill(3),
-                Constraint::Fill(2),
-                Constraint::Fill(2),
-            ]);
+            widths.extend([Constraint::Fill(3), Constraint::Fill(2)]);
+            if !self.album {
+                widths.push(Constraint::Fill(2));
+            }
             if self.aggregate {
                 widths.push(Constraint::Length(11));
             }
@@ -127,13 +133,14 @@ impl crate::components::lifecycle::Prepare for TrackList {
         let viewport = usize::from(area.height.saturating_sub(3));
         self.scroll.prepare(total, viewport, motion, ticks, advance);
         let aggregate = input
-            .playlist
-            .is_some_and(|p| p.data.source() == SourceKind::MINERAL);
-        let layout = TrackLayout::new(
+            .collection
+            .is_some_and(|p| p.source() == SourceKind::MINERAL);
+        let mut layout = TrackLayout::new(
             area.width,
             aggregate,
             cx.images.ready().supports_thumbnails(),
         );
+        layout.album = matches!(input.collection, Some(CollectionRef::Album(_)));
         let inner = Block::new().borders(Borders::ALL).inner(area);
         let columns =
             resolve_column_rects(inner, &layout.widths(), display_width(HIGHLIGHT_SYMBOL));
@@ -261,13 +268,13 @@ impl crate::components::lifecycle::Prepare for TrackList {
                 };
                 crate::runtime::state::FilteredListFrame {
                     area,
-                    body: super::super::expansion::body(area),
+                    body: super::super::expansion::body(area, 1),
                     content,
                     rows,
                 }
             });
             self.expansion
-                .prepare(area, super::super::expansion::body(area), filtered);
+                .prepare(area, super::super::expansion::body(area, 1), filtered);
             self.expansion.declare_images(&mut cx.images);
         }
     }
@@ -285,7 +292,7 @@ impl TrackView<'_> {
             .then_some(view.list.expansion.active.as_ref())
             .flatten();
         let surface =
-            list_expansion::begin_list(buf, area, super::super::expansion::body(area), active);
+            list_expansion::begin_list(buf, area, super::super::expansion::body(area, 1), active);
         let tracks = view.rows();
         // 视口行数 = 面板高 - 上下边框 - 表头;offset 跨帧持久(nvim 手感),滚动经缓动平移。
         // view sweep 离屏帧与全屏 morph 瞬态布局均冻结视口，不用临时高度改写滚动目标。
@@ -354,9 +361,9 @@ fn table(
     theme: &Theme,
     visible: std::ops::Range<usize>,
 ) -> (Table<'static>, Vec<Rect>, TrackLayout) {
-    let title = view.input.playlist.map_or_else(
+    let title = view.input.collection.map_or_else(
         || "tracks".to_owned(),
-        |p| format!("tracks / {}", p.data.name),
+        |item| format!("tracks / {}", item.name()),
     );
 
     let tracks = view.rows();
@@ -374,8 +381,8 @@ fn table(
     // 左上角 source 徽标:标出当前歌单挂靠的来源(聚合面挂靠 mineral,单源面挂靠其真实
     // 来源),与 sidebar playlists 面的 source 列同色,离开 sidebar(全屏)时仍能辨源。
     let mut title_spans = Vec::new();
-    if let Some(p) = view.input.playlist {
-        let src = p.data.source();
+    if let Some(p) = view.input.collection {
+        let src = p.source();
         title_spans.push(Span::styled(
             format!(" {}", src.label()),
             Style::new().fg(crate::render::theme::resolve_source_color(
@@ -387,14 +394,14 @@ fn table(
     }
     title_spans.push(Span::styled(
         format!(" {title} "),
-        Style::new().fg(theme.subtext),
+        Style::new().fg(theme.accent),
     ));
     title_spans.extend(search_badge(&view.list.search, None, theme));
 
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme.surface1))
+        .border_style(Style::new().fg(theme.accent))
         .title(Line::from(title_spans))
         .title_bottom(Line::from(pos).style(Style::new().fg(theme.overlay)))
         .title_bottom(
@@ -408,9 +415,10 @@ fn table(
     // 表示。跨源的只有 mineral 源歌单,故看歌单 source 而非遍历曲目。
     let aggregate = view
         .input
-        .playlist
-        .is_some_and(|p| p.data.source() == SourceKind::MINERAL);
-    let layout = TrackLayout::new(area.width, aggregate, view.images.supports_thumbnails());
+        .collection
+        .is_some_and(|p| p.source() == SourceKind::MINERAL);
+    let mut layout = TrackLayout::new(area.width, aggregate, view.images.supports_thumbnails());
+    layout.album = matches!(view.input.collection, Some(CollectionRef::Album(_)));
     let placeholder = slot_placeholder(view, theme, layout);
 
     let header = Row::new(layout.header_cells())
@@ -460,7 +468,7 @@ fn table(
 /// 把一首歌组装成 library 表格的一行(loved 标记 / 在播行装饰 / 高亮搜索词)。
 /// `layout` 决定列集:窄档省去 artist/album。
 fn build_row(
-    entry: &PlaylistEntryView,
+    entry: &CollectionTrackView,
     view: &TrackView<'_>,
     theme: &Theme,
     layout: TrackLayout,
@@ -532,12 +540,14 @@ fn build_row(
             Style::new().fg(artist_fg),
             theme,
         ))));
-        cells.push(Cell::from(Line::from(highlight_indices(
-            &album,
-            album_hits.as_deref().unwrap_or(&[]),
-            Style::new().fg(album_fg),
-            theme,
-        ))));
+        if !layout.album {
+            cells.push(Cell::from(Line::from(highlight_indices(
+                &album,
+                album_hits.as_deref().unwrap_or(&[]),
+                Style::new().fg(album_fg),
+                theme,
+            ))));
+        }
         if layout.aggregate {
             let src = song.source();
             cells.push(Cell::from(Span::styled(
@@ -590,7 +600,13 @@ fn slot_placeholder<'a>(
         Row::new(cells)
     };
     if view.input.tracks.is_none() {
-        return view.input.playlist.map(|_| placeholder_row("loading…"));
+        return view.input.collection.map(|_| {
+            placeholder_row(if view.input.load_failed {
+                "unable to load album · return and select again"
+            } else {
+                "loading…"
+            })
+        });
     }
     if !view.list.search.query().is_empty() && view.rows().is_empty() {
         return Some(placeholder_row("无匹配"));
@@ -662,22 +678,23 @@ mod tests {
     /// 过滤重排保持条目的原始 relation index。
     #[test]
     fn library_filtered_reorder_preserves_relation_indexes() -> color_eyre::Result<()> {
-        use crate::runtime::view_model::PlaylistEntryView;
+        use crate::runtime::view_model::CollectionTrackView;
         use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SourceKind};
         use mineral_test::{song, with_name};
 
         let mut state = crate::test_support::state_with_tracks()?;
-        let entry = |index, id, name| PlaylistEntryView {
+        let entry = |index, id, name| CollectionTrackView {
             data: PlaylistEntry::builder()
                 .index(CollectionIndex::new(index))
                 .song(with_name(song(id), name))
-                .build(),
+                .build()
+                .into(),
             loved: false,
             plays: None,
         };
         state.models.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p1"),
-            crate::runtime::state::PlaylistTracks {
+            crate::runtime::state::CollectionTracks {
                 entries: vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
                 complete: true,
                 next_offset: None,

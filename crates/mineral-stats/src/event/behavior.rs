@@ -89,6 +89,9 @@ pub enum FetchKind {
 
     /// 专辑详情。
     AlbumDetail,
+
+    /// 当前账号收藏的专辑列表。
+    MyAlbums,
 }
 
 /// 歌单写操作类型(playlist_ops.op)。

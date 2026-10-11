@@ -2,21 +2,23 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::persistence::entity::track_pos::CollectionKind;
 use crate::persistence::entity::{track_pos, ui_prefs};
 use crate::persistence::migration::TuiMigrator;
-use mineral_model::{PlaylistId, SongId, SourceKind};
+use crate::runtime::collection::CollectionId;
+use mineral_model::{AlbumId, PlaylistId, SongId, SourceKind};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{DatabaseConnection, EntityTrait, Set, TransactionTrait};
 use sea_orm_migration::MigratorTrait;
 
 use mineral_persist::CacheIndex;
 
-/// 歌单内光标位置记忆一行(`track_pos` 表的投影):双锚 + 屏上相对行。
+/// 集合内光标位置记忆一行(`collection_pos` 表的投影):双锚 + 屏上相对行。
 /// 双锚语义(song 优先、index 兜底)由客户端解释,本层只负责结构化存取。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrackPosRow {
-    /// 歌单 id。
-    pub playlist: PlaylistId,
+    /// 集合身份。
+    pub collection: CollectionId,
 
     /// 记录时光标所在歌曲(优先锚)。
     pub song: SongId,
@@ -119,25 +121,31 @@ impl TuiStore {
         Ok(())
     }
 
-    /// 读回全部歌单内光标位置记忆(`track_pos` 表)。
+    /// 读回全部集合内光标位置记忆(`collection_pos` 表)。
     ///
     /// # Return:
-    ///   全部行(顺序不保证;客户端按歌单 id 入 map);行下标为负(库损坏)时报错。
+    ///   全部行(顺序不保证;客户端按集合身份 入 map);行下标为负(库损坏)时报错。
     pub async fn load_track_positions(&self) -> crate::persistence::Result<Vec<TrackPosRow>> {
         let rows = track_pos::Entity::find()
             .all(&self.pool)
             .await
             .map_err(|source| crate::persistence::Error::Database {
-                operation: "读 track_pos",
+                operation: "读 collection_pos",
                 source,
             })?;
         rows.into_iter()
             .map(|row| {
                 Ok(TrackPosRow {
-                    playlist: PlaylistId::new(
-                        SourceKind::from_name(&row.playlist_namespace),
-                        row.playlist_value,
-                    ),
+                    collection: match row.collection_kind {
+                        CollectionKind::Playlist => CollectionId::Playlist(PlaylistId::new(
+                            SourceKind::from_name(&row.collection_namespace),
+                            row.collection_value,
+                        )),
+                        CollectionKind::Album => CollectionId::Album(AlbumId::new(
+                            SourceKind::from_name(&row.collection_namespace),
+                            row.collection_value,
+                        )),
+                    },
                     song: SongId::new(SourceKind::from_name(&row.song_namespace), row.song_value),
                     index: u64::try_from(row.sel_index)?,
                     screen_row: u64::try_from(row.screen_row)?,
@@ -146,10 +154,10 @@ impl TuiStore {
             .collect()
     }
 
-    /// 整表替换歌单内光标位置记忆(事务内先清后插,与客户端「整表落盘」策略配套)。
+    /// 整表替换集合内光标位置记忆(事务内先清后插,与客户端「整表落盘」策略配套)。
     ///
     /// # Params:
-    ///   - `rows`: 当前全量记忆(表规模 ~ 歌单数)
+    ///   - `rows`: 当前全量记忆(表规模 ~ 集合数)
     pub async fn replace_track_positions(
         &self,
         rows: &[TrackPosRow],
@@ -159,20 +167,24 @@ impl TuiStore {
             .begin()
             .await
             .map_err(|source| crate::persistence::Error::Database {
-                operation: "开启 track_pos 事务",
+                operation: "开启 collection_pos 事务",
                 source,
             })?;
         track_pos::Entity::delete_many()
             .exec(&tx)
             .await
             .map_err(|source| crate::persistence::Error::Database {
-                operation: "清 track_pos",
+                operation: "清 collection_pos",
                 source,
             })?;
         for row in rows {
             track_pos::Entity::insert(track_pos::ActiveModel {
-                playlist_namespace: Set(row.playlist.namespace().name().to_owned()),
-                playlist_value: Set(row.playlist.value().to_owned()),
+                collection_kind: Set(match &row.collection {
+                    CollectionId::Playlist(_) => CollectionKind::Playlist,
+                    CollectionId::Album(_) => CollectionKind::Album,
+                }),
+                collection_namespace: Set(row.collection.source().name().to_owned()),
+                collection_value: Set(row.collection.value().to_owned()),
                 song_namespace: Set(row.song.namespace().name().to_owned()),
                 song_value: Set(row.song.value().to_owned()),
                 sel_index: Set(i64::try_from(row.index)?),
@@ -181,15 +193,15 @@ impl TuiStore {
             .exec_without_returning(&tx)
             .await
             .map_err(|source| crate::persistence::Error::Record {
-                operation: "写 track_pos",
-                record: row.playlist.value().to_owned(),
+                operation: "写 collection_pos",
+                record: row.collection.value().to_owned(),
                 source,
             })?;
         }
         tx.commit()
             .await
             .map_err(|source| crate::persistence::Error::Database {
-                operation: "提交 track_pos 事务",
+                operation: "提交 collection_pos 事务",
                 source,
             })?;
         Ok(())
@@ -282,13 +294,13 @@ mod tests {
 
         let rows = vec![
             TrackPosRow {
-                playlist: PlaylistId::new(SourceKind::NETEASE, "p1"),
+                collection: PlaylistId::new(SourceKind::NETEASE, "p1").into(),
                 song: SongId::new(SourceKind::NETEASE, "s1"),
                 index: 3,
                 screen_row: 7,
             },
             TrackPosRow {
-                playlist: PlaylistId::new(SourceKind::LOCAL, "p1"),
+                collection: PlaylistId::new(SourceKind::LOCAL, "p1").into(),
                 song: SongId::new(SourceKind::LOCAL, "s2"),
                 index: 0,
                 screen_row: 0,
@@ -296,14 +308,14 @@ mod tests {
         ];
         store.replace_track_positions(&rows).await?;
         let mut got = store.load_track_positions().await?;
-        got.sort_by_key(|r| r.playlist.qualified());
+        got.sort_by_key(|r| r.collection.qualified());
         let mut want = rows.clone();
-        want.sort_by_key(|r| r.playlist.qualified());
+        want.sort_by_key(|r| r.collection.qualified());
         assert_eq!(got, want);
 
         // 全量覆盖:换成单行后旧行消失。
         let only = vec![TrackPosRow {
-            playlist: PlaylistId::new(SourceKind::NETEASE, "p9"),
+            collection: PlaylistId::new(SourceKind::NETEASE, "p9").into(),
             song: SongId::new(SourceKind::NETEASE, "s9"),
             index: 1,
             screen_row: 2,
@@ -312,6 +324,7 @@ mod tests {
         assert_eq!(store.load_track_positions().await?, only);
         Ok(())
     }
+
     /// Offline cover maintenance must preserve TUI preferences and cursor positions.
     #[tokio::test]
     async fn cover_maintenance_preserves_tui_state() -> color_eyre::Result<()> {
@@ -321,10 +334,11 @@ mod tests {
         let store = TuiStore::open(&db).await?;
         store.set_pref("lyric_extra", "translation").await?;
         let position = super::TrackPosRow {
-            playlist: mineral_model::PlaylistId::new(
+            collection: mineral_model::PlaylistId::new(
                 mineral_model::SourceKind::NETEASE,
                 "playlist",
-            ),
+            )
+            .into(),
             song: mineral_model::SongId::new(mineral_model::SourceKind::NETEASE, "song"),
             index: 4,
             screen_row: 2,
