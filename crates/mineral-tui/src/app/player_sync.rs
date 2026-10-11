@@ -21,14 +21,18 @@ impl App {
         // 它决定 queue 浮层的在播行样式，独立于客户端的 UI 光标(后者只钳防越界)。
         self.state.models.player.cursor = sync.cursor;
         if let Some(q) = sync.queue {
+            if let Some(previous) = self.queue_cursor_memo.take() {
+                mineral_log::debug!(
+                    target: "tui",
+                    previous,
+                    queue_version = ?sync.versions.queue,
+                    "cleared remembered queue position after queue replacement"
+                );
+            }
             self.state.models.player.queue = q.queue;
             self.state.models.player.original_queue = q.original_queue;
             self.overlays
                 .clamp_queue(self.state.models.player.queue.len());
-        }
-        // 同步时记录活跃队列浮层选中项的真实下标,供下次打开时恢复。
-        if let Some(at) = self.overlays.active_queue_cursor(&self.state) {
-            self.queue_cursor_memo = Some(at);
         }
         if let Some(c) = sync.current {
             // 包络随本段与 current_song 原子到达(归属由 server 组段保证)。同一份包络重复

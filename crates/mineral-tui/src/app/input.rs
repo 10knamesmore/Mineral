@@ -89,6 +89,10 @@ impl App {
 
         // 活跃浮层(栈顶未退场)优先吃键；关闭并执行时先退场，避免重复提交。
         if let Some(resp) = self.overlays.dispatch_key(key, action, &self.state) {
+            // 在关闭或叠加浮层之前保存本次输入后的真实队列位置，不等异步播放同步。
+            if let Some(at) = self.overlays.active_queue_cursor(&self.state) {
+                self.queue_cursor_memo = Some(at);
+            }
             match resp {
                 OverlayResponse::Consumed => {}
                 OverlayResponse::Pass => self.handle_overlay_passthrough(key),
@@ -300,6 +304,13 @@ impl App {
             .queue_cursor_memo
             .filter(|at| *at < self.state.models.player.queue.len())
             .unwrap_or(fallback);
+        mineral_log::debug!(
+            target: "tui",
+            selected = sel,
+            remembered = ?self.queue_cursor_memo,
+            current = ?self.state.queue_current_index(),
+            "opening queue"
+        );
         self.overlays.push(AppOverlay::queue(sel));
     }
 
@@ -385,7 +396,7 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.overlays.queue_sel(), Some(2));
-        // 记账挂在每 tick 的 sync 上,先走一拍再关。
+        // 轻量同步不应丢失光标记忆。
         app.apply_player_sync(PlayerSync::default());
         press(&mut app, KeyCode::Tab);
         app.apply_player_sync(PlayerSync::default());

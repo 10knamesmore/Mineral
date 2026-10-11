@@ -59,7 +59,7 @@ pub struct App {
     /// 浮层栈(queue / confirm / disconnect):统一托管开关、光标、弹出动画。
     pub(crate) overlays: OverlayStack<AppOverlay>,
 
-    /// queue 浮层上次离开时的光标位置,下次打开落回原处;越界(队列已换短)时作废。
+    /// queue 浮层最近一次输入后的真实队列下标；关闭再开时恢复，队列快照替换后作废。
     pub(crate) queue_cursor_memo: Option<usize>,
 
     /// 整屏转场动画:`None` 为正常运行;`Some` 且 `leaving()` 为退出收缩(归零后真正退出),
