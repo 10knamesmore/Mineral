@@ -45,7 +45,7 @@ impl SourceKind {
     /// 哔哩哔哩。
     pub const BILIBILI: Self = Self {
         name: "bilibili",
-        label: "▶ bilibili",
+        label: "󰟴 bilibili",
     };
 
     /// Mineral 自身——跨源聚合内容(如全源收藏合集)的挂靠来源,无网络后端。
