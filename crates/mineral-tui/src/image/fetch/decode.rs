@@ -1,9 +1,9 @@
-//! decode 管线:取压缩源 → 在 blocking 池按配置尺寸解码显示图并提取色板。
+//! 后台解码：显示图按配置尺寸生成并取色，导出图保持源图尺寸。
 
 use std::sync::Arc;
 
 use crate::config::{CoverConfig, CoverDecodePixelsConfig};
-use image::DynamicImage;
+use image::{DynamicImage, RgbaImage};
 use isahc::HttpClient;
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::CacheIndex;
@@ -13,6 +13,24 @@ use crate::image::colors::extract_palette;
 use crate::render::palette::CoverPalette;
 
 use super::source::load_source;
+use super::types::OriginalImageError;
+
+/// 复用源文件缓存，后台解码未经显示缩放或裁切的 RGBA 图像。
+pub(super) async fn fetch_original(
+    source: SourceKind,
+    url: &MediaUrl,
+    client: &HttpClient,
+    cache: Option<&Arc<CacheIndex>>,
+) -> Result<RgbaImage, OriginalImageError> {
+    let bytes = load_source(source, url, client, cache)
+        .await
+        .ok_or(OriginalImageError::Source)?;
+    let image = tokio::task::spawn_blocking(move || {
+        image::load_from_memory(&bytes).map(DynamicImage::into_rgba8)
+    })
+    .await??;
+    Ok(image)
+}
 
 /// 解码产物:内存图 + 内容指纹 + 尽力而为的频谱色板。一次 `spawn_blocking` 内算完(都是 CPU 活儿)。
 pub(super) struct DecodedCover {

@@ -456,7 +456,7 @@ fn local_copy_callbacks_validate_effects_before_committing() -> color_eyre::Resu
     press(&mut app, 'w');
     assert_eq!(app.tui_script.title, title);
     assert!(!app.notifications.has_live_card("copy-failed"));
-    assert!(app.clipboard.is_none());
+    assert!(app.clipboard.worker.is_none());
     assert!(app.completions.drain().is_empty());
     Ok(())
 }

@@ -7,7 +7,7 @@
 
 use crate::config::MenuAlign;
 use crossterm::event::{KeyCode, KeyEvent};
-use mineral_model::{Album, Artist, Playlist, Song};
+use mineral_model::{Album, Artist, MediaUrl, Playlist, Song, SourceKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -92,6 +92,15 @@ pub(crate) enum MenuAction {
 
     /// 把文本写进系统剪贴板(复制菜单;文本在构造菜单时就渲染好)。
     Copy(String),
+
+    /// 后台加载图片并将像素写入系统剪贴板。
+    CopyImage {
+        /// 图片所属来源，决定源文件缓存目录。
+        source: SourceKind,
+
+        /// 打开菜单时捕获的图片 URL。
+        url: MediaUrl,
+    },
 
     /// 自定义复制模板:在当前客户端 VM 中同步渲染，配置与 UI 效果校验成功后
     /// 才写入剪贴板，不向 daemon 发送模板或实体。

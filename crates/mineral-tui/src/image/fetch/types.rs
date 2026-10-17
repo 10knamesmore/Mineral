@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use crate::config::CoverDecodePixelsConfig;
-use image::DynamicImage;
+use image::{DynamicImage, ImageError, RgbaImage};
 use mineral_model::{MediaUrl, SourceKind};
 use parking_lot::Mutex;
+use tokio::sync::oneshot;
+use tokio::task::JoinError;
 
 use crate::image::CoverFingerprint;
 use crate::image::key::TerminalImageKey;
@@ -46,6 +48,31 @@ pub(super) enum CoverRequest {
 
     /// 按配置尺寸生成图片与色板。
     Decode(DecodeRequest),
+
+    /// 按源图尺寸解码，结果直接交给请求者，不进入显示缓存。
+    Original {
+        source: SourceKind,
+
+        url: MediaUrl,
+
+        reply: oneshot::Sender<Result<RgbaImage, OriginalImageError>>,
+    },
+}
+
+/// 源图读取或解码失败；源文件的读取错误由数据加载层记录。
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OriginalImageError {
+    #[error("image worker unavailable")]
+    Unavailable,
+
+    #[error("image source unavailable")]
+    Source,
+
+    #[error("decode original image")]
+    Decode(#[from] ImageError),
+
+    #[error("original image decoding task failed")]
+    DecodeTask(#[from] JoinError),
 }
 
 /// worker 生成的一张真实封面低清 preview。

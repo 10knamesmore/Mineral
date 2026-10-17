@@ -11,4 +11,6 @@ mod types;
 mod worker;
 
 pub(crate) use pool::CoverFetcher;
-pub(crate) use types::{CoverCompletion, CoverPreviewReady, CoverReady, CoverRequestKind};
+pub(crate) use types::{
+    CoverCompletion, CoverPreviewReady, CoverReady, CoverRequestKind, OriginalImageError,
+};

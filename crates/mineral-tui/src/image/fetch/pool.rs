@@ -5,22 +5,25 @@ use std::time::Duration;
 
 use crate::config::{CoverConfig, CoverDecodePixelsConfig};
 use crate::persistence::TuiStore;
+use image::RgbaImage;
 use isahc::HttpClient;
 use isahc::config::Configurable;
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::CacheIndex;
 use parking_lot::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::image::key::TerminalImageKey;
 
-use super::types::{CoverCompletion, CoverRequest, DecodeRequest, PreviewRequest, ReadyBuf};
+use super::types::{
+    CoverCompletion, CoverRequest, DecodeRequest, OriginalImageError, PreviewRequest, ReadyBuf,
+};
 use super::worker::complete_request;
 
-/// TUI 端封面 fetcher。`spawn` 起 worker 池，`preview` / `decode` 投递，`drain_ready` 拉就绪；
-/// 禁用态使用关闭的请求队列同步拒绝投递。
+/// 共用下载、解码 worker 与源文件缓存。显示结果通过 `drain_ready` 收集，
+/// 源图请求单独回复；禁用态关闭请求队列。
 pub(crate) struct CoverFetcher {
-    /// 待执行的 preview / decode 请求队列。
+    /// 待执行的请求。
     req_tx: mpsc::UnboundedSender<CoverRequest>,
 
     /// worker 完成后塞结果的 buffer;TUI tick `drain_ready()` 一次拿走。
@@ -65,8 +68,11 @@ impl CoverFetcher {
                             None => return, // 队列关了
                         }
                     };
-                    let completion = complete_request(request, &client, cache.as_ref(), &cfg).await;
-                    ready.lock().push(completion);
+                    if let Some(completion) =
+                        complete_request(request, &client, cache.as_ref(), &cfg).await
+                    {
+                        ready.lock().push(completion);
+                    }
                 }
             });
         }
@@ -165,6 +171,19 @@ impl CoverFetcher {
                 pixels,
             }))
             .is_ok()
+    }
+
+    /// 投递源图解码请求，通道只接收本次结果；队列关闭时接收端也会关闭。
+    pub(crate) fn original(
+        &self,
+        source: SourceKind,
+        url: MediaUrl,
+    ) -> oneshot::Receiver<Result<RgbaImage, OriginalImageError>> {
+        let (reply, result) = oneshot::channel();
+        let _ = self
+            .req_tx
+            .send(CoverRequest::Original { source, url, reply });
+        result
     }
 
     /// 把全部图片 worker completion 拿走。TUI 主循环 tick 调一次。

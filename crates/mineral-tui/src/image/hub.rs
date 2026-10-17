@@ -6,12 +6,13 @@
 use std::sync::Arc;
 
 use crate::config::CoverCellFit;
-use image::DynamicImage;
+use image::{DynamicImage, RgbaImage};
 use mineral_model::MediaUrl;
 use mineral_model::SourceKind;
 use mineral_protocol::AdvanceKind;
 use ratatui::layout::Rect;
 use rustc_hash::{FxHashMap, FxHashSet};
+use tokio::sync::oneshot;
 
 use super::cache::{CoverCache, TerminalImageCache};
 use super::graphics::{TerminalBackend, TerminalGraphics};
@@ -20,7 +21,7 @@ use super::key::{ImageIdentity, PixelSize, TerminalImageKey};
 use super::terminal::TerminalImage;
 use crate::image::CoverFingerprint;
 use crate::image::encode::{CoverEncoder, EncodeRequest, EncodeResult};
-use crate::image::fetch::{CoverCompletion, CoverFetcher, CoverRequestKind};
+use crate::image::fetch::{CoverCompletion, CoverFetcher, CoverRequestKind, OriginalImageError};
 use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::palette::CoverPalette;
 
@@ -276,6 +277,15 @@ impl ImageEngine {
             displayed_cover: None,
             collage_ready: FxHashMap::default(),
         }
+    }
+
+    /// 从源文件缓存或网络加载原尺寸图片，结果独立于显示缓存和终端渲染。
+    pub(crate) fn load_original(
+        &self,
+        source: SourceKind,
+        url: MediaUrl,
+    ) -> oneshot::Receiver<Result<RgbaImage, OriginalImageError>> {
+        self.workers.fetcher.original(source, url)
     }
 
     /// 向 worker 投递一次终端图片编码请求。

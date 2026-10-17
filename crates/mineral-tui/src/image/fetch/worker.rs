@@ -1,4 +1,4 @@
-//! 请求分发:把一条 preview / decode 请求派给对应管线,回传必达 completion。
+//! 分发图片请求：显示结果进入完成队列，源图结果直接回复请求者。
 
 use std::sync::Arc;
 
@@ -6,27 +6,27 @@ use crate::config::CoverConfig;
 use isahc::HttpClient;
 use mineral_persist::CacheIndex;
 
-use super::decode::fetch_and_decode;
+use super::decode::{fetch_and_decode, fetch_original};
 use super::preview::fetch_preview;
 use super::types::{CoverCompletion, CoverReady, CoverRequest, CoverRequestKind, DecodeRequest};
 
-/// 执行一个结构化图片请求并生成必达 completion。
+/// 执行图片请求；源图通过请求内的通道回复，其余请求返回显示完成事件。
 ///
 /// # Params:
-///   - `request`: preview 或 decode 请求
+///   - `request`: preview、显示解码或源图解码请求
 ///   - `client`: Remote 图片 HTTP 客户端
 ///   - `cache`: 可用的磁盘缓存
 ///   - `cfg`: 解码与取色配置
 ///
 /// # Return:
-///   成功产物或带请求类型的失败 completion
+///   显示请求返回成功产物或失败事件；源图请求已直接回复，返回 `None`
 pub(super) async fn complete_request(
     request: CoverRequest,
     client: &HttpClient,
     cache: Option<&Arc<CacheIndex>>,
     cfg: &Arc<CoverConfig>,
-) -> CoverCompletion {
-    match request {
+) -> Option<CoverCompletion> {
+    let completion = match request {
         CoverRequest::Preview(request) => {
             let url = request.url.clone();
             match fetch_preview(request, client, cache, cfg).await {
@@ -58,5 +58,11 @@ pub(super) async fn complete_request(
                 }
             }
         }
-    }
+        CoverRequest::Original { source, url, reply } => {
+            let result = fetch_original(source, &url, client, cache).await;
+            let _ = reply.send(result);
+            return None;
+        }
+    };
+    Some(completion)
 }

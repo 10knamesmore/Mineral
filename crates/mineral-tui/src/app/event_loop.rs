@@ -146,6 +146,7 @@ impl App {
                 advance_preparation = true;
                 self.tick_overlays();
                 self.tick_images();
+                self.poll_clipboard();
                 self.client.flush_task_submissions();
                 self.notifications.tick();
                 // 每 tick 抄一份本地钟点,供队列剩余时长算「预计播完钟点」(渲染只持 &state)。

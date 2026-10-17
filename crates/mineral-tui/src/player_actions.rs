@@ -2,7 +2,6 @@
 //!
 //! 实现 `App` 的播放控制、love 与下载；入口由 `App::dispatch` 调用。
 
-use arboard::Clipboard;
 use mineral_model::{PlaylistEntry, Song};
 use mineral_protocol::DownloadTarget;
 use mineral_task::TaskEvent;
@@ -25,9 +24,6 @@ pub(crate) enum PlayMode {
     /// 按原顺序插到当前曲之后；daemon 队列为空时从头插入，不自动起播。
     InsertNext,
 }
-
-/// 复制成功 toast 里展示的内容上限(字符);超出截断加省略号,防长模板把顶栏挤爆。
-const COPY_TOAST_MAX_CHARS: usize = 48;
 
 /// 等待补齐后执行的歌单起播；位置使用原始 relation index，过滤词在发起时固定。
 pub(crate) struct PendingPlaylistPlay {
@@ -182,6 +178,7 @@ impl App {
                 self.start_container_play(&container, PlayMode::InsertNext);
             }
             MenuAction::Copy(text) => self.copy_to_clipboard(&text),
+            MenuAction::CopyImage { source, url } => self.copy_image_to_clipboard(source, url),
             MenuAction::CopyTemplate { index, ctx } => {
                 match self.render_local_copy_template(index, ctx) {
                     Ok(text) => self.copy_to_clipboard(&text),
@@ -193,43 +190,6 @@ impl App {
                         ));
                     }
                 }
-            }
-        }
-    }
-
-    /// 把文本写进系统剪贴板:成功 flash `Copied: …`(超长截断),失败 error toast。
-    /// 句柄懒初始化、终身持有(理由见字段文档)。
-    pub(crate) fn copy_to_clipboard(&mut self, text: &str) {
-        let clipboard = match &mut self.clipboard {
-            Some(clipboard) => clipboard,
-            empty @ None => match Clipboard::new() {
-                Ok(clipboard) => empty.insert(clipboard),
-                Err(error) => {
-                    mineral_log::warn!(target: "tui", error = mineral_log::chain(&error), "剪贴板初始化失败");
-                    self.notifications.flash(tinted_text_item(
-                        "clipboard unavailable".to_owned(),
-                        TextTint::Error,
-                    ));
-                    return;
-                }
-            },
-        };
-
-        match clipboard.set_text(text) {
-            Ok(()) => {
-                let shown = if text.chars().count() > COPY_TOAST_MAX_CHARS {
-                    let head = text.chars().take(COPY_TOAST_MAX_CHARS).collect::<String>();
-                    format!("Copied: {head}…")
-                } else {
-                    format!("Copied: {text}")
-                };
-                self.notifications
-                    .flash(tinted_text_item(shown, TextTint::Normal));
-            }
-            Err(e) => {
-                mineral_log::warn!(target: "tui", error = mineral_log::chain(&e), "写剪贴板失败");
-                self.notifications
-                    .flash(tinted_text_item("copy failed".to_owned(), TextTint::Error));
             }
         }
     }

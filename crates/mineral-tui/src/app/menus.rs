@@ -669,6 +669,14 @@ fn playlist_copy_items(playlist: &mineral_model::Playlist, web_url: Option<&str>
             "Copy cover URL",
             MenuAction::Copy(cover.to_string()),
         ));
+        items.push(MenuItem::keyed(
+            'p',
+            "Copy cover image",
+            MenuAction::CopyImage {
+                source: playlist.source(),
+                url: cover.clone(),
+            },
+        ));
     }
     items
 }
@@ -722,6 +730,14 @@ fn song_copy_items(song: &Song, web_url: Option<&str>) -> Vec<MenuItem> {
             "Copy cover URL",
             MenuAction::Copy(cover.to_string()),
         ));
+        items.push(MenuItem::keyed(
+            'p',
+            "Copy cover image",
+            MenuAction::CopyImage {
+                source: song.source(),
+                url: cover.clone(),
+            },
+        ));
     }
     items
 }
@@ -758,6 +774,14 @@ fn album_copy_items(album: &Album, web_url: Option<&str>) -> Vec<MenuItem> {
             "Copy cover URL",
             MenuAction::Copy(cover.to_string()),
         ));
+        items.push(MenuItem::keyed(
+            'p',
+            "Copy cover image",
+            MenuAction::CopyImage {
+                source: album.source(),
+                url: cover.clone(),
+            },
+        ));
     }
     items
 }
@@ -780,6 +804,14 @@ fn artist_copy_items(artist: &Artist, web_url: Option<&str>) -> Vec<MenuItem> {
             'c',
             "Copy avatar URL",
             MenuAction::Copy(avatar.to_string()),
+        ));
+        items.push(MenuItem::keyed(
+            'p',
+            "Copy avatar image",
+            MenuAction::CopyImage {
+                source: artist.source(),
+                url: avatar.clone(),
+            },
         ));
     }
     items
@@ -828,7 +860,8 @@ mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_channel_core::Page;
     use mineral_model::{
-        Album, AlbumId, AlbumRef, Artist, ArtistId, Playlist, PlaylistId, SearchKind, SourceKind,
+        Album, AlbumId, AlbumRef, Artist, ArtistId, MediaUrl, Playlist, PlaylistId, SearchKind,
+        SourceKind,
     };
     use mineral_task::SearchPayload;
     use ratatui::Terminal;
@@ -1253,6 +1286,13 @@ mod tests {
                     Some('c'),
                     MenuAction::Copy("https://img.example/c.jpg".to_owned())
                 ),
+                (
+                    Some('p'),
+                    MenuAction::CopyImage {
+                        source: song.source(),
+                        url: MediaUrl::remote("https://img.example/c.jpg")?,
+                    }
+                ),
             ],
             "URL 模板 {{id}} 填裸 id;id 项给 qualified 形式"
         );
@@ -1332,6 +1372,13 @@ mod tests {
                     Some('c'),
                     MenuAction::Copy("https://img.example/a.jpg".to_owned())
                 ),
+                (
+                    Some('p'),
+                    MenuAction::CopyImage {
+                        source: album.source(),
+                        url: MediaUrl::remote("https://img.example/a.jpg")?,
+                    }
+                ),
             ],
             "有艺人+模板:name→artist(, join)→id→url→cover"
         );
@@ -1350,6 +1397,13 @@ mod tests {
                 (
                     Some('c'),
                     MenuAction::Copy("https://img.example/a.jpg".to_owned())
+                ),
+                (
+                    Some('p'),
+                    MenuAction::CopyImage {
+                        source: album.source(),
+                        url: MediaUrl::remote("https://img.example/a.jpg")?,
+                    }
                 ),
             ],
             "无艺人+无模板:name→id→cover"
@@ -1383,6 +1437,13 @@ mod tests {
                 (
                     Some('c'),
                     MenuAction::Copy("https://img.example/av.jpg".to_owned())
+                ),
+                (
+                    Some('p'),
+                    MenuAction::CopyImage {
+                        source: artist.source(),
+                        url: MediaUrl::remote("https://img.example/av.jpg")?,
+                    }
                 ),
             ],
             "有模板+头像:name→id→url→avatar"

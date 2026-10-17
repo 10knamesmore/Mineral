@@ -21,6 +21,8 @@ use crate::runtime::state::AppState;
 use crate::runtime::ui::prefs::UiPrefs;
 use crate::runtime::window_title::WindowTitle;
 
+use super::clipboard::ClipboardState;
+
 /// 应用顶层状态。
 pub struct App {
     /// 是否退出主循环。
@@ -103,9 +105,8 @@ pub struct App {
     /// 上次上报 daemon 的终端状态 `(rows, cols, fullscreen, focused)`(去抖:值没变不发)。
     pub(super) last_terminal_report: Option<(u16, u16, bool, bool)>,
 
-    /// 系统剪贴板句柄,首次复制时懒初始化并**终身持有**——X11 的剪贴板内容归
-    /// owner 所有,句柄一 Drop 内容就没了;别改成每次复制临时 `new`。
-    pub(crate) clipboard: Option<arboard::Clipboard>,
+    /// 后台剪贴板写入入口与最近一次复制的结果。
+    pub(crate) clipboard: ClipboardState,
 
     /// 容器「播放全部 / 加入队列」的待兑现意图:key = [`crate::runtime::state::DetailFetch::dedup_key`],value = 入队
     /// 模式。容器曲目未加载时登记,对应 `*Fetched` 事件到货后由 [`Self::fulfill_pending_container`]
@@ -193,7 +194,7 @@ impl App {
             launch_anchor,
             ui_prefs,
             last_terminal_report: None,
-            clipboard: None,
+            clipboard: ClipboardState::default(),
             pending_container: FxHashMap::default(),
             pending_playlist_play: None,
             tui_script: crate::runtime::tui_script::TuiScript::default(),
