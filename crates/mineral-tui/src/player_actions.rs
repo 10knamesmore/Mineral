@@ -2,6 +2,7 @@
 //!
 //! 实现 `App` 的播放控制、love 与下载；入口由 `App::dispatch` 调用。
 
+use arboard::Clipboard;
 use mineral_model::{PlaylistEntry, Song};
 use mineral_protocol::DownloadTarget;
 use mineral_task::TaskEvent;
@@ -199,23 +200,22 @@ impl App {
     /// 把文本写进系统剪贴板:成功 flash `Copied: …`(超长截断),失败 error toast。
     /// 句柄懒初始化、终身持有(理由见字段文档)。
     pub(crate) fn copy_to_clipboard(&mut self, text: &str) {
-        if self.clipboard.is_none() {
-            match arboard::Clipboard::new() {
-                Ok(cb) => self.clipboard = Some(cb),
-                Err(e) => {
-                    mineral_log::warn!(target: "tui", error = mineral_log::chain(&e), "剪贴板初始化失败");
+        let clipboard = match &mut self.clipboard {
+            Some(clipboard) => clipboard,
+            empty @ None => match Clipboard::new() {
+                Ok(clipboard) => empty.insert(clipboard),
+                Err(error) => {
+                    mineral_log::warn!(target: "tui", error = mineral_log::chain(&error), "剪贴板初始化失败");
                     self.notifications.flash(tinted_text_item(
                         "clipboard unavailable".to_owned(),
                         TextTint::Error,
                     ));
                     return;
                 }
-            }
-        }
-        let Some(cb) = self.clipboard.as_mut() else {
-            return;
+            },
         };
-        match cb.set_text(text) {
+
+        match clipboard.set_text(text) {
             Ok(()) => {
                 let shown = if text.chars().count() > COPY_TOAST_MAX_CHARS {
                     let head = text.chars().take(COPY_TOAST_MAX_CHARS).collect::<String>();
