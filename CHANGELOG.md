@@ -1,4 +1,23 @@
 # Changelog
+## [0.5.10] — 2026-10-18
+
+### Features
+
+- Add saved album API and detail caching ([`53e9144`](https://github.com/10knamesmore/Mineral/commit/53e9144cedf5cc855e2a33d78bad9d5b89971593))
+
+- Browse saved albums alongside playlists ([`58ce882`](https://github.com/10knamesmore/Mineral/commit/58ce88229c60125b5c2f177e545250840f0c1276))
+
+- Surpport copy cover image ([`3233db0`](https://github.com/10knamesmore/Mineral/commit/3233db015be4f569a6c1457c7ae8f9047cd04838))
+
+- Use classic television icon for bilibili ([`f3355ef`](https://github.com/10knamesmore/Mineral/commit/f3355ef463b726b52631b5b91ec97b44514d2d1b))
+
+- Enable crates.io publishing ([`571b502`](https://github.com/10knamesmore/Mineral/commit/571b502bf583347337cd0aeffaca0fcffe6f2b80))
+
+### Bug Fixes
+
+- Invalidate remembered queue position after reshuffle ([`1eadd8f`](https://github.com/10knamesmore/Mineral/commit/1eadd8f7d0f9b3d18488a3ba19242559c61fc171))
+
+- Enable native Wayland clipboard support ([`63e2822`](https://github.com/10knamesmore/Mineral/commit/63e28221be480739e2da2f04f66b16051ceffe07))
 ## [0.5.9] — 2026-10-04
 
 ### Features
