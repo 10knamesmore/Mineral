@@ -1,6 +1,7 @@
 [package]
 name        = "mineral"
 description = "多源终端音乐播放器(ratatui),支持本地与云端音乐"
+readme      = "../../README.md"
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true

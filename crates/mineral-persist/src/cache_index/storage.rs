@@ -1,14 +1,14 @@
 //! Reads and writes a cache table initialized by its database owner.
 
-use sea_orm::sea_query::{self, Alias, Expr, ExprTrait, Iden, OnConflict, Query};
-use sea_orm::{ConnectionTrait, DatabaseConnection, FromQueryResult};
+use sea_orm::sea_query::{Alias, Expr, ExprTrait, OnConflict, Query};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden, FromQueryResult};
 
 /// Names a cache table without assigning an application-specific purpose.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CacheTable(pub(super) &'static str);
 
 /// Columns shared by file-cache indexes.
-#[derive(Iden)]
+#[derive(DeriveIden)]
 enum CacheColumn {
     /// Cache identity.
     Key,

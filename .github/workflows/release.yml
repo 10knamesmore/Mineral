@@ -1,8 +1,5 @@
 name: release
 
-# 网页手动触发:Actions → release → Run workflow → 填版本号 x.y.z → Run。
-# 一键完成:门禁(fmt/clippy/test)→ 生成 CHANGELOG → bump 版本 → 发布 commit 落 dev
-# → main 快进到 dev → 打带注解 tag → GitHub Release。dev 不 reset(详见 CONTRIBUTING.md)。
 on:
   workflow_dispatch:
     inputs:
@@ -14,10 +11,12 @@ on:
         description: "tag / Release 标题的一句话(可空)"
         required: false
         type: string
+      publish_crates:
+        description: "发布到 crates.io（首次手动分批上传时关闭）"
+        required: true
+        default: true
+        type: boolean
 
-# 需要推 commit / tag 到 dev 与 main,并建 Release。
-# 注意:若 main 开了分支保护(要求 PR / 状态检查),需在保护规则里放行
-# github-actions[bot],否则下面 push origin main 会被拒。
 permissions:
   contents: write
 
@@ -45,7 +44,6 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本号应为 x.y.z"; exit 1; }
 
-      # ALSA 开发头文件是编译期依赖(rodio/cpal → alsa-sys),与 ci.yml 同。
       - name: install ALSA dev dep
         run: |
           sudo apt-get update
@@ -82,14 +80,18 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: git cliff --unreleased --tag "v${VERSION}" --prepend CHANGELOG.md
 
-      # —— bump 版本(单点:根 Cargo.toml [workspace.package] version)+ 最小化刷 Cargo.lock ——
+      # 同步 workspace 版本与内部依赖约束，保留第三方依赖的锁定版本。
       - name: bump version
         env:
           VERSION: ${{ inputs.version }}
         run: |
           sed -i -E "s/^(version[[:space:]]*=[[:space:]]*\")[0-9]+\.[0-9]+\.[0-9]+(\")/\1${VERSION}\2/" Cargo.toml
+          sed -i -E "/^mineral-/s/(version[[:space:]]*=[[:space:]]*\")[0-9]+\.[0-9]+\.[0-9]+(\")/\1${VERSION}\2/" Cargo.toml
           grep -E '^version' Cargo.toml
           cargo check --workspace   # 仅同步 Cargo.lock 里 mineral* 版本,不动依赖 pin
+
+      - name: 验证 crates.io 发布包
+        run: cargo publish --workspace --exclude mineral-test --registry crates-io --locked --dry-run --allow-dirty
 
       # —— 发布 commit 落 dev ——
       - name: commit + push dev
@@ -126,6 +128,40 @@ jobs:
           TITLE="v${VERSION}"
           [ -n "$HEADLINE" ] && TITLE="${TITLE} — ${HEADLINE}"
           gh release create "v${VERSION}" --title "$TITLE" --notes-file RELEASE_NOTES.md
+
+  crates-publish:
+    name: publish to crates.io
+    needs: release
+    if: ${{ inputs.publish_crates }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: 安装构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libssl-dev pkg-config
+
+      - name: 安装最新 stable
+        run: rustup toolchain install stable --no-self-update
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 发布 workspace
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --workspace --exclude mineral-test --registry crates-io --locked
+
+      - name: 验证 crates.io 安装
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          cargo install --locked --registry crates-io --version "=${VERSION}" --root "$RUNNER_TEMP/mineral-install" mineral
+          "$RUNNER_TEMP/mineral-install/bin/mineral" --version
 
   # AUR 首推复用 aur-publish 工作流(pkgrel 按 AUR 现状自动:新版本 → 1)。
   aur-publish:

@@ -6,19 +6,19 @@
 
 [![CI](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml/badge.svg)](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml)
 [![AUR](https://img.shields.io/aur/version/mineral?style=flat-square&logo=archlinux)](https://aur.archlinux.org/packages/mineral)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square&logo=rust)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-blueviolet?style=flat-square)
 
 名字取自 [Mineral](<https://en.wikipedia.org/wiki/Mineral_(band)>) —— 90 年代得州的 emo / post-rock 乐队。
 
-<img src="assets/screenshot-library.png" alt="Mineral 曲库视图:歌单 / 封面 / 歌词 / 频谱" width="800"/>
+<img src="https://raw.githubusercontent.com/10knamesmore/Mineral/main/assets/screenshot-library.png" alt="Mineral 曲库视图:歌单 / 封面 / 歌词 / 频谱" width="800"/>
 
-<img src="assets/screenshot-search.png" alt="Mineral 搜索:来源过滤 / 艺人 / 单曲 / 专辑" width="800"/>
+<img src="https://raw.githubusercontent.com/10knamesmore/Mineral/main/assets/screenshot-search.png" alt="Mineral 搜索:来源过滤 / 艺人 / 单曲 / 专辑" width="800"/>
 
-<img src="assets/screenshot-fuzzy-search.png" alt="Mineral 模糊搜索:拼音命中 / 歌单内命中高亮" width="800"/>
+<img src="https://raw.githubusercontent.com/10knamesmore/Mineral/main/assets/screenshot-fuzzy-search.png" alt="Mineral 模糊搜索:拼音命中 / 歌单内命中高亮" width="800"/>
 
-<img src="assets/screenshot-immersive.png" alt="Mineral 全屏沉浸态:封面 / 逐字歌词 / 频谱" width="800"/>
+<img src="https://raw.githubusercontent.com/10knamesmore/Mineral/main/assets/screenshot-immersive.png" alt="Mineral 全屏沉浸态:封面 / 逐字歌词 / 频谱" width="800"/>
 
 </div>
 
@@ -54,7 +54,7 @@
 paru -S mineral   # 或 yay -S mineral
 ```
 
-### Cargo(任意平台,从源码安装)
+### Cargo(Linux / macOS,从源码安装)
 
 ```bash
 # 最新发布版(crates.io)
@@ -208,4 +208,4 @@ cargo run --release                      # run TUI
 
 ## 许可证
 
-[MIT](./LICENSE)
+[MIT](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
