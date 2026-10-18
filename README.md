@@ -5,6 +5,7 @@
 **多源音乐播放器**
 
 [![CI](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml/badge.svg)](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/mineral?style=flat-square&logo=rust)](https://crates.io/crates/mineral)
 [![AUR](https://img.shields.io/aur/version/mineral?style=flat-square&logo=archlinux)](https://aur.archlinux.org/packages/mineral)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square&logo=rust)
