@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, StreamTrait};
-use rodio::cpal::{FromSample, Sample, SizedSample};
+use rodio::cpal::{FromSample, Sample, SizedSample, StreamError};
 
 use super::devices;
 use super::source::{QueueHandoff, take_samples};
@@ -165,9 +165,14 @@ where
                         .unwrap_or(T::EQUILIBRIUM);
                 }
             },
-            move |error| {
-                failed.store(true, Ordering::Relaxed);
-                mineral_log::error!(target: "audio", error = mineral_log::chain(&error), "audio output stream error");
+            move |error| match error {
+                StreamError::BufferUnderrun => {
+                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "audio output buffer underrun/overrun");
+                }
+                _ => {
+                    failed.store(true, Ordering::Relaxed);
+                    mineral_log::error!(target: "audio", error = mineral_log::chain(&error), "audio output stream error");
+                }
             },
             None,
         )
