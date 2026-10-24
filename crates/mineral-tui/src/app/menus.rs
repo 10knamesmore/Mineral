@@ -510,11 +510,11 @@ impl App {
 
     /// 分组曲库选中行的屏幕矩形，与常驻组头之后的实际视口共用投影。
     fn collection_row_anchor(&self) -> Rect {
-        self.state.ui.browse.collections.selected_row_area(
-            self.left_panel(),
-            &self.state.models.library,
-            &self.state.cfg,
-        )
+        self.state
+            .ui
+            .browse
+            .collections
+            .selected_row_area(self.left_panel(), &self.state.models.library)
     }
 
     /// 由上一帧面积重算浏览态布局,取左栏面板矩形。

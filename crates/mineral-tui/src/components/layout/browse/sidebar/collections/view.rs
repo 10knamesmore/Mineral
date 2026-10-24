@@ -1,5 +1,7 @@
 //! 曲库列表的模型借用与只读显示输入。
 
+use std::cell::OnceCell;
+
 use super::CollectionList;
 use super::window::CollectionWindow;
 use crate::components::frame::FrameEnv;
@@ -31,10 +33,14 @@ pub(crate) struct CollectionView<'a> {
 
     /// 已就绪图片的只读入口。
     pub(super) images: ReadyImages<'a>,
+
+    /// 本次视图按需解析一次，依赖检查、表格与边框共用。
+    /// 视图持有曲库的不可变借用，存续期间不需要使行引用失效。
+    rows: OnceCell<Vec<CollectionRef<'a>>>,
 }
 
 impl CollectionList {
-    /// 组装只读视图，组件之外的数据始终借用。
+    /// 组装只读视图；未显示的列表不解析行，项目内容始终借自曲库。
     pub(crate) fn view<'a>(
         &'a self,
         input: CollectionInput<'a>,
@@ -46,6 +52,7 @@ impl CollectionList {
             input,
             frame,
             images,
+            rows: OnceCell::new(),
         }
     }
 }
@@ -83,7 +90,7 @@ impl crate::components::lifecycle::PaintView for CollectionView<'_> {
         if self.list.active().stable && self.list.active().expansion.active.is_some() {
             inputs.time(self.frame.now);
         }
-        let window = CollectionWindow::new(area, &rows, &self.list.active().scroll);
+        let window = CollectionWindow::new(area, rows, &self.list.active().scroll);
         let covers = window
             .visible
             .filter_map(|index| rows.get(index))
@@ -101,7 +108,13 @@ impl crate::components::lifecycle::PaintView for CollectionView<'_> {
     }
 }
 
-impl CollectionView<'_> {
+impl<'a> CollectionView<'a> {
+    /// 准备阶段已有行引用时直接复用，不再解析身份。
+    pub(super) fn with_rows(mut self, rows: Vec<CollectionRef<'a>>) -> Self {
+        self.rows = OnceCell::from(rows);
+        self
+    }
+
     /// 歌单可用拼贴封面；专辑使用来源提供的封面。
     pub(super) fn cover(&self, row: &CollectionRef<'_>) -> Option<MediaUrl> {
         match *row {
@@ -112,9 +125,9 @@ impl CollectionView<'_> {
         }
     }
 
-    /// 当前显示顺序；只复制引用，不复制曲目或歌单。
-    pub(super) fn rows(&self) -> Vec<CollectionRef<'_>> {
-        self.list.rows(self.input.library, self.frame.config)
+    /// 首次读取时批量解析身份，此后返回同一份行引用。
+    pub(super) fn rows(&self) -> &[CollectionRef<'a>] {
+        self.rows.get_or_init(|| self.list.rows(self.input.library))
     }
 
     /// 深度搜索正在补齐的歌单与专辑数量。

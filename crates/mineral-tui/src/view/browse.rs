@@ -35,7 +35,6 @@ pub(crate) fn tracks<'a>(
             .opened_collection
             .as_ref()
             .is_some_and(|id| state.models.library.collection_load_failed(id)),
-        generation: state.models.library.tracks_generation,
         playing: state.models.playback.track.as_ref().map(|song| &song.id),
     };
     let env = FrameEnv {
@@ -142,7 +141,6 @@ pub(crate) fn prepare(area: Rect, state: &mut AppState, theme: &Theme, advance: 
                 .opened_collection
                 .as_ref()
                 .is_some_and(|id| state.models.library.collection_load_failed(id)),
-            generation: state.models.library.tracks_generation,
             playing: state.models.playback.track.as_ref().map(|song| &song.id),
         };
         state.ui.browse.tracks.prepare(area, input, &mut cx);

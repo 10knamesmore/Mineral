@@ -1,5 +1,7 @@
 //! 歌单与专辑各自保留过滤词、光标和视口；类型抽屉只负责选择。
 
+use rustc_hash::FxHashMap;
+
 use super::drawer::TypeDrawer;
 use crate::config::TuiConfig;
 use crate::runtime::collection::{CollectionGroup, CollectionId, CollectionRef};
@@ -15,11 +17,21 @@ pub(super) struct CollectionItems {
     /// 当前过滤与输入焦点。
     pub(super) search: SearchState,
 
+    /// 按匹配分排列的集合身份；无查询时直接使用曲库顺序。
+    search_results: Option<Vec<CollectionSearchResult>>,
+
     /// 清词时保留的旧显示输入。
     pub(super) expansion: ListExpansionState<CollectionId>,
 
     /// 稳态布局才合成筛选展开动画。
     pub(super) stable: bool,
+}
+
+/// 搜索命中的集合与得分，不依赖它在曲库列表中的位置。
+struct CollectionSearchResult {
+    collection: CollectionId,
+
+    score: f64,
 }
 
 impl CollectionItems {
@@ -28,6 +40,7 @@ impl CollectionItems {
         Self {
             scroll: ScrollList::new(),
             search: SearchState::new(),
+            search_results: None,
             expansion: ListExpansionState::default(),
             stable: false,
         }
@@ -96,61 +109,83 @@ impl CollectionList {
         self.group = group;
     }
 
-    /// 每组独立按匹配分排序；未过滤时保留服务端顺序。
+    /// 输入、配置或一批曲库数据变化后刷新；读取列表不会运行匹配器。
+    pub(crate) fn refresh(&mut self, library: &LibraryData, config: &TuiConfig) {
+        for group in [CollectionGroup::Playlists, CollectionGroup::Albums] {
+            let state = self.state_for_mut(group);
+            deep_search::refresh(&state.search, library, config, group);
+            if state.search.query().is_empty() {
+                state.search_results = None;
+                continue;
+            }
+            let deep = state.search.deep_cache.borrow();
+            let mut results: Vec<_> = collection_items(library, group)
+                .into_iter()
+                .filter_map(|item| {
+                    let own = state.search.score_for(item.name()).map(f64::from);
+                    let artist = item
+                        .artists()
+                        .iter()
+                        .filter_map(|artist| state.search.score_for(&artist.name))
+                        .max()
+                        .map(f64::from);
+                    let score = own
+                        .into_iter()
+                        .chain(artist)
+                        .chain(deep.score_of(item.id()))
+                        .max_by(f64::total_cmp)?;
+                    Some(CollectionSearchResult {
+                        collection: item.id(),
+                        score,
+                    })
+                })
+                .collect();
+            results.sort_by(|a, b| b.score.total_cmp(&a.score));
+            state.search_results = Some(results);
+        }
+    }
+
+    /// 批量解析搜索命中的集合身份，只借出曲库中仍存在的项目。
+    /// 临时身份表使解析为 O(曲库项目数 + 命中数)，不逐项扫描曲库。
     pub(crate) fn items<'a>(
         &self,
         library: &'a LibraryData,
-        config: &TuiConfig,
         group: CollectionGroup,
     ) -> Vec<CollectionRef<'a>> {
-        let items: Vec<_> = match group {
+        let Some(results) = &self.state_for(group).search_results else {
+            return collection_items(library, group);
+        };
+        let by_id: FxHashMap<_, _> = match group {
             CollectionGroup::Playlists => library
                 .playlists
                 .iter()
-                .map(CollectionRef::Playlist)
+                .map(|item| {
+                    (
+                        CollectionId::from(&item.data.id),
+                        CollectionRef::Playlist(item),
+                    )
+                })
                 .collect(),
-            CollectionGroup::Albums => library.albums.iter().map(CollectionRef::Album).collect(),
+            CollectionGroup::Albums => library
+                .albums
+                .iter()
+                .map(|item| {
+                    (
+                        CollectionId::from(&item.data.id),
+                        CollectionRef::Album(item),
+                    )
+                })
+                .collect(),
         };
-        if self.state_for(group).search.query().is_empty() {
-            return items;
-        }
-        self.state_for(group).search.sync_query();
-        deep_search::ensure(&self.state_for(group).search, library, config);
-        let deep = self.state_for(group).search.deep_cache.borrow();
-        let mut scored: Vec<_> = items
-            .into_iter()
-            .filter_map(|item| {
-                let own = self
-                    .state_for(group)
-                    .search
-                    .match_for(item.name())
-                    .map(|m| f64::from(m.score));
-                let artist = item
-                    .artists()
-                    .iter()
-                    .filter_map(|a| self.state_for(group).search.match_for(&a.name))
-                    .map(|m| f64::from(m.score))
-                    .max_by(f64::total_cmp);
-                let inner = deep.score_of(item.id());
-                let score = own
-                    .into_iter()
-                    .chain(artist)
-                    .chain(inner)
-                    .max_by(f64::total_cmp)?;
-                Some((score, item))
-            })
-            .collect();
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-        scored.into_iter().map(|(_, item)| item).collect()
+        results
+            .iter()
+            .filter_map(|result| by_id.get(&result.collection).copied())
+            .collect()
     }
 
     /// 当前列表只含真实项目，列名固定在滚动区域之外。
-    pub(crate) fn rows<'a>(
-        &self,
-        library: &'a LibraryData,
-        config: &TuiConfig,
-    ) -> Vec<CollectionRef<'a>> {
-        self.items(library, config, self.group)
+    pub(crate) fn rows<'a>(&self, library: &'a LibraryData) -> Vec<CollectionRef<'a>> {
+        self.items(library, self.group)
     }
 
     /// 某项目的最佳曲目命中，用于行内提示与进入后的定位。
@@ -165,5 +200,16 @@ impl CollectionList {
     pub(crate) fn has_deep_hits(&self) -> bool {
         !self.active().search.query().is_empty()
             && self.active().search.deep_cache.borrow().has_hits()
+    }
+}
+
+fn collection_items(library: &LibraryData, group: CollectionGroup) -> Vec<CollectionRef<'_>> {
+    match group {
+        CollectionGroup::Playlists => library
+            .playlists
+            .iter()
+            .map(CollectionRef::Playlist)
+            .collect(),
+        CollectionGroup::Albums => library.albums.iter().map(CollectionRef::Album).collect(),
     }
 }

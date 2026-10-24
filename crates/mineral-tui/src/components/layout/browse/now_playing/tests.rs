@@ -39,6 +39,7 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
     state.models.library.tracks.insert(
         playlist_id,
         crate::runtime::state::CollectionTracks {
+            revision: 0,
             entries: entry_views(vec![song("entry"), selected]),
             complete: true,
             next_offset: None,

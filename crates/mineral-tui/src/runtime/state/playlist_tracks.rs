@@ -6,6 +6,9 @@ use mineral_channel_core::PlaylistLoad;
 /// 一张歌单已到达的曲目；像曲目列表一样读取，同时保留完整性。
 #[derive(Clone, Debug)]
 pub struct CollectionTracks {
+    /// 曲目内容最后一次更新的曲库版本；
+    pub revision: u64,
+
     /// 按歌单原始位置排列的已加载条目。
     pub entries: Vec<CollectionTrackView>,
 

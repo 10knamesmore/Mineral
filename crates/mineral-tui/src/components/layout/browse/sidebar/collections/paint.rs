@@ -126,7 +126,7 @@ impl Prepare for CollectionList {
         let frame = cx.frame;
         let motion = cx.motion;
         self.active_mut().stable = matches!(motion, ScrollMotion::Advancing { .. });
-        let rows = self.rows(input.library, frame.config);
+        let rows = self.rows(input.library);
         let total = rows.len();
         self.active_mut().scroll.prepare(
             total,
@@ -136,7 +136,18 @@ impl Prepare for CollectionList {
             cx.advance,
         );
         let window = CollectionWindow::new(area, &rows, self.scroll());
-        let view = self.view(input, frame, cx.images.ready());
+        prepare_minimap(
+            &mut self.active_mut().scroll,
+            total,
+            minimap_track(area),
+            std::iter::empty(),
+            motion,
+            frame.cursor_ticks(),
+            frame.config.minimap(),
+            cx.advance,
+        );
+        let view = self.view(input, frame, cx.images.ready()).with_rows(rows);
+        let rows = view.rows();
         if let Some(column) = thumbnail_column(&view, &window) {
             for (index, row) in rows
                 .iter()
@@ -154,30 +165,17 @@ impl Prepare for CollectionList {
                 }
             }
         }
-        prepare_minimap(
-            &mut self.active_mut().scroll,
-            total,
-            minimap_track(area),
-            std::iter::empty(),
-            motion,
-            frame.cursor_ticks(),
-            frame.config.minimap(),
-            cx.advance,
-        );
         if self.active().stable {
-            let filtered = (!self.search().query().is_empty()).then(|| {
-                let view = self.view(input, frame, cx.images.ready());
-                FilteredListFrame {
-                    area,
-                    body: window.body,
-                    content: table(area, &view, &rows, &window),
-                    rows: rows
-                        .iter()
-                        .skip(window.visible.start)
-                        .take(window.visible.len())
-                        .map(|row| row.id())
-                        .collect(),
-                }
+            let filtered = (!self.search().query().is_empty()).then(|| FilteredListFrame {
+                area,
+                body: window.body,
+                content: table(area, &view, rows, &window),
+                rows: rows
+                    .iter()
+                    .skip(window.visible.start)
+                    .take(window.visible.len())
+                    .map(|row| row.id())
+                    .collect(),
             });
             let expansion = &mut self.active_mut().expansion;
             expansion.prepare(area, window.body, filtered);
@@ -199,7 +197,7 @@ impl CollectionFrame<'_> {
     fn paint_content(&self, area: Rect, buf: &mut Buffer) {
         let theme = self.frame.theme;
         let rows = self.rows();
-        let window = CollectionWindow::new(area, &rows, self.list.scroll());
+        let window = CollectionWindow::new(area, rows, self.list.scroll());
         let state = self.list.active();
         let active = state
             .stable
@@ -215,7 +213,7 @@ impl CollectionFrame<'_> {
             }
             return;
         }
-        table(area, self, &rows, &window).paint(buf);
+        table(area, self, rows, &window).paint(buf);
         list_expansion::finish_list(buf, active, theme, surface, window.visible.clone());
         let columns = Columns::new(self, window.table.width);
         StatefulWidget::render(

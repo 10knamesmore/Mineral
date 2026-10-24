@@ -147,7 +147,6 @@ impl BrowsePage {
                 .opened_collection
                 .as_ref()
                 .is_some_and(|id| model.library.collection_load_failed(id)),
-            generation: model.library.tracks_generation,
             playing: None,
         }
     }
@@ -212,7 +211,7 @@ impl BrowsePage {
         model: BrowseModel<'a>,
     ) -> Option<CollectionRef<'a>> {
         self.collections
-            .rows(model.library, model.cfg)
+            .rows(model.library)
             .get(self.collections.scroll().sel())
             .copied()
     }
@@ -265,7 +264,7 @@ impl BrowsePage {
     #[cfg(test)]
     pub fn filtered_playlists<'a>(&self, model: BrowseModel<'a>) -> Vec<&'a PlaylistView> {
         self.collections
-            .items(model.library, model.cfg, CollectionGroup::Playlists)
+            .items(model.library, CollectionGroup::Playlists)
             .into_iter()
             .filter_map(|item| match item {
                 CollectionRef::Playlist(p) => Some(p),
@@ -288,7 +287,7 @@ impl BrowsePage {
             return FilteredTracks::empty();
         };
         self.tracks
-            .filtered(&playlist.id(), model.library.tracks_generation, entries)
+            .filtered(&playlist.id(), entries.revision, entries)
     }
 
     /// 按 `behavior.filter_play_scope` 建立 Library 起播队列，并保留过滤结果中选中的 exact

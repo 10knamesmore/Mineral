@@ -106,6 +106,7 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
     s.models.library.tracks.insert(
         pid,
         crate::runtime::state::CollectionTracks {
+            revision: 0,
             entries: views,
             complete: true,
             next_offset: None,
@@ -147,6 +148,7 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
     s.models.library.tracks.insert(
         PlaylistId::new(SourceKind::NETEASE, "p1"),
         crate::runtime::state::CollectionTracks {
+            revision: 0,
             entries: views,
             complete: true,
             next_offset: None,
@@ -622,6 +624,7 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
     app.state.models.library.tracks.insert(
         pid,
         crate::runtime::state::CollectionTracks {
+            revision: 0,
             entries: views,
             complete: true,
             next_offset: None,
@@ -743,6 +746,7 @@ pub(crate) fn app_with_library_probed(
     app.state.models.library.tracks.insert(
         pid,
         crate::runtime::state::CollectionTracks {
+            revision: 0,
             entries: views,
             complete: true,
             next_offset: None,
@@ -772,6 +776,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
     app.state.models.library.tracks.insert(
         pid,
         crate::runtime::state::CollectionTracks {
+            revision: 0,
             entries: views,
             complete: true,
             next_offset: None,

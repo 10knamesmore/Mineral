@@ -26,7 +26,7 @@ use crate::runtime::state::SearchFocus;
 /// 渲染当前页面；形变期间合成两端稳定排版，封面和播放信息独立移动。
 /// 通知与浮层叠在页面之上，最后绘制启动或退出的整屏边框。
 #[cfg(test)]
-pub(crate) fn draw(frame: &mut Frame<'_>, app: &ComponentView<'_, FrameView<'_>>) {
+pub(crate) fn draw<'a>(frame: &mut Frame<'_>, app: &'a ComponentView<'a, FrameView<'a>>) {
     plan(frame.area(), app).paint(frame, &[]);
 }
 
