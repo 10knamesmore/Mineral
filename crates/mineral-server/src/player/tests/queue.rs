@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use color_eyre::eyre::eyre;
 use mineral_model::{Lyrics, Song, SongId, SourceKind};
 use mineral_protocol::{AdvanceKind, PlayCursor, PlayMode, PlayerVersions};
 use mineral_test::song;
@@ -226,7 +227,11 @@ async fn replace_queue_bumps_queue_version() -> color_eyre::Result<()> {
         mineral_stats::QueueContext::Unknown,
     )?;
     let v1 = core.sync(PlayerVersions::default()).versions.queue;
-    assert_eq!(v1, v0.next(), "顺序模式 replace_queue 应 bump");
+    assert_eq!(
+        v1,
+        Some(v0.ok_or_else(|| eyre!("缺少队列修订"))?.next()),
+        "顺序模式 replace_queue 应 bump"
+    );
 
     core.set_play_mode(PlayMode::Shuffle, mineral_stats::Actor::User); // 进 Shuffle 本身也 bump 一次
     let v2 = core.sync(PlayerVersions::default()).versions.queue;
@@ -236,7 +241,11 @@ async fn replace_queue_bumps_queue_version() -> color_eyre::Result<()> {
         mineral_stats::QueueContext::Unknown,
     )?;
     let v3 = core.sync(PlayerVersions::default()).versions.queue;
-    assert_eq!(v3, v2.next(), "Shuffle 模式 replace_queue 应 bump");
+    assert_eq!(
+        v3,
+        Some(v2.ok_or_else(|| eyre!("缺少队列修订"))?.next()),
+        "Shuffle 模式 replace_queue 应 bump"
+    );
     Ok(())
 }
 
@@ -423,7 +432,7 @@ async fn play_song_bumps_current_version() -> color_eyre::Result<()> {
         mineral_stats::Actor::User,
     );
     let v1 = core.sync(PlayerVersions::default()).versions.current;
-    assert_eq!(v1, v0.next());
+    assert_eq!(v1, Some(v0.ok_or_else(|| eyre!("缺少当前曲修订"))?.next()));
     Ok(())
 }
 
@@ -489,7 +498,11 @@ async fn lyrics_ready_bumps_only_on_store() -> color_eyre::Result<()> {
 
     core.handle_lyrics_ready(&SongId::new(SourceKind::NETEASE, "a"), Lyrics::default());
     let v2 = core.sync(PlayerVersions::default()).versions.current;
-    assert_eq!(v2, v0.next(), "命中当前歌写入歌词应 bump");
+    assert_eq!(
+        v2,
+        Some(v0.ok_or_else(|| eyre!("缺少当前曲修订"))?.next()),
+        "命中当前歌写入歌词应 bump"
+    );
     Ok(())
 }
 

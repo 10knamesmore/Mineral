@@ -203,6 +203,7 @@ mod tests {
 
     use color_eyre::eyre::eyre;
     use image::{DynamicImage, Rgb, RgbImage};
+    use mineral_common::revision::Revision;
     use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
 
     use super::{collage_key, compose, effective_cover_url, member_covers, tick};
@@ -335,7 +336,7 @@ mod tests {
         s.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
-                revision: 0,
+                revision: Revision::default(),
                 entries: tracks,
                 complete: true,
                 next_offset: None,

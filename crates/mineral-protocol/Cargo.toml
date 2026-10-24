@@ -9,6 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+mineral-common = { workspace = true }
 mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-model        = { workspace = true }

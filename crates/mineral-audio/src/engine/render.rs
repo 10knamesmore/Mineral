@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cpal::{FromSample, Sample};
+use mineral_common::revision::Revision;
 use mineral_playback::TransferState;
 use spin::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +27,7 @@ pub(crate) struct SharedPlayback {
 pub(super) struct OutputFormat {
     pub(super) pcm: PcmFormat,
 
-    pub(super) generation: u64,
+    pub(super) generation: Revision,
 
     pub(super) capacity_samples: usize,
 }
@@ -47,7 +48,7 @@ pub(super) struct PlaybackState {
 
     pub(super) gain: f32,
 
-    pub(super) track_token: u64,
+    pub(super) track_token: Revision,
 
     pub(super) finished_seq: u64,
 
@@ -77,7 +78,7 @@ pub(super) struct Track {
     pub(super) id: u64,
 
     /// Changed by seek or a new device format; workers discard obsolete work.
-    pub(super) generation: u64,
+    pub(super) generation: Revision,
 
     pub(super) cancellation: CancellationToken,
 
@@ -120,7 +121,7 @@ impl SharedPlayback {
                 paused: true,
                 rendering: false,
                 gain,
-                track_token: 0,
+                track_token: Revision::default(),
                 finished_seq: 0,
                 last_position: Duration::ZERO,
                 tap,
@@ -131,7 +132,7 @@ impl SharedPlayback {
 
     /// Commit a successfully opened device. PCM for another format is regenerated from
     /// the rendered position, rather than from the decoder's read-ahead position.
-    pub(super) fn configure(&self, pcm: PcmFormat, generation: u64) -> Result<()> {
+    pub(super) fn configure(&self, pcm: PcmFormat, generation: Revision) -> Result<()> {
         let frames =
             (u64::from(pcm.sample_rate.get()) * u64::from(self.buffer_ms.get())).div_ceil(1_000);
         let capacity_samples = usize::try_from(frames * u64::from(pcm.channels.get()))
@@ -162,7 +163,7 @@ impl SharedPlayback {
 
     /// Contention or missing PCM produces silence without advancing the media position.
     /// No IO, decoding, allocation, or source destruction occurs in this callback.
-    pub(super) fn render<T>(&self, data: &mut [T], pcm: PcmFormat, generation: u64)
+    pub(super) fn render<T>(&self, data: &mut [T], pcm: PcmFormat, generation: Revision)
     where
         T: Sample + FromSample<f32>,
     {
@@ -190,7 +191,7 @@ impl Track {
 
     pub(super) fn rewind(&mut self, position: Duration, rate: NonZeroU32) {
         let rendered_position = self.position(rate);
-        self.generation += 1;
+        self.generation = self.generation.next();
         self.samples.clear();
         self.origin = rendered_position;
         self.rendered_frames = 0;
@@ -258,7 +259,7 @@ impl PlaybackState {
                 self.finished_seq += 1;
                 self.current = self.next.take();
                 if self.current.is_some() {
-                    self.track_token += 1;
+                    self.track_token = self.track_token.next();
                 }
                 continue;
             }

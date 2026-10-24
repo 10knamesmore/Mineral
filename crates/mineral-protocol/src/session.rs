@@ -13,6 +13,7 @@
 //!   「未提交」与「发送后结果未知」由 client 侧表达,不伪造为业务默认值。
 
 use mineral_audio::AudioSnapshot;
+use mineral_common::revision::Revision;
 use mineral_model::Song;
 use mineral_task::Snapshot;
 use serde::{Deserialize, Serialize};
@@ -179,7 +180,7 @@ pub struct UpdateEnvelope {
     pub subscription: SubscriptionId,
 
     /// 该订阅的单调版本(每次逻辑更新 +1)。
-    pub version: u64,
+    pub version: Revision,
 
     /// 本逻辑更新的总消息数(含自身);`1` 表示无需组装。
     pub parts: u32,
@@ -297,7 +298,7 @@ pub enum DownloadDetailUpdate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PcmChunk {
     /// 播放代次:起播 / seek / 切输入格式 / 上游断开时 +1;client 据此重置 FFT 窗口。
-    pub generation: u64,
+    pub generation: Revision,
 
     /// 本块首个样本的绝对流位置(样本数,单调)。
     pub position: u64,
@@ -448,7 +449,7 @@ pub const DOWNLOAD_DETAIL_PART_ROWS: usize = 512;
 ///   按发送顺序排列的消息。
 pub fn fragment_player_update(
     subscription: SubscriptionId,
-    version: u64,
+    version: Revision,
     mut sync: PlayerSync,
 ) -> Vec<SessionMessage> {
     let queue = sync.queue.take();
@@ -523,7 +524,7 @@ pub fn fragment_player_update(
 ///   按发送顺序排列的消息。
 pub fn fragment_download_detail(
     subscription: SubscriptionId,
-    version: u64,
+    version: Revision,
     rows: Vec<SongDownloadView>,
 ) -> Vec<SessionMessage> {
     let total = u32::try_from(rows.len()).unwrap_or(u32::MAX);

@@ -30,6 +30,7 @@ parking_lot          = { workspace = true }
 mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-client       = { workspace = true }
+mineral-common       = { workspace = true }
 mineral-config       = { workspace = true }
 mineral-config-macros = { workspace = true }
 num-traits           = { workspace = true }

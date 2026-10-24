@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mineral_audio::{AudioHandle, AudioSnapshot};
+use mineral_common::revision::Revision;
 use mineral_protocol::{
     DownloadDetailDelta, DownloadDetailUpdate, DownloadSummary, Event, SongDownloadView,
 };
@@ -181,7 +182,7 @@ struct PlaybackSignature {
     backend: mineral_audio::AudioBackend,
 
     /// 轨道令牌。
-    current_track_token: u64,
+    current_track_token: Revision,
 
     /// 预排时长。
     next_duration_ms: Option<u64>,

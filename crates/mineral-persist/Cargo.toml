@@ -9,6 +9,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+mineral-common = { workspace = true }
 thiserror   = { workspace = true }
 sea-orm     = { workspace = true }
 tokio       = { workspace = true }

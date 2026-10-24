@@ -2,13 +2,13 @@
 //! 队列计算([`crate::queue`])与播放模式切换直接读写其字段。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use mineral_common::revision::Revision;
 use mineral_model::{Envelope, PlaybackMediaInfo, Song, SongId};
 use mineral_playback::DirectMedia;
 use mineral_protocol::{
     AdvanceKind, CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
-    QueueSync, SegmentVersion,
+    QueueSync,
 };
 use tokio::sync::watch;
 
@@ -20,30 +20,20 @@ use crate::playback_instance::{PlaybackInstanceId, PlaybackSlot};
 /// 只发布单调 generation。每个订阅者被唤醒后按自己的已知版本读取状态,
 /// 仅克隆版本不一致的重段。
 pub(crate) struct StatePublisher {
-    /// 最新 generation(初始 0 = 无变更)。
-    tx: watch::Sender<u64>,
-
-    /// 下一个 generation 值。
-    next: AtomicU64,
+    /// 最新修订；订阅者等待变更后读取业务快照。
+    tx: watch::Sender<Revision>,
 }
 
 impl StatePublisher {
     /// 创建发布器与订阅端。
-    pub(crate) fn new() -> (Arc<Self>, watch::Receiver<u64>) {
-        let (tx, rx) = watch::channel(0_u64);
-        (
-            Arc::new(Self {
-                tx,
-                next: AtomicU64::new(0),
-            }),
-            rx,
-        )
+    pub(crate) fn new() -> (Arc<Self>, watch::Receiver<Revision>) {
+        let (tx, rx) = watch::channel(Revision::default());
+        (Arc::new(Self { tx }), rx)
     }
 
     /// 发布一次变更(无订阅者时静默)。
     fn publish(&self) {
-        let value = self.next.fetch_add(1, Ordering::Relaxed).saturating_add(1);
-        let _ = self.tx.send(value);
+        self.tx.send_modify(|revision| *revision = revision.next());
     }
 }
 
@@ -121,13 +111,12 @@ pub(crate) struct State {
     /// (见 [`Self::invalidate_prefetch`])。
     pub(crate) prefetch_vetoed: Vec<usize>,
 
-    /// queue + original_queue 的版本号。从 [`SegmentVersion::FIRST`] 起步(0 = client
-    /// 一无所有),变更处经 [`Self::bump_queue`] 推进;[`Self::sync`] 据此决定是否
-    /// 附带 queue 重段。
-    pub(crate) queue_version: SegmentVersion,
+    /// queue + original_queue 的修订；变更经 [`Self::bump_queue`] 推进，
+    /// [`Self::sync`] 据此决定是否附带 queue 重段。
+    pub(crate) queue_version: Revision,
 
     /// current_song / media facts / lyrics 的版本号,语义同 `queue_version`。
-    pub(crate) current_version: SegmentVersion,
+    pub(crate) current_version: Revision,
 
     /// 变更发布器(单测的 `State::empty` 为 `None`)。
     pub(crate) publisher: Option<Arc<StatePublisher>>,
@@ -154,8 +143,8 @@ impl State {
             current_lyrics_song_id: None,
             prefetch: PrefetchState::default(),
             prefetch_vetoed: Vec::new(),
-            queue_version: SegmentVersion::FIRST,
-            current_version: SegmentVersion::FIRST,
+            queue_version: Revision::default(),
+            current_version: Revision::default(),
             publisher: None,
         }
     }
@@ -200,16 +189,16 @@ impl State {
     /// 与版本号读取在同一把锁内(caller 持锁调用),无「版本与数据错位」竞态。
     ///
     /// # Params:
-    ///   - `known`: client 已持有的版本号(0 = 一无所有)
+    ///   - `known`: client 已持有的修订，`None` 表示尚未收到
     ///
     /// # Return:
     ///   组装好的 [`PlayerSync`]。
     pub(crate) fn sync(&self, known: PlayerVersions) -> PlayerSync {
-        let queue = (known.queue != self.queue_version).then(|| QueueSync {
+        let queue = (known.queue != Some(self.queue_version)).then(|| QueueSync {
             queue: self.queue.clone(),
             original_queue: self.original_queue.clone(),
         });
-        let current = (known.current != self.current_version).then(|| CurrentSync {
+        let current = (known.current != Some(self.current_version)).then(|| CurrentSync {
             current_song: self.current_song.clone(),
             direct_media: self.direct_media.clone(),
             media_info: self.media_info.clone(),
@@ -228,8 +217,8 @@ impl State {
         });
         PlayerSync {
             versions: PlayerVersions {
-                queue: self.queue_version,
-                current: self.current_version,
+                queue: Some(self.queue_version),
+                current: Some(self.current_version),
             },
             cursor: self.cursor,
             play_mode: self.play_mode,
@@ -288,13 +277,14 @@ impl State {
 #[cfg(test)]
 mod tests {
     use color_eyre::eyre::eyre;
-    use mineral_protocol::{PlayCursor, PlayMode, PlayerVersions, SegmentVersion};
+    use mineral_common::revision::Revision;
+    use mineral_protocol::{PlayCursor, PlayMode, PlayerVersions};
     use mineral_test::song;
     use pretty_assertions::assert_eq;
 
     use super::State;
 
-    /// 造一个有 queue + current 的 State(版本仍是初始 1/1)。
+    /// 造一个有 queue + current 的 State，修订仍为初始值。
     fn populated() -> State {
         let mut st = State::empty();
         st.queue = vec![song("a"), song("b")];
@@ -304,13 +294,13 @@ mod tests {
         st
     }
 
-    /// known=0(client 一无所有)必然落后 → 两重段全量返回,轻段字段同出。
+    /// client 尚无已知修订时，两重段全量返回，轻段字段同出。
     #[test]
-    fn sync_zero_versions_gets_full_payload() -> color_eyre::Result<()> {
+    fn sync_unknown_versions_gets_full_payload() -> color_eyre::Result<()> {
         let st = populated();
         let sync = st.sync(PlayerVersions::default());
-        assert_eq!(sync.versions.queue, SegmentVersion::FIRST);
-        assert_eq!(sync.versions.current, SegmentVersion::FIRST);
+        assert_eq!(sync.versions.queue, Some(Revision::default()));
+        assert_eq!(sync.versions.current, Some(Revision::default()));
         assert_eq!(sync.cursor, PlayCursor::InQueue(1));
         assert_eq!(sync.play_mode, PlayMode::RepeatAll);
         let q = sync.queue.ok_or_else(|| eyre!("queue 重段应存在"))?;
@@ -326,8 +316,8 @@ mod tests {
     fn sync_matching_versions_light_only() {
         let st = populated();
         let sync = st.sync(PlayerVersions {
-            queue: SegmentVersion::FIRST,
-            current: SegmentVersion::FIRST,
+            queue: Some(Revision::default()),
+            current: Some(Revision::default()),
         });
         assert!(sync.queue.is_none());
         assert!(sync.current.is_none());
@@ -341,10 +331,10 @@ mod tests {
         let mut st = populated();
         st.bump_queue();
         let sync = st.sync(PlayerVersions {
-            queue: SegmentVersion::FIRST,
-            current: SegmentVersion::FIRST,
+            queue: Some(Revision::default()),
+            current: Some(Revision::default()),
         });
-        assert_eq!(sync.versions.queue, SegmentVersion::new(2));
+        assert_eq!(sync.versions.queue, Some(Revision::default().next()));
         assert!(sync.queue.is_some());
         assert!(sync.current.is_none());
     }
@@ -355,10 +345,10 @@ mod tests {
         let mut st = populated();
         st.bump_current();
         let sync = st.sync(PlayerVersions {
-            queue: SegmentVersion::FIRST,
-            current: SegmentVersion::FIRST,
+            queue: Some(Revision::default()),
+            current: Some(Revision::default()),
         });
-        assert_eq!(sync.versions.current, SegmentVersion::new(2));
+        assert_eq!(sync.versions.current, Some(Revision::default().next()));
         assert!(sync.queue.is_none());
         assert!(sync.current.is_some());
     }

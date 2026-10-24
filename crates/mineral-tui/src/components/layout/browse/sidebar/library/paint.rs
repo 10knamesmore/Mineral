@@ -620,6 +620,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::runtime::state::AppState;
+    use mineral_common::revision::Revision;
 
     /// 用本视图渲染入口画一帧(`60×12` ⇒ body 视口 = 12 - 边框 2 - 表头 1 = 9 行)。
     fn draw_lib(t: &mut Terminal<TestBackend>, state: &mut AppState) -> color_eyre::Result<()> {
@@ -695,7 +696,7 @@ mod tests {
         state.models.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p1"),
             crate::runtime::state::CollectionTracks {
-                revision: 0,
+                revision: Revision::default(),
                 entries: vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
                 complete: true,
                 next_offset: None,

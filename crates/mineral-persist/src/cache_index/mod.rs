@@ -5,8 +5,8 @@
 //!
 //! 读路径全 **sync**(内存镜像):供 `resolve_local` 在 sync 播放解析里命中本地副本。命中只是
 //! 优化、永不是正确性依赖——任何漂移(文件缺失)一律当 miss,内存删项自愈;DB 里的死记录由下次
-//! `open` 的启动对账清掉。`last_access`(LRU 提示)与漂移删除**只改内存、不落库**:重启后 LRU
-//! 退化成近似,可接受。真正 durable 的写(入库 / 驱逐)走 async 写穿透。
+//! `open` 的启动对账清掉。读取命中时的 `last_access` 更新与漂移删除只改内存；
+//! 条目写入时的访问修订会落库，重启后据此恢复近似 LRU 顺序。入库 / 驱逐走 async 写穿透。
 
 mod file_cache;
 mod file_placement;

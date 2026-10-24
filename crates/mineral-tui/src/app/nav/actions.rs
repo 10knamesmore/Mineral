@@ -600,6 +600,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use mineral_common::revision::Revision;
     use mineral_model::{PlaylistId, SourceKind};
 
     use crate::app::App;
@@ -1006,13 +1007,13 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
-                revision: 1,
+                revision: Revision::default().next(),
                 entries: views,
                 complete: true,
                 next_offset: None,
             },
         );
-        app.state.models.library.tracks_generation = 1;
+        app.state.models.library.tracks_generation = Revision::default().next();
 
         press(&mut app, KeyCode::Char('/'));
         for c in "春日影".chars() {
@@ -1068,13 +1069,13 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
-                revision: 1,
+                revision: Revision::default().next(),
                 entries: views,
                 complete: true,
                 next_offset: None,
             },
         );
-        app.state.models.library.tracks_generation = 1;
+        app.state.models.library.tracks_generation = Revision::default().next();
 
         press(&mut app, KeyCode::Char('/'));
         for c in "春日影".chars() {
@@ -1150,7 +1151,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             id.clone(),
             crate::runtime::state::CollectionTracks {
-                revision: 0,
+                revision: Revision::default(),
                 entries: crate::test_support::entry_views(vec![mineral_test::song("1")]),
                 complete: false,
                 next_offset: None,
@@ -1329,13 +1330,13 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid.clone(),
             crate::runtime::state::CollectionTracks {
-                revision: 1,
+                revision: Revision::default().next(),
                 entries: views,
                 complete: true,
                 next_offset: None,
             },
         );
-        app.state.models.library.tracks_generation = 1;
+        app.state.models.library.tracks_generation = Revision::default().next();
         app.state.ui.browse.nav.track_pos.insert(
             pid.into(),
             TrackPos {

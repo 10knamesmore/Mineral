@@ -2,15 +2,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use mineral_channel_core::MusicChannel;
+use mineral_common::revision::Revision;
 use mineral_model::BitRate;
 use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{DownloadId, DownloadStatus, DownloadSummary, SongDownloadView};
 use parking_lot::Mutex;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::state::ManagerState;
@@ -67,10 +67,7 @@ pub(super) struct ManagerInner {
     pub(super) wake: Notify,
 
     /// 明细变更 generation:订阅者被唤醒后拉取快照 / 增量。
-    pub(super) changes: tokio::sync::watch::Sender<u64>,
-
-    /// 下一个变更 generation。
-    pub(super) change_seq: AtomicU64,
+    pub(super) changes: watch::Sender<Revision>,
 
     /// Wakes graceful shutdown waiters after active-attempt changes.
     pub(super) quiesced: Notify,
@@ -87,14 +84,13 @@ impl DownloadManager {
     ///   - `quality`: Quality applied to new submissions.
     ///   - `max_concurrent`: Maximum active Song attempts, validated as positive by config loading.
     pub(crate) fn spawn(runtime: DownloadRuntime, quality: BitRate, max_concurrent: usize) -> Self {
-        let (changes, _changes_rx) = tokio::sync::watch::channel(0_u64);
+        let (changes, _changes_rx) = watch::channel(Revision::default());
         let manager = Self {
             inner: Arc::new(ManagerInner {
                 runtime,
                 state: Mutex::new(ManagerState::new(quality, max_concurrent)),
                 wake: Notify::new(),
                 changes,
-                change_seq: AtomicU64::new(0),
                 quiesced: Notify::new(),
                 shutdown: CancellationToken::new(),
             }),
@@ -122,18 +118,15 @@ impl DownloadManager {
     }
 
     /// 明细变更订阅端(初值为当前 generation)。
-    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub(crate) fn changes(&self) -> watch::Receiver<Revision> {
         self.inner.changes.subscribe()
     }
 
     /// 发布一次明细变更(无订阅者时静默)。
     pub(super) fn bump(&self) {
-        let next = self
-            .inner
-            .change_seq
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        let _ = self.inner.changes.send(next);
+        self.inner
+            .changes
+            .send_modify(|revision| *revision = revision.next());
     }
 
     /// Returns the small per-tick summary.

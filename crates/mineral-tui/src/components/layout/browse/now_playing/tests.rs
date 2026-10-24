@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use color_eyre::eyre::eyre;
+use mineral_common::revision::Revision;
 use mineral_model::MediaUrl;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -39,7 +40,7 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
     state.models.library.tracks.insert(
         playlist_id,
         crate::runtime::state::CollectionTracks {
-            revision: 0,
+            revision: Revision::default(),
             entries: entry_views(vec![song("entry"), selected]),
             complete: true,
             next_offset: None,

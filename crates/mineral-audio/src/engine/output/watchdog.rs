@@ -2,6 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use mineral_common::revision::Revision;
+
 /// 当前播放是否应该持续收到 output callback。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum OutputActivity {
@@ -22,7 +24,7 @@ pub(super) struct WatchdogSample {
     pub(super) activity: OutputActivity,
 
     /// output data callback 的当前调用序号。
-    pub(super) callback_sequence: u64,
+    pub(super) callback_sequence: Revision,
 }
 
 /// 通过 callback 序号判断系统输出 stream 是否停止回调。
@@ -31,7 +33,7 @@ pub(super) struct OutputWatchdog {
     timeout: Duration,
 
     /// 上次观测到的 callback 序号。
-    last_callback_sequence: Option<u64>,
+    last_callback_sequence: Option<Revision>,
 
     /// 当前连续无 callback 的起点；idle 或序号推进时清空。
     stalled_since: Option<Instant>,
@@ -85,6 +87,8 @@ impl OutputWatchdog {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use mineral_common::revision::Revision;
+
     use super::{OutputActivity, OutputWatchdog, WatchdogSample};
 
     #[test]
@@ -96,27 +100,27 @@ mod tests {
         assert!(!watchdog.should_restart(WatchdogSample {
             observed_at: started_at,
             activity: OutputActivity::Idle,
-            callback_sequence: 7,
+            callback_sequence: Revision::default(),
         }));
         assert!(!watchdog.should_restart(WatchdogSample {
             observed_at: started_at + timeout,
             activity: OutputActivity::Active,
-            callback_sequence: 7,
+            callback_sequence: Revision::default(),
         }));
         assert!(!watchdog.should_restart(WatchdogSample {
             observed_at: started_at + timeout + timeout - Duration::from_millis(/*millis*/ 1),
             activity: OutputActivity::Active,
-            callback_sequence: 7,
+            callback_sequence: Revision::default(),
         }));
         assert!(watchdog.should_restart(WatchdogSample {
             observed_at: started_at + timeout + timeout,
             activity: OutputActivity::Active,
-            callback_sequence: 7,
+            callback_sequence: Revision::default(),
         }));
         assert!(!watchdog.should_restart(WatchdogSample {
             observed_at: started_at + timeout + timeout + timeout,
             activity: OutputActivity::Active,
-            callback_sequence: 8,
+            callback_sequence: Revision::default().next(),
         }));
     }
 }

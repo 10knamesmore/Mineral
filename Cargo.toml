@@ -3,6 +3,7 @@ members = [
     "crates/mineral",
     "crates/mineral-audio",
     "crates/mineral-cli",
+    "crates/mineral-common",
     "crates/mineral-log",
     "crates/mineral-task",
     "crates/mineral-tui",
@@ -70,6 +71,7 @@ symphonia          = { version = "0.6.1", default-features = false, features = [
 mlua               = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
 mineral-audio           = { path = "crates/mineral-audio", version = "0.5.10" }
 mineral-cli             = { path = "crates/mineral-cli", version = "0.5.10" }
+mineral-common          = { path = "crates/mineral-common", version = "0.5.10" }
 mineral-log             = { path = "crates/mineral-log", version = "0.5.10" }
 mineral-task            = { path = "crates/mineral-task", version = "0.5.10" }
 mineral-tui             = { path = "crates/mineral-tui", version = "0.5.10", default-features = false }

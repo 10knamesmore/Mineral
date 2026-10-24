@@ -3033,6 +3033,7 @@ dependencies = [
  "color-eyre",
  "cpal",
  "derive-getters",
+ "mineral-common",
  "mineral-log",
  "mineral-model",
  "mineral-playback",
@@ -3224,6 +3225,7 @@ dependencies = [
  "color-eyre",
  "mineral-audio",
  "mineral-channel-core",
+ "mineral-common",
  "mineral-log",
  "mineral-model",
  "mineral-protocol",
@@ -3238,6 +3240,13 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "mineral-common"
+version = "0.5.10"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -3337,6 +3346,7 @@ name = "mineral-persist"
 version = "0.5.10"
 dependencies = [
  "color-eyre",
+ "mineral-common",
  "mineral-log",
  "parking_lot",
  "rustc-hash 2.1.2",
@@ -3377,6 +3387,7 @@ dependencies = [
  "futures-util",
  "mineral-audio",
  "mineral-channel-core",
+ "mineral-common",
  "mineral-model",
  "mineral-task",
  "mineral-test",
@@ -3431,6 +3442,7 @@ dependencies = [
  "mineral-audio",
  "mineral-channel-core",
  "mineral-channel-mineral",
+ "mineral-common",
  "mineral-config",
  "mineral-config-macros",
  "mineral-log",
@@ -3552,6 +3564,7 @@ dependencies = [
  "mineral-audio",
  "mineral-channel-core",
  "mineral-client",
+ "mineral-common",
  "mineral-config",
  "mineral-config-macros",
  "mineral-log",

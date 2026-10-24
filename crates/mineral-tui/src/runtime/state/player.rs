@@ -30,13 +30,13 @@ pub struct PlayerMirror {
     /// 非 Shuffle 状态恒为 `None`。
     pub original_queue: Option<Vec<Song>>,
 
-    /// 上次已应用的 server 状态版本号(每 tick 随 PlayerSync 回报;0 = 还没同步过,
-    /// 首次同步必然全量)。
+    /// 上次已应用的 server 状态版本(每 tick 随 PlayerSync 回报)。某片段为 `None`
+    /// 表示还没有已知版本，首次同步必然附带该片段。
     pub versions: mineral_protocol::PlayerVersions,
 }
 
 impl PlayerMirror {
-    /// 构造空镜像(无在播、空队列、版本归零)。
+    /// 构造空镜像(无在播、空队列、版本未知)。
     pub(crate) fn new() -> Self {
         Self {
             current: None,

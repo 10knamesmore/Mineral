@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use mineral_common::revision::Revision;
 use mineral_model::MediaUrl;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -23,7 +24,7 @@ pub(crate) struct InlineImage {
     area: Rect,
 
     /// 编码所属终端协议代次，切换协议后不能继续使用。
-    generation: u64,
+    generation: Revision,
 }
 
 impl InlineImage {

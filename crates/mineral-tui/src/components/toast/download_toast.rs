@@ -3,6 +3,7 @@
 //! [`DownloadNotifier`] 持有 wave sequence 去重状态，每帧把 active/queued summary 喂成 live toast，
 //! 把一波下载的结果翻译成一条完成 flash。
 
+use mineral_common::revision::Revision;
 use mineral_protocol::{DownloadSummary, DownloadWave};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -18,15 +19,15 @@ use crate::render::theme::Theme;
 
 /// 下载 → 通知层的翻译器,持有下载专属去重状态。
 pub(crate) struct DownloadNotifier {
-    /// 已消费到的 wave sequence；增长一次只发一条完成 flash。
-    last_wave_sequence: u64,
+    /// 已消费的下载批次修订；`None` 表示尚未显示过完成提示。
+    last_wave_sequence: Option<Revision>,
 }
 
 impl DownloadNotifier {
     /// 新建翻译器。
     pub(crate) fn new() -> Self {
         Self {
-            last_wave_sequence: 0,
+            last_wave_sequence: None,
         }
     }
 
@@ -39,9 +40,9 @@ impl DownloadNotifier {
     ///   - `summary`: 本帧拉到的小型下载汇总
     pub(crate) fn feed(&mut self, n: &mut Notifications, summary: &DownloadSummary) {
         if let Some(wave) = &summary.latest_wave
-            && wave.sequence != self.last_wave_sequence
+            && Some(wave.sequence) != self.last_wave_sequence
         {
-            self.last_wave_sequence = wave.sequence;
+            self.last_wave_sequence = Some(wave.sequence);
             n.flash(complete(wave.clone()));
         }
         let active = summary.active > 0 || summary.queued > 0 || summary.preparing_playlists > 0;

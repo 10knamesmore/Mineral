@@ -2,10 +2,11 @@
 
 use std::num::{NonZeroU16, NonZeroU32};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, StreamError};
+use mineral_common::revision::{AtomicRevision, Revision};
 
 use super::devices;
 use crate::decoder::PcmFormat;
@@ -28,8 +29,8 @@ pub(super) struct DeviceStream {
     /// 系统异步报告的流错误。
     failed: Arc<AtomicBool>,
 
-    /// 输出回调次数，用于停滞检测。
-    callback_sequence: Arc<AtomicU64>,
+    /// 输出回调修订，用于停滞检测。
+    callback_sequence: Arc<AtomicRevision>,
 }
 
 impl DeviceStream {
@@ -37,7 +38,7 @@ impl DeviceStream {
     pub(super) fn open(
         target: OutputTarget,
         playback: Arc<SharedPlayback>,
-        generation: u64,
+        generation: Revision,
     ) -> Result<Self> {
         let device = devices::resolve(&target)?;
         let (device_id, device_name) = devices::describe(&device)?;
@@ -56,7 +57,7 @@ impl DeviceStream {
             sample_rate,
         };
         let failed = Arc::new(AtomicBool::new(false));
-        let callback_sequence = Arc::new(AtomicU64::new(0));
+        let callback_sequence = Arc::new(AtomicRevision::default());
         let state = CallbackState {
             playback,
             format,
@@ -90,8 +91,8 @@ impl DeviceStream {
         self.failed.load(Ordering::Relaxed)
     }
 
-    /// 当前输出回调次数。
-    pub(super) fn callback_sequence(&self) -> u64 {
+    /// 当前输出回调修订。
+    pub(super) fn callback_sequence(&self) -> Revision {
         self.callback_sequence.load(Ordering::Relaxed)
     }
 
@@ -114,13 +115,13 @@ struct CallbackState {
 
     format: PcmFormat,
 
-    generation: u64,
+    generation: Revision,
 
     /// 异步错误标记。
     failed: Arc<AtomicBool>,
 
     /// 数据回调计数。
-    sequence: Arc<AtomicU64>,
+    sequence: Arc<AtomicRevision>,
 }
 
 /// 按系统样本类型建立输出回调。
@@ -161,7 +162,7 @@ where
         .build_output_stream::<T, _, _>(
             config,
             move |data, _| {
-                sequence.fetch_add(1, Ordering::Relaxed);
+                sequence.next(Ordering::Relaxed);
                 playback.render(data, format, generation);
             },
             move |error| match error {

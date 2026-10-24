@@ -51,7 +51,7 @@ impl AppState {
                 }
                 if has_removed_playlists {
                     self.models.library.tracks_generation =
-                        self.models.library.tracks_generation.wrapping_add(1);
+                        self.models.library.tracks_generation.next();
                 }
                 self.models.library.playlists = incoming_playlists;
             }
@@ -106,7 +106,7 @@ impl AppState {
                     .map(|data| self.decorate_entry(data))
                     .collect();
                 self.models.library.tracks_generation =
-                    self.models.library.tracks_generation.wrapping_add(1);
+                    self.models.library.tracks_generation.next();
                 self.models.library.tracks.insert(
                     id.clone(),
                     CollectionTracks {
@@ -193,7 +193,7 @@ impl AppState {
                     .map(|entry| self.decorate_entry(entry))
                     .collect();
                 self.models.library.tracks_generation =
-                    self.models.library.tracks_generation.wrapping_add(1);
+                    self.models.library.tracks_generation.next();
                 self.models.library.album_tracks.insert(
                     id.clone(),
                     CollectionTracks {
@@ -257,7 +257,7 @@ impl AppState {
                     self.ui.browse.view.switch_to(super::View::Collections);
                 }
                 self.models.library.tracks_generation =
-                    self.models.library.tracks_generation.wrapping_add(1);
+                    self.models.library.tracks_generation.next();
                 self.ui.browse.invalidate_expansions();
                 mineral_log::debug!(target: "tui", albums = albums.len(), "saved album library updated");
             }

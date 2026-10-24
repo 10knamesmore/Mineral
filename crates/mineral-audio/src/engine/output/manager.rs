@@ -3,6 +3,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mineral_common::revision::Revision;
+
 use super::devices;
 use super::stream::DeviceStream;
 use super::watchdog::{OutputActivity, OutputWatchdog, WatchdogSample};
@@ -21,7 +23,7 @@ pub(crate) struct Output {
     playback: Arc<SharedPlayback>,
 
     /// Only callbacks from the committed stream may consume PCM.
-    generation: u64,
+    generation: Revision,
 
     /// 用户选择的设备策略，不因设备断开而改成其他设备。
     target: OutputTarget,
@@ -42,7 +44,7 @@ impl Output {
         let mut output = Self {
             stream: None,
             playback,
-            generation: 0,
+            generation: Revision::default(),
             target: OutputTarget::SystemDefault,
             system_default_id: devices::default_id(),
             last_device_check: Instant::now(),
@@ -70,7 +72,7 @@ impl Output {
     /// 目标流启动成功后才替换当前流；失败时保留当前输出和播放位置。
     pub(crate) fn select(&mut self, target: OutputTarget) -> crate::Result<()> {
         mineral_log::info!(target: "audio", selection = ?target, "opening audio output");
-        let generation = self.generation + 1;
+        let generation = self.generation.next();
         let stream = DeviceStream::open(target.clone(), Arc::clone(&self.playback), generation)?;
         mineral_log::info!(target: "audio", device_id = %stream.info.device_id, device_name = %stream.info.device_name, sample_rate_hz = stream.info.sample_rate_hz, channels = stream.info.channels, sample_format = %stream.info.sample_format, "audio output selected");
         self.playback.configure(stream.format, generation)?;
@@ -138,7 +140,7 @@ impl Output {
         }) {
             return;
         }
-        mineral_log::warn!(target: "audio", position_ms, callback_sequence = sequence, "audio output callback stalled; restarting stream");
+        mineral_log::warn!(target: "audio", position_ms, callback_sequence = ?sequence, "audio output callback stalled; restarting stream");
         match stream.restart() {
             Ok(()) => {
                 mineral_log::info!(target: "audio", position_ms, "audio output stream restarted")

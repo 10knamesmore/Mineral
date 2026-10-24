@@ -114,7 +114,7 @@ impl DownloadManager {
         }
         let id = DownloadId::new(uuid::Uuid::new_v4().to_string());
         let admission_order = state.next_admission;
-        state.next_admission = state.next_admission.wrapping_add(1);
+        state.next_admission = state.next_admission.next();
         let quality = state.quality;
         let row = SongDownload {
             view: SongDownloadView {

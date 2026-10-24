@@ -3,6 +3,7 @@
 //! [`PlayMode`] 同时提供队列推进语义、持久化与脚本字符串,以及 transport 控件使用的
 //! glyph / label;[`PlayerSync`] 按版本拆分轻量状态与可选重段。
 
+use mineral_common::revision::Revision;
 use mineral_model::{DirectMedia, Envelope, PlaybackMediaInfo, Song, SongId};
 use serde::{Deserialize, Serialize};
 
@@ -246,50 +247,17 @@ impl PlayCursor {
     }
 }
 
-/// 播放状态中队列或当前曲片段的版本,用于判断同步时是否需要附带该片段。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SegmentVersion(u64);
-
-impl SegmentVersion {
-    /// 用裸值构造(协议测试 / 夹具用;业务推进走 [`Self::next`])。
-    ///
-    /// # Params:
-    ///   - `value`: 版本号裸值
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    /// 未初始化(镜像侧:重段还没到过)。
-    pub const ZERO: Self = Self(0);
-
-    /// 首个有效版本(daemon 侧:空队列也是有效状态,须 ≥1 表示已就绪)。
-    pub const FIRST: Self = Self(1);
-
-    /// 推进一版;达到 `u64::MAX` 时保持饱和。
-    #[must_use]
-    pub fn next(self) -> Self {
-        Self(self.0.saturating_add(1))
-    }
-
-    /// 是否从未变更(等于 `ZERO`)。
-    #[must_use]
-    pub fn is_initial(self) -> bool {
-        self.0 == 0
-    }
-}
-
 /// 队列与当前曲的版本组合。daemon 随 [`PlayerSync`] 下发,client 在订阅时携带已知版本。
 ///
-/// [`SegmentVersion::ZERO`] 表示尚未收到该片段;daemon 从 [`SegmentVersion::FIRST`]
-/// 起步,因此初次同步会附带完整数据。版本只在当前会话内使用,断连后不跨会话复用。
+/// `None` 表示尚未收到该片段，因此初次同步会附带完整数据。
+/// 版本只在当前会话内使用，断连后不跨会话复用。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerVersions {
     /// queue + original_queue 的版本。
-    pub queue: SegmentVersion,
+    pub queue: Option<Revision>,
 
     /// current song、media facts 与 lyrics 的版本。
-    pub current: SegmentVersion,
+    pub current: Option<Revision>,
 }
 
 /// 播放状态同步载荷:轻段始终携带,重段仅已知版本与 daemon 版本不一致时附带。

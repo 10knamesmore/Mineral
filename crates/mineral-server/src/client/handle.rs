@@ -1,12 +1,14 @@
 //! [`ClientHandle`]:daemon 内部业务调用面。
 
 use mineral_channel_core::ChannelCaps;
+use mineral_common::revision::Revision;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
     DownloadId, DownloadTarget, Event, PlayMode, PlayQueueError, PlayerSync, PlayerVersions,
     QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
 use mineral_task::{Priority, TaskEvent, TaskKind};
+use tokio::sync::watch;
 
 use super::wire::{edited_song_id, queue_context_from_wire, stats_queue_op};
 use crate::player::PlayerCore;
@@ -493,7 +495,7 @@ impl ClientHandle {
     }
 
     /// 播放状态变更订阅端。
-    pub(crate) fn state_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub(crate) fn state_changes(&self) -> watch::Receiver<Revision> {
         self.player.state_changes()
     }
 

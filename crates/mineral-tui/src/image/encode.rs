@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use image::DynamicImage;
+use mineral_common::revision::Revision;
 use parking_lot::Mutex;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
@@ -21,7 +22,7 @@ pub(crate) struct EncodeRequest {
     pub key: TerminalImageKey,
 
     /// 提交任务时的 terminal backend generation。
-    pub generation: u64,
+    pub generation: Revision,
 
     /// 待编码的缓存像素；行内缩略图与 rasterized 协议在 worker 内缩放。
     pub image: Arc<DynamicImage>,
@@ -36,7 +37,7 @@ pub(crate) struct EncodeResult {
     pub key: TerminalImageKey,
 
     /// 产生该结果的 terminal backend generation。
-    pub generation: u64,
+    pub generation: Revision,
 
     /// 编码好的终端图片成品，渲染线程只需 place。
     pub terminal_image: TerminalImage,

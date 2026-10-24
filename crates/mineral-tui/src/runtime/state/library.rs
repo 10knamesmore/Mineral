@@ -6,13 +6,14 @@
 use std::collections::hash_map::Entry;
 use std::time::Instant;
 
+use mineral_channel_core::PlaylistLoad;
+use mineral_common::revision::Revision;
 use mineral_model::{AlbumId, Lyrics, PlaylistId, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::playlist_tracks::{CollectionTracks, PlaylistRequests};
 use crate::runtime::collection::CollectionId;
 use crate::runtime::view_model::{AlbumView, PlaylistView};
-use mineral_channel_core::PlaylistLoad;
 
 /// 数据镜像/缓存域([`AppState`](crate::runtime::state::AppState) 的数据域)。
 pub struct LibraryData {
@@ -33,7 +34,7 @@ pub struct LibraryData {
 
     /// 曲目更新序号，给新内容分配集合版本，并通知集合列表重绘。
     /// 用户装饰不修改它。
-    pub tracks_generation: u64,
+    pub tracks_generation: Revision,
 
     /// 已交给统一提交层的歌单；容量不足由提交层保留并重试，prefetch 不重复登记。
     /// 远端任务失败或结果未知后不会自动重发。
@@ -170,7 +171,7 @@ impl LibraryData {
             album_tracks: FxHashMap::default(),
             albums_requested: FxHashMap::default(),
             tracks: FxHashMap::default(),
-            tracks_generation: 0,
+            tracks_generation: Revision::default(),
             tracks_requested: FxHashMap::default(),
             lyrics: FxHashMap::default(),
             liked_ids: FxHashMap::default(),

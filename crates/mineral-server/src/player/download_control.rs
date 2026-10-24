@@ -1,6 +1,8 @@
 //! 会话下载的提交、取消、状态查询与关停等待。
 
+use mineral_common::revision::Revision;
 use mineral_protocol::{DownloadId, DownloadSummary, DownloadTarget, SongDownloadView};
+use tokio::sync::watch;
 
 use super::PlayerCore;
 
@@ -16,7 +18,7 @@ impl PlayerCore {
     }
 
     /// 下载明细变更订阅端(领域发布器用)。
-    pub(crate) fn download_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub(crate) fn download_changes(&self) -> watch::Receiver<Revision> {
         self.inner.downloads.changes()
     }
 

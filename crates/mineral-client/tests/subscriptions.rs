@@ -8,10 +8,11 @@ use mineral_client::Client;
 use mineral_client::connection::ClientConfig;
 use mineral_client::operation::Outcome;
 use mineral_client::state::DownloadsDetailMirror;
+use mineral_common::revision::Revision;
 use mineral_protocol::{
     DownloadDetailDelta, DownloadDetailUpdate, DownloadId, DownloadOrigin, DownloadStatus,
-    DownloadSummary, MessageBatch, Request, SegmentVersion, SessionMessage, SessionResult,
-    SongDownloadView, SubscriptionId, SubscriptionTopic, UpdateEnvelope, UpdatePayload,
+    DownloadSummary, MessageBatch, Request, SessionMessage, SessionResult, SongDownloadView,
+    SubscriptionId, SubscriptionTopic, UpdateEnvelope, UpdatePayload,
 };
 use tokio::time::timeout;
 
@@ -90,7 +91,7 @@ async fn wait_resync(
 async fn send_update(
     wire: &mut Box<dyn mineral_protocol::Wire>,
     subscription: SubscriptionId,
-    version: u64,
+    version: Revision,
     payload: UpdatePayload,
 ) -> color_eyre::Result<()> {
     wire.send(MessageBatch::one(SessionMessage::Update(UpdateEnvelope {
@@ -117,9 +118,9 @@ async fn player_updates_are_version_gated() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                3,
+                Revision::default().next().next().next(),
                 UpdatePayload::Player {
-                    sync: Box::new(light_sync(/*cursor*/ 1, /*queue_version*/ 0)),
+                    sync: Box::new(light_sync(/*cursor*/ 1, None)),
                     queue_parts: 0,
                 },
             )
@@ -130,7 +131,7 @@ async fn player_updates_are_version_gated() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                1,
+                Revision::default().next(),
                 UpdatePayload::Player {
                     sync: Box::new(full_sync(/*cursor*/ 0, /*queue*/ 2)),
                     queue_parts: 0,
@@ -141,7 +142,7 @@ async fn player_updates_are_version_gated() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                1,
+                Revision::default().next(),
                 UpdatePayload::Player {
                     sync: Box::new(full_sync(/*cursor*/ 0, /*queue*/ 5)),
                     queue_parts: 0,
@@ -152,9 +153,12 @@ async fn player_updates_are_version_gated() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                2,
+                Revision::default().next().next(),
                 UpdatePayload::Player {
-                    sync: Box::new(light_sync(/*cursor*/ 1, /*queue_version*/ 1)),
+                    sync: Box::new(light_sync(
+                        /*cursor*/ 1,
+                        Some(Revision::default().next()),
+                    )),
                     queue_parts: 0,
                 },
             )
@@ -199,7 +203,7 @@ async fn playback_anchor_advances_locally() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                1,
+                Revision::default().next(),
                 UpdatePayload::Playback(Box::new(mineral_audio::AudioSnapshot {
                     playing: true,
                     position_ms: 1_000,
@@ -250,14 +254,14 @@ async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                1,
+                Revision::default().next(),
                 UpdatePayload::Tasks(Box::new(tasks)),
             )
             .await?;
             send_update(
                 &mut wire,
                 subscription,
-                2,
+                Revision::default().next().next(),
                 UpdatePayload::DownloadsSummary(DownloadSummary {
                     active: 2,
                     queued: 1,
@@ -270,7 +274,7 @@ async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                3,
+                Revision::default().next().next().next(),
                 UpdatePayload::Event(Box::new(mineral_protocol::Event::ServiceInfoChanged {
                     info: mineral_protocol::ServiceInfo {
                         queue_transforms: vec!["dedupe".to_owned()],
@@ -341,7 +345,7 @@ async fn downloads_detail_snapshot_and_delta() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                1,
+                Revision::default().next(),
                 UpdatePayload::DownloadsDetailSnapshot(vec![
                     row("a", DownloadStatus::Downloading, 1),
                     row("b", DownloadStatus::Queued, 0),
@@ -352,7 +356,7 @@ async fn downloads_detail_snapshot_and_delta() -> color_eyre::Result<()> {
             send_update(
                 &mut wire,
                 subscription,
-                2,
+                Revision::default().next().next(),
                 UpdatePayload::DownloadsDetailDelta(DownloadDetailDelta {
                     order: Some(vec![
                         DownloadId::new("c".to_owned()),
@@ -440,7 +444,7 @@ async fn late_updates_after_unsubscribe_are_ignored() -> color_eyre::Result<()> 
             send_update(
                 &mut wire,
                 subscription,
-                1,
+                Revision::default().next(),
                 UpdatePayload::DownloadsDetailSnapshot(vec![row(
                     "a",
                     DownloadStatus::Downloading,
@@ -462,7 +466,7 @@ async fn late_updates_after_unsubscribe_are_ignored() -> color_eyre::Result<()> 
             send_update(
                 &mut wire,
                 subscription,
-                2,
+                Revision::default().next().next(),
                 UpdatePayload::DownloadsDetailSnapshot(vec![row(
                     "zombie",
                     DownloadStatus::Downloading,
@@ -506,11 +510,11 @@ async fn late_updates_after_unsubscribe_are_ignored() -> color_eyre::Result<()> 
 }
 
 /// 造一条只带轻段的播放同步(`queue_version` 是 daemon 当前队列版本,轻段要如实带)。
-fn light_sync(cursor: usize, queue_version: u64) -> mineral_protocol::PlayerSync {
+fn light_sync(cursor: usize, queue_version: Option<Revision>) -> mineral_protocol::PlayerSync {
     mineral_protocol::PlayerSync {
         versions: mineral_protocol::PlayerVersions {
-            queue: SegmentVersion::new(queue_version),
-            current: SegmentVersion::ZERO,
+            queue: queue_version,
+            current: None,
         },
         cursor: mineral_protocol::PlayCursor::InQueue(cursor),
         ..mineral_protocol::PlayerSync::default()
@@ -521,8 +525,8 @@ fn light_sync(cursor: usize, queue_version: u64) -> mineral_protocol::PlayerSync
 fn full_sync(cursor: usize, queue: usize) -> mineral_protocol::PlayerSync {
     mineral_protocol::PlayerSync {
         versions: mineral_protocol::PlayerVersions {
-            queue: SegmentVersion::FIRST,
-            current: SegmentVersion::ZERO,
+            queue: Some(Revision::default().next()),
+            current: None,
         },
         cursor: mineral_protocol::PlayCursor::InQueue(cursor),
         queue: Some(mineral_protocol::QueueSync {
