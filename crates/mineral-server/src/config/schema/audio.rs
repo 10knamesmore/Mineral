@@ -3,6 +3,8 @@
 //! [`BackendKind`] 与音频层的后端模式语义对齐,但保持 config 与音频 crate 解耦——
 //! TUI 接线处做 `BackendKind → 音频后端模式` 映射,本枚举不依赖音频 crate。
 
+use std::num::NonZeroU32;
+
 use mineral_config_macros::{config_section, lua_enum};
 use mineral_model::BitRate;
 use serde::Deserialize;
@@ -23,6 +25,10 @@ pub struct AudioConfig {
 
     /// 音频引擎轮询间隔
     engine_tick_ms: u64,
+
+    /// 每首曲目的输出 PCM 缓冲时长，毫秒
+    #[lua_type("integer")]
+    pcm_buffer_ms: NonZeroU32,
 
     /// 起播预取字节数
     prefetch_bytes: u64,

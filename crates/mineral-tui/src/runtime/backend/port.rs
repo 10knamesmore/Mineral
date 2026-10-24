@@ -83,6 +83,9 @@ pub(crate) trait Backend: Send + Sync {
     /// 取走 PCM 近期窗口样本。
     fn drain_pcm(&self) -> Vec<f32>;
 
+    /// 渲染 PCM 的采样率，可能与音源采样率不同。
+    fn pcm_sample_rate(&self) -> Option<u32>;
+
     /// 取走 PCM 断续标记(换代 / 缺口)。
     fn take_pcm_discontinuity(&self) -> bool;
 

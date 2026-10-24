@@ -141,6 +141,7 @@ fn spawn_playback_publisher(audio: AudioHandle) -> watch::Receiver<Arc<AudioSnap
             let signature = PlaybackSignature::of(&snapshot);
             let changed = last_signature.as_ref() != Some(&signature);
             let reanchor = snapshot.playing
+                && !snapshot.buffering
                 && last_sent.elapsed() >= Duration::from_millis(PLAYBACK_REANCHOR_MS);
             if changed || reanchor {
                 last_signature = Some(signature);
@@ -152,7 +153,7 @@ fn spawn_playback_publisher(audio: AudioHandle) -> watch::Receiver<Arc<AudioSnap
     rx
 }
 
-/// 播放状态签名:位置之外的一切(位置由 client 本地推进,不进签名)。
+/// 连续播放的位置由 client 外推；暂停或缓冲期间的位置变化必须立即发布。
 #[derive(PartialEq, Eq)]
 struct PlaybackSignature {
     /// Successfully opened output device and stream configuration.
@@ -160,6 +161,12 @@ struct PlaybackSignature {
 
     /// 是否在出声。
     playing: bool,
+
+    /// Whether PCM supply has temporarily stopped media progress.
+    buffering: bool,
+
+    /// Seek remains observable while no media frames are being rendered.
+    stationary_position_ms: Option<u64>,
 
     /// 时长。
     duration_ms: Option<u64>,
@@ -195,6 +202,9 @@ impl PlaybackSignature {
         Self {
             output: snapshot.output.clone(),
             playing: snapshot.playing,
+            buffering: snapshot.buffering,
+            stationary_position_ms: (!snapshot.playing || snapshot.buffering)
+                .then_some(snapshot.position_ms),
             duration_ms: snapshot.duration_ms,
             volume_pct: snapshot.volume_pct,
             track_finished_seq: snapshot.track_finished_seq,

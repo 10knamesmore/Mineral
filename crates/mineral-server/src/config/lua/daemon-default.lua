@@ -9,6 +9,7 @@ return {
     backend = "auto",
     playback_quality = "exhigh",
     engine_tick_ms = 20,
+    pcm_buffer_ms = 200,
     prefetch_bytes = 256 * KB,
     tap_capacity = 8192,
     envelope = {

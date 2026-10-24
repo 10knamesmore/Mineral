@@ -165,6 +165,10 @@ impl Backend for ClientBackend {
         self.client.drain_pcm()
     }
 
+    fn pcm_sample_rate(&self) -> Option<u32> {
+        self.client.mirror().pcm_sample_rate()
+    }
+
     fn take_pcm_discontinuity(&self) -> bool {
         self.client.mirror().take_pcm_discontinuity()
     }

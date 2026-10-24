@@ -353,6 +353,10 @@ impl Backend for TestClient {
         self.pcm_discontinuity.swap(false, Ordering::SeqCst)
     }
 
+    fn pcm_sample_rate(&self) -> Option<u32> {
+        Some(self.playback.anchor().sample_rate_hz).filter(|rate| *rate != 0)
+    }
+
     fn pause(&self) {
         if let Ok(mut calls) = self.playback_controls.lock() {
             calls.push("pause");

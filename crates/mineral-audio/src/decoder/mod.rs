@@ -1,8 +1,6 @@
-//! Symphonia decoding with explicit completion and failure results.
-
+mod decode;
 mod error;
 mod reader;
-mod source;
 
+pub(crate) use decode::{DecodedAudio, Decoder, PcmFormat};
 pub use error::DecoderError;
-pub(crate) use source::{DecodeOutcome, Decoder, DecoderStatus};

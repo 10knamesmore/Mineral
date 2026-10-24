@@ -1,7 +1,6 @@
 //! Dedicated audio thread startup and command polling.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -9,11 +8,11 @@ use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 use super::output::Output;
-use super::playback::{Engine, pct_to_gain};
-use crate::command::AudioCommand;
+use super::playback::Engine;
+use super::render::SharedPlayback;
+use crate::command::{AudioCommand, SeekRequest};
 use crate::handle::{AudioMode, EngineParams};
 use crate::snapshot::{AudioBackend, AudioSnapshot};
-use crate::tap::SharedProd;
 
 /// Shared handles transferred into the dedicated audio thread.
 pub(crate) struct EngineIo {
@@ -21,7 +20,7 @@ pub(crate) struct EngineIo {
     pub(crate) snapshot: Arc<Mutex<AudioSnapshot>>,
 
     /// Latest-wins seek mailbox.
-    pub(crate) seek_mailbox: Arc<Mutex<Option<Duration>>>,
+    pub(crate) seek_mailbox: Arc<Mutex<Option<SeekRequest>>>,
 
     /// 快照写入信号:每轮 `update_snapshot` 后唤醒等待者(发布器即时推送)。
     pub(crate) snapshot_changes: Arc<Notify>,
@@ -29,14 +28,8 @@ pub(crate) struct EngineIo {
     /// Engine startup result channel.
     pub(crate) ready_tx: mpsc::SyncSender<crate::Result<()>>,
 
-    /// PCM spectrum tap producer.
-    pub(crate) tap_producer: SharedProd,
-
-    /// Current sample rate shared with the spectrum consumer.
-    pub(crate) sr_atomic: Arc<AtomicU32>,
-
-    /// 累计尝试写入 tap 的 mono 样本数(缺口辨认)。
-    pub(crate) tap_pushed: Arc<AtomicU64>,
+    /// Prepared PCM and playback state shared with workers and CPAL.
+    pub(crate) playback: Arc<SharedPlayback>,
 }
 
 /// Runs the audio engine until every command sender is dropped.
@@ -66,17 +59,17 @@ fn engine_main(
 ) -> crate::Result<()> {
     let output = match mode {
         AudioMode::ForceNull => None,
-        AudioMode::Auto => Some(Output::open(pct_to_gain(*params.initial_volume()))),
+        AudioMode::Auto => Some(Output::open(Arc::clone(&io.playback))),
     };
     let Some(output) = output else {
         io.snapshot.lock().backend = AudioBackend::Null;
         let _ = io.ready_tx.send(Ok(()));
         return run_null_mode(commands);
     };
-    let mut engine = Engine::new(output, &io.tap_producer, &io.sr_atomic, &io.tap_pushed);
+    let tick = Duration::from_millis(*params.tick_ms());
+    let mut engine = Engine::new(output, Arc::clone(&io.playback), tick);
     engine.update_snapshot(&io.snapshot);
     let _ = io.ready_tx.send(Ok(()));
-    let tick = Duration::from_millis(*params.tick_ms());
     loop {
         match commands.recv_timeout(tick) {
             Ok(command) => engine.handle_command(command),

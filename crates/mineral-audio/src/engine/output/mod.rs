@@ -1,8 +1,7 @@
-//! Audio output device discovery, stream ownership, and queue handoff.
+//! Device discovery and CPAL stream replacement over shared prepared PCM.
 
 mod devices;
 mod manager;
-mod source;
 mod stream;
 mod watchdog;
 

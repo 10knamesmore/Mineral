@@ -1,29 +1,27 @@
-//! Owns the player queue and replaces CPAL streams after successful device selection.
+//! Replaces CPAL streams after successful device selection while retaining playback state.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use parking_lot::Mutex;
-
 use super::devices;
-use super::source::QueueHandoff;
 use super::stream::DeviceStream;
 use super::watchdog::{OutputActivity, OutputWatchdog, WatchdogSample};
+use crate::engine::render::SharedPlayback;
 use crate::{AudioOutput, OutputDevice, OutputTarget};
 
 /// 系统默认路由检查间隔与回调停滞超时。
 const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-/// 引擎持有的播放器与可替换输出流。字段顺序使流先归还队列，再销毁播放器。
+/// 引擎持有的输出流；流代次决定哪个设备回调可以消费 PCM。
 pub(crate) struct Output {
     /// 实际系统输出；失去设备后为空。
     stream: Option<DeviceStream>,
 
-    /// 跨设备切换保留的播放控制面。
-    player: rodio::Player,
+    /// Playback and prepared PCM survive replacement of the device stream.
+    playback: Arc<SharedPlayback>,
 
-    /// 输出流销毁时归还同一个播放队列。
-    handoff: QueueHandoff,
+    /// Only callbacks from the committed stream may consume PCM.
+    generation: u64,
 
     /// 用户选择的设备策略，不因设备断开而改成其他设备。
     target: OutputTarget,
@@ -39,14 +37,12 @@ pub(crate) struct Output {
 }
 
 impl Output {
-    /// 创建播放器并尝试打开系统默认设备；没有设备时保留播放器等待后续选择。
-    pub(crate) fn open(initial_gain: f32) -> Self {
-        let (player, queue) = rodio::Player::new();
-        player.set_volume(initial_gain);
+    /// 尝试打开系统默认设备；没有设备时保留控制面等待后续选择。
+    pub(crate) fn open(playback: Arc<SharedPlayback>) -> Self {
         let mut output = Self {
             stream: None,
-            player,
-            handoff: Arc::new(Mutex::new(Some(queue))),
+            playback,
+            generation: 0,
             target: OutputTarget::SystemDefault,
             system_default_id: devices::default_id(),
             last_device_check: Instant::now(),
@@ -56,11 +52,6 @@ impl Output {
             mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "no output device; waiting for an available output");
         }
         output
-    }
-
-    /// 读取播放控制面，生命周期独立于具体输出设备。
-    pub(crate) fn player(&self) -> &rodio::Player {
-        &self.player
     }
 
     /// 读取已成功打开且未报告失效的输出配置。
@@ -79,9 +70,11 @@ impl Output {
     /// 目标流启动成功后才替换当前流；失败时保留当前输出和播放位置。
     pub(crate) fn select(&mut self, target: OutputTarget) -> crate::Result<()> {
         mineral_log::info!(target: "audio", selection = ?target, "opening audio output");
-        let stream = DeviceStream::open(target.clone(), Arc::clone(&self.handoff))?;
+        let generation = self.generation + 1;
+        let stream = DeviceStream::open(target.clone(), Arc::clone(&self.playback), generation)?;
         mineral_log::info!(target: "audio", device_id = %stream.info.device_id, device_name = %stream.info.device_name, sample_rate_hz = stream.info.sample_rate_hz, channels = stream.info.channels, sample_format = %stream.info.sample_format, "audio output selected");
-        // 有当前流时，销毁其回调会归还播放队列，由目标流继续读取。
+        self.playback.configure(stream.format, generation)?;
+        self.generation = generation;
         self.stream = Some(stream);
         self.target = target;
         self.system_default_id = devices::default_id();
@@ -93,7 +86,7 @@ impl Output {
     pub(crate) fn refresh_device(&mut self) {
         if self.stream.as_ref().is_some_and(DeviceStream::failed) {
             mineral_log::warn!(target: "audio", selection = ?self.target, "audio output lost; pausing playback");
-            self.player.pause();
+            self.playback.state.lock().paused = true;
             self.stream = None;
         }
         if self.last_device_check.elapsed() < DEVICE_CHECK_INTERVAL {
@@ -115,14 +108,14 @@ impl Output {
         if reopen {
             if let Err(error) = self.select(self.target.clone()) {
                 mineral_log::warn!(target: "audio", selection = ?self.target, error = mineral_log::chain(&error), "audio output route update failed; pausing playback");
-                self.player.pause();
+                self.playback.state.lock().paused = true;
                 self.stream = None;
             }
         } else if self.target == OutputTarget::SystemDefault
             && default_id.is_none()
             && self.stream.is_some()
         {
-            self.player.pause();
+            self.playback.state.lock().paused = true;
             self.stream = None;
             mineral_log::warn!(target: "audio", "system default output disappeared; pausing playback");
         }

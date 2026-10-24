@@ -470,7 +470,7 @@ impl SpectrumState {
     /// 一次 tick:推进条高 + peak。
     ///
     /// `volume_pct` 用于把 FFT 真值按 `vol/100` 缩放 —— 听感上"音量越大、条越高"。
-    /// FFT tap 在 rodio set_volume 之前,信号本身不随音量变,所以这里 UI 层手动配。
+    /// PCM 取样在输出音量增益之前，频谱显示在 UI 层随音量调整。
     ///
     /// 条高走效果器 ADSR 包络(`b += α × (target − b)`,α 由时间制旋钮折算):
     /// - `Some(targets)`:FFT 真值(= sustain),上升用 attack(快、贴鼓点),

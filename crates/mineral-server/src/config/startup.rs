@@ -57,6 +57,7 @@ impl ServerConfig {
             engine: EngineParams::builder()
                 .initial_volume(*audio.volume())
                 .tick_ms(*audio.engine_tick_ms())
+                .pcm_buffer_ms(*audio.pcm_buffer_ms())
                 .prefetch_bytes(*audio.prefetch_bytes())
                 .tap_capacity(*audio.tap_capacity())
                 .build(),
