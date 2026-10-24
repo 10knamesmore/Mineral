@@ -34,6 +34,7 @@ pub(crate) use browse::{BrowseModel, LibraryQueueProjection};
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
+pub(crate) use library_projection::LibraryUpdate;
 pub(crate) use list_expansion::{FilteredListFrame, ListExpansion, ListExpansionState};
 pub use lyric::LyricExtra;
 pub use overlay_reveal::OverlayReveal;

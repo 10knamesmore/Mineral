@@ -48,6 +48,7 @@ fn long_playlists() -> color_eyre::Result<(App, Arc<TestClient>)> {
     app.state.models.library.tracks.insert(
         id,
         CollectionTracks {
+            revision: 0,
             entries: entry_views(
                 (0..30)
                     .map(|i| with_name(song(&format!("t{i}")), &format!("Track {i:02}")))
@@ -136,6 +137,7 @@ fn clearing_playlist_filter_preserves_identity_and_screen_row() -> color_eyre::R
                 .collections
                 .test_search_mut()
                 .set_query("S");
+            app.state.refresh_collection_lists();
         }
         for _ in 0..40 {
             frame(&app)?;
@@ -179,12 +181,14 @@ fn clearing_track_filter_preserves_exact_occurrence() -> color_eyre::Result<()> 
     app.state.models.library.tracks.insert(
         id,
         CollectionTracks {
+            revision: app.state.models.library.tracks_generation + 1,
             entries: entry_views(entries),
             complete: true,
             next_offset: None,
         },
     );
     app.state.models.library.tracks_generation += 1;
+    app.state.refresh_collection_lists();
     press(&mut app, KeyCode::Char('l'));
     while !app.state.ui.browse.view.at_max() {
         app.state.ui.browse.view.tick();
@@ -267,6 +271,7 @@ fn deep_search_updates_keep_selection_during_navigation() -> color_eyre::Result<
         app.state.models.library.tracks.insert(
             target.clone(),
             CollectionTracks {
+                revision: app.state.models.library.tracks_generation + 1,
                 entries: entry_views(vec![with_name(song("spaced"), "a-b-c")]),
                 complete: true,
                 next_offset: None,

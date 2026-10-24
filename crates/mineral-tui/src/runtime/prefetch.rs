@@ -64,11 +64,7 @@ fn collect_cover_candidates(
     match state.ui.browse.view.current() {
         View::Collections => {
             // sel 是 filtered 索引,prefetch 邻居一律走 filtered,免得跟可视窗口错位。
-            let filtered = state
-                .ui
-                .browse
-                .collections
-                .rows(&state.models.library, &state.cfg);
+            let filtered = state.ui.browse.collections.rows(&state.models.library);
             let sel = state.ui.browse.collections.scroll().sel();
             let get = |i: usize| -> Option<(SourceKind, &MediaUrl)> {
                 let item = filtered.get(i)?;
@@ -490,11 +486,7 @@ fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
 /// 按过滤后的列表选择预取候选：光标优先，再向两侧扩展 `prefetch.radius` 行。
 fn nearby_collections(state: &AppState) -> Vec<CollectionRef<'_>> {
     let radius = *state.cfg.prefetch().radius();
-    let filtered = state
-        .ui
-        .browse
-        .collections
-        .rows(&state.models.library, &state.cfg);
+    let filtered = state.ui.browse.collections.rows(&state.models.library);
     let sel = state.ui.browse.collections.scroll().sel();
     let mut out = Vec::new();
     let mut consider = |idx: usize| {
@@ -1096,6 +1088,7 @@ mod tests {
         state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                revision: 0,
                 entries: views,
                 complete: true,
                 next_offset: None,

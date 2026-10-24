@@ -19,7 +19,38 @@ pub(super) struct CollectionListPosition {
     screen_row: usize,
 }
 
+/// 一批数据更新共用的父列表位置；业务事件仍按原顺序应用。
+#[derive(Default)]
+pub(crate) struct LibraryUpdate {
+    /// 首次曲库变化前的选择；没有曲库变化则不更新列表。
+    positions: Option<[CollectionListPosition; 2]>,
+}
+
+impl LibraryUpdate {
+    /// 首次修改曲库前记录选择，后续事件复用同一身份与屏上位置。
+    pub(crate) fn record(&mut self, state: &AppState) {
+        self.positions
+            .get_or_insert_with(|| state.collection_list_position());
+    }
+
+    /// 数据全部应用后，更新搜索投影并恢复两种列表的位置。
+    pub(crate) fn finish(self, state: &mut AppState) {
+        if let Some(positions) = self.positions {
+            state.refresh_collection_lists();
+            state.restore_collection_list_position(positions);
+        }
+    }
+}
+
 impl AppState {
+    /// 输入以外的曲库或配置变化，在读取列表前显式提交搜索投影。
+    pub(crate) fn refresh_collection_lists(&mut self) {
+        self.ui
+            .browse
+            .collections
+            .refresh(&self.models.library, &self.cfg);
+    }
+
     /// 在更新任何曲库数据前记录两种类型的选择。
     pub(super) fn collection_list_position(&self) -> [CollectionListPosition; 2] {
         let lists = &self.ui.browse.collections;
@@ -28,7 +59,7 @@ impl AppState {
             CollectionListPosition {
                 group,
                 collection: lists
-                    .items(&self.models.library, &self.cfg, group)
+                    .items(&self.models.library, group)
                     .get(scroll.sel())
                     .map(|item| item.id()),
                 screen_row: scroll.sel().saturating_sub(scroll.scroll_target()),
@@ -46,7 +77,7 @@ impl AppState {
                 self.ui
                     .browse
                     .collections
-                    .items(&self.models.library, &self.cfg, position.group)
+                    .items(&self.models.library, position.group)
                     .iter()
                     .position(|item| item.id() == id)
             });
@@ -328,6 +359,7 @@ mod tests {
             playlist_view("c", "春日影", SourceKind::NETEASE, 1),
         ];
         s.ui.browse.collections.test_search_mut().set_query("cry");
+        s.refresh_collection_lists();
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -349,6 +381,7 @@ mod tests {
             .collections
             .test_search_mut()
             .set_query("chunying");
+        s.refresh_collection_lists();
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()
@@ -367,6 +400,7 @@ mod tests {
             playlist_view("b", "MyGO!!!!!", SourceKind::NETEASE, 1),
         ];
         s.ui.browse.collections.test_search_mut().set_query("my");
+        s.refresh_collection_lists();
         let names: Vec<&str> = s
             .filtered_playlists()
             .iter()

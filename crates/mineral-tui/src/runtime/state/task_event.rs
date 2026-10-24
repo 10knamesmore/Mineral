@@ -4,20 +4,25 @@ use mineral_channel_core::PlaylistLoad;
 use mineral_task::TaskEvent;
 use rustc_hash::FxHashSet;
 
-use super::AppState;
+use super::{AppState, CollectionTracks, LibraryUpdate};
 use crate::runtime::collection::CollectionId;
 use crate::runtime::view_model::{AlbumView, PlaylistView};
 
 impl AppState {
-    /// 把任务或后台查询的 completion event 应用到状态。
-    ///
-    /// # Params:
-    ///   - `event`: 本 tick 要收敛的事件
+    /// 单条事件也经过相同的批量提交边界。
+    #[cfg(test)]
     pub fn apply(&mut self, event: &TaskEvent) {
+        let mut update = LibraryUpdate::default();
+        self.apply_task(event, &mut update);
+        update.finish(self);
+    }
+
+    /// 应用业务数据；调用方处理完整批事件后调用 LibraryUpdate::finish 更新父列表。
+    pub(crate) fn apply_task(&mut self, event: &TaskEvent, update: &mut LibraryUpdate) {
         match event {
             TaskEvent::LibrarySnapshot { playlists } => {
                 self.ui.browse.invalidate_expansions();
-                let position = self.collection_list_position();
+                update.record(self);
                 let mut incoming_ids = FxHashSet::default();
                 // 保留 server 的快照顺序；ID 索引只用于判断旧歌单是否仍在列表中。
                 let incoming_playlists = playlists
@@ -49,7 +54,6 @@ impl AppState {
                         self.models.library.tracks_generation.wrapping_add(1);
                 }
                 self.models.library.playlists = incoming_playlists;
-                self.restore_collection_list_position(position);
             }
             // server 已聚合进 LibrarySnapshot,理论不会到 client。defensive:跳过。
             TaskEvent::PlaylistsFetched { .. } | TaskEvent::AlbumsFetched { .. } => {}
@@ -82,7 +86,7 @@ impl AppState {
                 {
                     self.ui.browse.invalidate_expansions();
                 }
-                let parent_position = self.collection_list_position();
+                update.record(self);
                 let playlist = &detail.playlist;
                 let selected_index = (self.ui.browse.view == super::View::Tracks)
                     .then(|| {
@@ -101,17 +105,17 @@ impl AppState {
                     .cloned()
                     .map(|data| self.decorate_entry(data))
                     .collect();
+                self.models.library.tracks_generation =
+                    self.models.library.tracks_generation.wrapping_add(1);
                 self.models.library.tracks.insert(
                     id.clone(),
-                    super::CollectionTracks {
+                    CollectionTracks {
+                        revision: self.models.library.tracks_generation,
                         entries: decorated,
                         complete: detail.complete,
                         next_offset: detail.next_offset,
                     },
                 );
-                self.models.library.tracks_generation =
-                    self.models.library.tracks_generation.wrapping_add(1);
-                self.restore_collection_list_position(parent_position);
                 let position = selected_index.and_then(|index| {
                     self.filtered_tracks()
                         .iter()
@@ -181,16 +185,19 @@ impl AppState {
                 self.apply_artist_albums_page_failed(id, *page);
             }
             TaskEvent::AlbumDetailFetched { id, album } => {
-                let position = self.collection_list_position();
+                update.record(self);
                 let entries = album
                     .tracks
                     .iter()
                     .cloned()
                     .map(|entry| self.decorate_entry(entry))
                     .collect();
+                self.models.library.tracks_generation =
+                    self.models.library.tracks_generation.wrapping_add(1);
                 self.models.library.album_tracks.insert(
                     id.clone(),
-                    super::CollectionTracks {
+                    CollectionTracks {
+                        revision: self.models.library.tracks_generation,
                         entries,
                         complete: true,
                         next_offset: None,
@@ -206,10 +213,7 @@ impl AppState {
                 {
                     listed.data = (**album).clone();
                 }
-                self.models.library.tracks_generation =
-                    self.models.library.tracks_generation.wrapping_add(1);
                 self.ui.browse.invalidate_expansions();
-                self.restore_collection_list_position(position);
                 self.apply_pending_restore(&CollectionId::Album(id.clone()));
                 self.apply_album_detail(id, album);
             }
@@ -219,7 +223,7 @@ impl AppState {
                     .fail_album(id.clone(), self.ui.browse.nav.last_sel_change);
             }
             TaskEvent::SavedAlbumsSnapshot { albums } => {
-                let position = self.collection_list_position();
+                update.record(self);
                 let ids: FxHashSet<_> = albums.iter().map(|a| a.id.clone()).collect();
                 self.models
                     .library
@@ -255,7 +259,6 @@ impl AppState {
                 self.models.library.tracks_generation =
                     self.models.library.tracks_generation.wrapping_add(1);
                 self.ui.browse.invalidate_expansions();
-                self.restore_collection_list_position(position);
                 mineral_log::debug!(target: "tui", albums = albums.len(), "saved album library updated");
             }
             // 写成功后的列表收敛由 server 触发的 LibrarySnapshot 完成；完成事件本身不改 AppState。

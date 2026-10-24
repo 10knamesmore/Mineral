@@ -1,6 +1,7 @@
 //! 分流 server 主动推送，并把数据与生命周期事件收敛进应用状态。
 
 use super::App;
+use crate::runtime::state::LibraryUpdate;
 
 impl App {
     /// 取走 server 主动推送的 event 缓冲并逐条消费。
@@ -8,10 +9,11 @@ impl App {
     /// 数据事件进入 [`crate::runtime::state::AppState`]；生命周期事件维护对应 cache；
     /// 视觉通知交给 toast 层。
     pub(super) fn drain_push_events(&mut self) {
+        let mut library_update = LibraryUpdate::default();
         for event in self.client.drain_events() {
             match event {
                 mineral_protocol::Event::Task(task) => {
-                    self.state.apply(&task);
+                    self.state.apply_task(&task, &mut library_update);
                     // apply 落数据后，容器播放意图在此兑现；入队需要 client，state 碰不到。
                     self.fulfill_pending_container(&task);
                 }
@@ -26,5 +28,6 @@ impl App {
                 }
             }
         }
+        library_update.finish(&mut self.state);
     }
 }

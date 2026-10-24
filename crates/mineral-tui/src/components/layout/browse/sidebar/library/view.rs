@@ -19,9 +19,6 @@ pub(crate) struct TrackInput<'a> {
     /// 本次详情请求已经失败，等待用户重新选择后重试。
     pub(crate) load_failed: bool,
 
-    /// 曲目内容版本，用于复用过滤索引。
-    pub(crate) generation: u64,
-
     /// 正在播放的歌曲身份。
     pub(crate) playing: Option<&'a SongId>,
 }
@@ -61,7 +58,7 @@ impl TrackList {
     pub(crate) fn rows<'a>(&self, input: TrackInput<'a>) -> FilteredTracks<'a> {
         match (input.collection, input.tracks) {
             (Some(playlist), Some(tracks)) => {
-                self.filtered(&playlist.id(), input.generation, &tracks.entries)
+                self.filtered(&playlist.id(), tracks.revision, &tracks.entries)
             }
             _ => FilteredTracks::empty(),
         }
@@ -81,7 +78,7 @@ impl crate::components::lifecycle::PaintView for TrackView<'_> {
             Some(CollectionRef::Album(a)) => inputs.borrowed(a),
             None => {}
         }
-        inputs.observe(&self.input.generation);
+        inputs.observe(&self.input.tracks.map(|tracks| tracks.revision));
         inputs.observe(&self.input.load_failed);
         inputs.optional(self.input.playing);
         inputs.observe(

@@ -1,19 +1,17 @@
 //! Playlists 视图的深度搜索:搜索词穿透到歌单内歌曲(歌名 / 别名 / 艺人 / 专辑)。
 //!
-//! 全库 × 4 字段的 nucleo 打分开销大(千首级 × 每字段一次匹配),结果按
-//! `(query, tracks 版本, 权重)` 缓存在 [`AppState::deep_search`],只在按键 /
-//! 数据到达 / 配置热重载时重算,渲染帧只读。
-//!
-//! 覆盖范围 = `library.tracks` 已有的歌单;未拉到曲目的歌单只参与歌单名匹配
-//! (全量补拉由进搜索态时的 [`crate::app::App`] 触发,结果渐进到达后经
-//! `tracks_generation` 失效自然并入)。
+//! 查询或权重变化时重新匹配；曲目到达时只更新内容版本变化的集合。
+//! 列表更新阶段调用 [`refresh`]，绘制与导航只读取已完成的命中结果。
 
-use crate::runtime::collection::CollectionId;
-use mineral_model::Song;
+use std::time::Instant;
+
+use mineral_model::{Song, SongId};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::runtime::state::{LibraryData, SearchState};
+use crate::config::{DeepWeights, TuiConfig};
+use crate::runtime::collection::{CollectionGroup, CollectionId};
+use crate::runtime::state::{CollectionTracks, LibraryData, SearchState};
 
 /// 单个歌单的深度命中:加权分 + 行中部展示载荷。
 ///
@@ -26,7 +24,7 @@ pub struct DeepHit {
     pub score: f64,
 
     /// 最佳命中歌曲的 id(进歌单时定位光标用)。
-    pub song_id: mineral_model::SongId,
+    pub song_id: SongId,
 
     /// 主段:歌名。
     pub name: String,
@@ -60,30 +58,39 @@ pub enum HitField {
     Second,
 }
 
-/// 深度搜索结果缓存。key 失配(query / tracks 版本 / 权重任一变化)时整体重建。
+/// 一种列表的深度搜索结果；无命中的集合也记录版本，避免重复扫描。
 #[derive(Default)]
 pub struct DeepSearchCache {
     /// 上次构建时的输入指纹;`None` = 还没建过。
     key: Option<CacheKey>,
 
-    /// 歌单 id → 命中载荷;不在 map 里 = 该歌单无歌曲命中(或曲目未拉到)。
-    hits: FxHashMap<CollectionId, DeepHit>,
+    /// 集合身份 → 已匹配的曲目版本与结果。
+    collections: FxHashMap<CollectionId, CollectionMatch>,
+}
+
+/// 一个集合在当前查询下的匹配结果，包括已确认的无命中。
+struct CollectionMatch {
+    /// 对应 CollectionTracks 的内容版本。
+    revision: u64,
+
+    /// 没有曲目命中时为 None。
+    hit: Option<DeepHit>,
 }
 
 impl DeepSearchCache {
     /// 某歌单的加权深度分;无命中返回 `None`。
     pub fn score_of(&self, id: impl Into<CollectionId>) -> Option<f64> {
-        self.hits.get(&id.into()).map(|h| h.score)
+        self.hit_of(id).map(|hit| hit.score)
     }
 
     /// 某歌单的命中载荷引用;无命中返回 `None`。
     pub fn hit_of(&self, id: impl Into<CollectionId>) -> Option<&DeepHit> {
-        self.hits.get(&id.into())
+        self.collections.get(&id.into())?.hit.as_ref()
     }
 
     /// 是否存在任何深度命中(渲染端据此决定 match 列要不要占位)。
     pub fn has_hits(&self) -> bool {
-        !self.hits.is_empty()
+        self.collections.values().any(|result| result.hit.is_some())
     }
 }
 
@@ -92,9 +99,6 @@ impl DeepSearchCache {
 struct CacheKey {
     /// 构建时的搜索词。
     query: String,
-
-    /// 构建时的 `library.tracks` 内容版本。
-    generation: u64,
 
     /// `[name, alias, artist, album]` 权重位模式。
     weights: [u32; 4],
@@ -105,37 +109,18 @@ struct CacheKey {
 
 impl CacheKey {
     /// 以当前 state 算一份指纹。
-    fn current(
-        search: &SearchState,
-        library: &LibraryData,
-        cfg: &crate::config::TuiConfig,
-    ) -> Self {
+    fn current(search: &SearchState, cfg: &TuiConfig) -> Self {
         let scfg = cfg.search().deep();
         Self {
             query: search.query().to_owned(),
-            generation: library.tracks_generation,
             weights: weight_bits(scfg.weights()),
             deep: *scfg.enabled(),
         }
     }
-
-    /// 与当前模型比对是否仍然有效(避免每帧 clone query 构 key)。
-    fn matches(
-        &self,
-        search: &SearchState,
-        library: &LibraryData,
-        cfg: &crate::config::TuiConfig,
-    ) -> bool {
-        let scfg = cfg.search().deep();
-        self.deep == *scfg.enabled()
-            && self.generation == library.tracks_generation
-            && self.weights == weight_bits(scfg.weights())
-            && self.query == search.query()
-    }
 }
 
 /// 四字段权重的位模式(`f32::to_bits`)——热重载改任一权重即指纹失配。
-fn weight_bits(w: &crate::config::DeepWeights) -> [u32; 4] {
+fn weight_bits(w: &DeepWeights) -> [u32; 4] {
     [
         w.name().to_bits(),
         w.alias().to_bits(),
@@ -144,36 +129,31 @@ fn weight_bits(w: &crate::config::DeepWeights) -> [u32; 4] {
     ]
 }
 
-/// 保证缓存与当前 `(query, tracks 版本, 权重)` 一致,失配则重建。
-///
-/// 每帧可重复调用:命中指纹时只做几次整数 / 字符串比较。
-pub fn ensure(search: &SearchState, library: &LibraryData, cfg: &crate::config::TuiConfig) {
-    if let Some(key) = &search.deep_cache.borrow().key
-        && key.matches(search, library, cfg)
-    {
-        return;
-    }
-    let key = CacheKey::current(search, library, cfg);
-    let hits = if key.deep && !key.query.is_empty() {
-        build(search, library, cfg)
-    } else {
-        FxHashMap::default()
-    };
-    *search.deep_cache.borrow_mut() = DeepSearchCache {
-        key: Some(key),
-        hits,
-    };
-}
-
-/// 全量重建:对 `library.tracks` 内每首歌按字段权重打分,每歌单留最佳一首 + 命中计数。
-fn build(
+/// 查询、配置或曲库更新后调用；只扫描当前列表中内容版本变化的集合。
+pub(crate) fn refresh(
     search: &SearchState,
     library: &LibraryData,
-    cfg: &crate::config::TuiConfig,
-) -> FxHashMap<CollectionId, DeepHit> {
+    cfg: &TuiConfig,
+    group: CollectionGroup,
+) {
+    let started = Instant::now();
+    let key = CacheKey::current(search, cfg);
+    let mut cache = search.deep_cache.borrow_mut();
+    if cache.key.as_ref() != Some(&key) {
+        cache.collections.clear();
+    }
+    let active = key.deep && !key.query.is_empty();
+    cache.key = Some(key);
+    if !active {
+        return;
+    }
+    cache
+        .collections
+        .retain(|id, _| id.tracks(library).is_some());
     let weights = FieldWeights::from_cfg(cfg.search().deep().weights());
-    let mut out = FxHashMap::default();
-    for (pid, tracks) in library
+    let mut collections_matched = 0;
+    let mut tracks_matched = 0;
+    let collections = library
         .tracks
         .iter()
         .map(|(id, tracks)| (CollectionId::Playlist(id.clone()), tracks))
@@ -182,24 +162,58 @@ fn build(
                 .album_tracks
                 .iter()
                 .map(|(id, tracks)| (CollectionId::Album(id.clone()), tracks)),
-        )
-    {
-        let mut best: Option<SongHit<'_>> = None;
-        let mut matched = 0usize;
-        for sv in &tracks.entries {
-            let Some(hit) = score_song(search, &sv.data.song, weights) else {
-                continue;
-            };
-            matched = matched.saturating_add(1);
-            if best.as_ref().is_none_or(|b| hit.score > b.score) {
-                best = Some(hit);
-            }
+        );
+    for (id, tracks) in collections.filter(|(id, _)| id.group() == group) {
+        if cache
+            .collections
+            .get(&id)
+            .is_some_and(|result| result.revision == tracks.revision)
+        {
+            continue;
         }
-        if let Some(b) = best {
-            out.insert(pid.clone(), compose(&b, matched.saturating_sub(1)));
+        collections_matched += 1;
+        tracks_matched += tracks.entries.len();
+        cache.collections.insert(
+            id,
+            CollectionMatch {
+                revision: tracks.revision,
+                hit: match_collection(search, tracks, weights),
+            },
+        );
+    }
+    if collections_matched > 0 {
+        mineral_log::debug!(
+            target: "filter",
+            group = group.label(),
+            collections_matched,
+            tracks_matched,
+            elapsed_us = started.elapsed().as_micros(),
+            "updated deep search"
+        );
+    }
+}
+
+/// 一个集合保留最佳曲目及其余命中数量；同分时保留原曲目顺序。
+fn match_collection(
+    search: &SearchState,
+    tracks: &CollectionTracks,
+    weights: FieldWeights,
+) -> Option<DeepHit> {
+    let mut best: Option<SongHit<'_>> = None;
+    let mut matched = 0usize;
+    for entry in &tracks.entries {
+        let Some(hit) = score_song(search, &entry.data.song, weights) else {
+            continue;
+        };
+        matched += 1;
+        if best
+            .as_ref()
+            .is_none_or(|previous| hit.score > previous.score)
+        {
+            best = Some(hit);
         }
     }
-    out
+    best.map(|hit| compose(&hit, matched - 1))
 }
 
 /// 深度搜索四字段的命中分折扣(已 clamp 到 `0.0..=1.0`),`0` = 该字段不参与。
@@ -220,7 +234,7 @@ struct FieldWeights {
 
 impl FieldWeights {
     /// 从配置读四字段权重并 clamp 到合法区间。
-    fn from_cfg(w: &crate::config::DeepWeights) -> Self {
+    fn from_cfg(w: &DeepWeights) -> Self {
         Self {
             name: f64::from(w.name().clamp(0.0, 1.0)),
             alias: f64::from(w.alias().clamp(0.0, 1.0)),
@@ -353,12 +367,14 @@ mod tests {
         s.models.library.tracks.insert(
             id.clone(),
             crate::runtime::state::CollectionTracks {
+                revision: s.models.library.tracks_generation.wrapping_add(1),
                 entries: views,
                 complete: true,
                 next_offset: None,
             },
         );
         s.models.library.tracks_generation = s.models.library.tracks_generation.wrapping_add(1);
+        s.refresh_collection_lists();
     }
 
     /// 标准夹具:[`state_with_playlists`] 的 p2 塞两首歌——
@@ -380,6 +396,7 @@ mod tests {
     fn song_name_hit_surfaces_playlist() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
         s.ui.browse.collections.test_search_mut().set_query("春日");
+        s.refresh_collection_lists();
         let names = s
             .filtered_playlists()
             .iter()
@@ -405,7 +422,7 @@ mod tests {
     fn artist_hit_lands_in_second_segment() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
         s.ui.browse.collections.test_search_mut().set_query("mygo");
-        let _ = s.filtered_playlists();
+        s.refresh_collection_lists();
         let hit =
             s.ui.browse
                 .collections
@@ -429,7 +446,7 @@ mod tests {
         );
         fill_tracks(&mut s, &p2(), vec![t]);
         s.ui.browse.collections.test_search_mut().set_query("mayo");
-        let _ = s.filtered_playlists();
+        s.refresh_collection_lists();
         let hit =
             s.ui.browse
                 .collections
@@ -464,6 +481,7 @@ mod tests {
         let t = with_alias(with_name(song("s2"), "迷星叫"), "Mayoiuta");
         fill_tracks(&mut s, &p2(), vec![t]);
         s.ui.browse.collections.test_search_mut().set_query("mayo");
+        s.refresh_collection_lists();
         assert!(
             s.filtered_playlists().is_empty(),
             "alias 权重 0:纯别名命中不应捞出歌单"
@@ -478,7 +496,7 @@ mod tests {
     fn extra_counts_additional_matched_songs() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
         s.ui.browse.collections.test_search_mut().set_query("迷");
-        let _ = s.filtered_playlists();
+        s.refresh_collection_lists();
         let hit =
             s.ui.browse
                 .collections
@@ -509,6 +527,7 @@ mod tests {
         let t = with_artist(with_name(song("s2"), "迷星叫"), "MyGO!!!!!");
         fill_tracks(&mut s, &p2(), vec![t]);
         s.ui.browse.collections.test_search_mut().set_query("mygo");
+        s.refresh_collection_lists();
         assert!(
             s.filtered_playlists().is_empty(),
             "artist 权重 0:纯艺人命中不应捞出歌单"
@@ -532,6 +551,7 @@ mod tests {
             .collections
             .test_search_mut()
             .set_query("春日影");
+        s.refresh_collection_lists();
         let names = s
             .filtered_playlists()
             .iter()
@@ -550,6 +570,7 @@ mod tests {
     fn new_tracks_invalidate_cache() -> color_eyre::Result<()> {
         let mut s = state_with_deep_tracks()?;
         s.ui.browse.collections.test_search_mut().set_query("春日");
+        s.refresh_collection_lists();
         assert_eq!(s.filtered_playlists().len(), 1, "初始仅 p2 命中");
         // p1 的曲目此刻到达,内含同名命中曲。
         let p1 = PlaylistId::new(SourceKind::NETEASE, "p1");

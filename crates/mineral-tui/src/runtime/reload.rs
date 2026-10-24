@@ -9,6 +9,8 @@
 
 use std::sync::Arc;
 
+use crate::runtime::state::LibraryUpdate;
+
 impl crate::app::App {
     /// 应用一份新的有效配置:换 `state.cfg` Arc + 全部固化型消费点就地重设。
     ///
@@ -19,7 +21,10 @@ impl crate::app::App {
     /// # Params:
     ///   - `cfg`: 新有效配置(`Arc` 共享只读)
     pub(crate) fn apply_config(&mut self, cfg: Arc<crate::config::TuiConfig>) {
+        let mut library_update = LibraryUpdate::default();
+        library_update.record(&self.state);
         self.state.cfg = cfg;
+        library_update.finish(&mut self.state);
         let cfg = Arc::clone(&self.state.cfg);
         self.state.resources.images.apply_config(Arc::clone(&cfg));
         self.tui_script.apply_config(cfg.script());

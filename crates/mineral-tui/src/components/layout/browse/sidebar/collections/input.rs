@@ -14,13 +14,8 @@ use ratatui::layout::Rect;
 
 impl CollectionList {
     /// 菜单跟随抽屉压缩后的项目行，避开固定列名。
-    pub(crate) fn selected_row_area(
-        &self,
-        area: Rect,
-        library: &LibraryData,
-        config: &TuiConfig,
-    ) -> Rect {
-        let rows = self.rows(library, config);
+    pub(crate) fn selected_row_area(&self, area: Rect, library: &LibraryData) -> Rect {
+        let rows = self.rows(library);
         let area = self.content_area(area);
         let window = CollectionWindow::new(area, &rows, &self.active().scroll);
         window
@@ -112,12 +107,13 @@ impl CollectionList {
             return;
         }
         let selected = self
-            .rows(library, config)
+            .rows(library)
             .get(self.active().scroll.sel())
             .copied()
             .map(CollectionRef::id);
         self.active_mut().search.clear();
-        let rows = self.rows(library, config);
+        self.refresh(library, config);
+        let rows = self.rows(library);
         let index = selected.and_then(|id| rows.iter().position(|row| row.id() == id));
         let state = self.active_mut();
         filter_input::restore(
@@ -141,6 +137,7 @@ impl CollectionList {
         match filter_input::edit(&mut self.active_mut().search, key) {
             filter_input::FilterEdit::Unchanged => false,
             filter_input::FilterEdit::Changed => {
+                self.refresh(library, config);
                 self.active_mut().scroll.place(0, 0);
                 true
             }

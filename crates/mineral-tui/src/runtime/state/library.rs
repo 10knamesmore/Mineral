@@ -31,8 +31,8 @@ pub struct LibraryData {
     /// 歌单 id → 曲目;不在 map 里表示还没拉到。
     pub tracks: FxHashMap<PlaylistId, CollectionTracks>,
 
-    /// `tracks` 内容版本:每次歌单曲目落 cache 自增。深度搜索缓存按此失效;
-    /// 纯装饰重建(`redecorate_for_source`)不动文本,不 bump。
+    /// 曲目更新序号，给新内容分配集合版本，并通知集合列表重绘。
+    /// 用户装饰不修改它。
     pub tracks_generation: u64,
 
     /// 已交给统一提交层的歌单；容量不足由提交层保留并重试，prefetch 不重复登记。

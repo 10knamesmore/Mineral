@@ -28,8 +28,7 @@ pub struct SearchState {
     /// 远低于其它 cache。换源 / 重启自然清掉。
     pub matchable_cache: RefCell<FxHashMap<String, Arc<MatchableText>>>,
 
-    /// Playlists 深度搜索(搜索词穿透到歌单内歌曲)的结果缓存。按
-    /// `(query, tracks 版本, 权重)` 失效,渲染帧只读;`RefCell` 与 matcher 同理。
+    /// 深度搜索的集合级结果；列表更新时匹配，绘制只读。
     pub deep_cache: RefCell<DeepSearchCache>,
 }
 
@@ -118,7 +117,7 @@ impl SearchState {
     }
 
     /// 批量筛选时只计算分数，不做高亮下标的反向映射。
-    fn score_for(&self, text: &str) -> Option<u32> {
+    pub(crate) fn score_for(&self, text: &str) -> Option<u32> {
         if self.input.is_empty() {
             return None;
         }

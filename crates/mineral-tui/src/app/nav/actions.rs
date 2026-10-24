@@ -126,7 +126,7 @@ impl BrowsePage {
         self.nav.last_sel_change = Instant::now();
         // len 先算(释放对 model 的不可变借用),再取列表态可变借用。
         let len = match self.view.current() {
-            View::Collections => self.collections.rows(model.library, model.cfg).len(),
+            View::Collections => self.collections.rows(model.library).len(),
             View::Tracks => self.filtered_tracks(model).len(),
         };
         match self.view.current() {
@@ -155,7 +155,7 @@ impl BrowsePage {
         let ticks = ticks16_from_ms(*anim.list_scroll_ms(), *anim.frame_tick_ms());
         // len 先算(释放 model 借用),再取列表态可变借用;page 同移视口 + 光标(vim `<C-d>` 语义)。
         let len = match self.view.current() {
-            View::Collections => self.collections.rows(model.library, model.cfg).len(),
+            View::Collections => self.collections.rows(model.library).len(),
             View::Tracks => self.filtered_tracks(model).len(),
         };
         self.nav.last_sel_change = Instant::now();
@@ -250,7 +250,7 @@ impl BrowsePage {
                 let mut sel_track = 0usize;
                 // 记忆恢复时的屏上相对行;None = 默认落位(光标上方留 scrolloff)。
                 let mut screen_anchor: Option<usize> = None;
-                let rows = self.collections.rows(model.library, model.cfg);
+                let rows = self.collections.rows(model.library);
                 let Some(target_id) = rows
                     .get(self.collections.scroll().sel())
                     .map(|item| item.id())
@@ -341,7 +341,7 @@ impl BrowsePage {
         }
         let index = self.nav.opened_collection.as_ref().and_then(|id| {
             self.collections
-                .rows(model.library, model.cfg)
+                .rows(model.library)
                 .iter()
                 .position(|row| row.id() == *id)
         });
@@ -1006,6 +1006,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                revision: 1,
                 entries: views,
                 complete: true,
                 next_offset: None,
@@ -1067,6 +1068,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                revision: 1,
                 entries: views,
                 complete: true,
                 next_offset: None,
@@ -1148,6 +1150,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             id.clone(),
             crate::runtime::state::CollectionTracks {
+                revision: 0,
                 entries: crate::test_support::entry_views(vec![mineral_test::song("1")]),
                 complete: false,
                 next_offset: None,
@@ -1326,6 +1329,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid.clone(),
             crate::runtime::state::CollectionTracks {
+                revision: 1,
                 entries: views,
                 complete: true,
                 next_offset: None,
