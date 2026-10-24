@@ -14,7 +14,9 @@ impl App {
             self.state.resources.fft.reset();
             self.state.ui.spectrum.reset_stream();
         }
-        let sample_rate = self.state.models.playback.sample_rate_hz;
+        let Some(sample_rate) = self.client.pcm_sample_rate() else {
+            return;
+        };
         if !samples.is_empty() {
             self.state.resources.fft.push(&samples);
         }

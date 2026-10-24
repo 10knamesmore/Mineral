@@ -11,13 +11,17 @@
 //! 与实时频谱(滑动窗 FFT)不同,这里是**离线一次性**计算:输入必须是可完整读取的
 //! 本地文件(流播半截算不出正确的全曲形状)。
 
+use std::fs::File;
+use std::io::BufReader;
+use std::iter::from_fn;
 use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
+use std::path::Path;
+use std::sync::Arc;
 
 use mineral_model::Envelope;
-use rodio::Source;
 
-use crate::Error;
-use crate::decoder::DecodeOutcome;
+use crate::decoder::{DecodedAudio, Decoder};
+use crate::{Error, Result};
 
 /// 包络算法版本:滤波 / 分块统计 / 归一 / 量化的结构变更时 bump;读取方版本
 /// 不符视同缺失、触发重算。当前值标识 K-weighting、momentary 时窗与固定时长块粒度。
@@ -34,7 +38,7 @@ pub const ENVELOPE_VERSION: u16 = 3;
 #[derive(Clone, Debug, typed_builder::TypedBuilder, derive_getters::Getters)]
 pub struct EnvelopeParams {
     /// 包络定长点数(产出粒度,渲染端再按显示宽度二次重采样)。
-    point_count: std::num::NonZeroUsize,
+    point_count: NonZeroUsize,
 
     /// 响度块时长(毫秒,块内取均方)。
     block_ms: NonZeroU32,
@@ -339,24 +343,39 @@ pub fn envelope_from_samples(
 /// # Return:
 ///   定长 `params.point_count` 点、版本 [`ENVELOPE_VERSION`] 的包络;
 ///   打开 / 解码失败或解不出任何完整帧时报错。
-pub fn envelope_from_file(
-    path: &std::path::Path,
-    params: &EnvelopeParams,
-) -> crate::Result<Envelope> {
-    let file = std::fs::File::open(path).map_err(|source| crate::Error::OpenFile {
+pub fn envelope_from_file(path: &Path, params: &EnvelopeParams) -> Result<Envelope> {
+    let file = File::open(path).map_err(|source| Error::OpenFile {
         path: path.to_path_buf(),
         source,
     })?;
-    let reader = std::io::BufReader::new(file);
-    let decoder = crate::engine::build_decoder(reader)?;
-    let status = decoder.status();
-    let channels = decoder.channels();
-    let sample_rate = decoder.sample_rate();
-    let points = envelope_from_samples(decoder, channels, sample_rate, params);
-    if let Some(DecodeOutcome::Failed(source)) = status.outcome() {
-        return Err(Error::Decode { source });
+    let mut decoder = Decoder::new(BufReader::new(file)).map_err(|source| Error::Decode {
+        source: Arc::new(source),
+    })?;
+    let format = decoder.format();
+    let mut current_samples = Vec::new().into_iter();
+    let mut decode_error = None;
+    let samples = from_fn(|| {
+        loop {
+            if let Some(sample) = current_samples.next() {
+                return Some(sample);
+            }
+            match decoder.read() {
+                Ok(Some(DecodedAudio { samples, .. })) => current_samples = samples.into_iter(),
+                Ok(None) => return None,
+                Err(error) => {
+                    decode_error = Some(error);
+                    return None;
+                }
+            }
+        }
+    });
+    let points = envelope_from_samples(samples, format.channels, format.sample_rate, params);
+    if let Some(source) = decode_error {
+        return Err(Error::Decode {
+            source: Arc::new(source),
+        });
     }
-    let points = points.ok_or_else(|| crate::Error::NoFrames {
+    let points = points.ok_or_else(|| Error::NoFrames {
         path: path.to_path_buf(),
     })?;
     Ok(Envelope {

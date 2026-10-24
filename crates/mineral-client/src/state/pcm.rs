@@ -15,6 +15,9 @@ pub(super) struct PcmWindow {
     /// 当前播放代次(`None` = 尚未收到样本)。
     generation: Option<u64>,
 
+    /// Rate of these rendered samples, independent of the encoded track's rate.
+    sample_rate: Option<u32>,
+
     /// 上一块的结束流位置(样本数)。
     next_position: Option<u64>,
 
@@ -33,6 +36,7 @@ impl PcmWindow {
             capacity: capacity.max(1),
             samples: VecDeque::new(),
             generation: None,
+            sample_rate: None,
             next_position: None,
             discontinuity: false,
         }
@@ -53,6 +57,7 @@ impl PcmWindow {
     /// # Params:
     ///   - `chunk`: daemon 推来的样本块(不夺所有权,调用方仍可保留)
     pub(super) fn push(&mut self, chunk: &PcmChunk) {
+        self.sample_rate = chunk.sample_rate;
         let generation_changed = self.generation != Some(chunk.generation);
         if generation_changed {
             self.samples.clear();
@@ -82,6 +87,10 @@ impl PcmWindow {
     #[must_use]
     pub(super) fn drain(&mut self) -> Vec<f32> {
         self.samples.drain(..).collect()
+    }
+
+    pub(super) fn sample_rate(&self) -> Option<u32> {
+        self.sample_rate
     }
 
     /// 取走断续标记(取后清除)。

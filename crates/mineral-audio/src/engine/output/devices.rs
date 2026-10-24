@@ -1,7 +1,6 @@
 //! CPAL 输出设备枚举和按身份解析；不建立输出流。
 
-use rodio::cpal;
-use rodio::cpal::traits::{DeviceTrait, HostTrait};
+use cpal::traits::{DeviceTrait, HostTrait};
 
 use crate::{Error, OutputDevice, OutputTarget, Result};
 

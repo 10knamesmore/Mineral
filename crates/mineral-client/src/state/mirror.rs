@@ -153,13 +153,13 @@ impl PlaybackMirror {
         &self.anchor
     }
 
-    /// 展示用播放位置:播放中用本地单调钟推进,暂停 / 停止时冻结在锚点值。
+    /// 展示用播放位置:连续播放时外推，暂停、缓冲或停止时冻结在锚点值。
     ///
     /// # Params:
     ///   - `now`: 当前本地单调时刻
     #[must_use]
     pub fn position_ms(&self, now: Instant) -> u64 {
-        if !self.anchor.playing {
+        if !self.anchor.playing || self.anchor.buffering {
             return self.anchor.position_ms;
         }
         let elapsed_ms = now.saturating_duration_since(self.received_at).as_millis();
@@ -429,6 +429,13 @@ impl Mirror {
     pub fn drain_pcm(&self) -> Vec<f32> {
         self.state.write().pcm.drain()
     }
+
+    /// Sample rate of the rendered PCM window.
+    #[must_use]
+    pub fn pcm_sample_rate(&self) -> Option<u32> {
+        self.state.read().pcm.sample_rate()
+    }
+
     /// 是否有待处理的 PCM 断续 / 换代(取后清除)。
     #[must_use]
     pub fn take_pcm_discontinuity(&self) -> bool {

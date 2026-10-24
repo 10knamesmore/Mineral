@@ -118,7 +118,10 @@ walkdir            = "2"
 unicode-width      = "0.2"
 comfy-table        = "7"
 ratatui            = "0.29"
-rodio              = { version = "0.22", default-features = false, features = ["playback"] }
+cpal               = "0.17"
+rubato             = "5.0.1"
+audioadapter-buffers = "5.1"
+spin               = { version = "0.9.8", default-features = false, features = ["mutex", "spin_mutex"] }
 stream-download    = { version = "0.13", features = ["http", "reqwest-rustls"] }
 reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 clap               = { version = "4.5", features = ["derive"] }

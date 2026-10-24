@@ -1,6 +1,14 @@
 //! AudioHandle 投递给 engine 线程的内部命令。
 
 use mineral_playback::OpenedMedia;
+use std::time::Duration;
+
+/// A seek belongs to the track visible when it was requested.
+pub(crate) struct SeekRequest {
+    pub(crate) track_token: u64,
+
+    pub(crate) position: Duration,
+}
 
 /// 投递给 engine 主循环的一条指令。
 pub(crate) enum AudioCommand {
@@ -19,12 +27,12 @@ pub(crate) enum AudioCommand {
     /// Replaces current playback with already-opened media.
     Play(OpenedMedia),
 
-    /// Appends an already-opened decoder behind the current decoder for gapless playback.
+    /// Prepares the next track's PCM without interrupting current playback.
     ///
     /// Unlike [`Self::Play`], this command does not stop or resume the current decoder.
     AppendNext(OpenedMedia),
 
-    /// Cancels and disarms the decoder appended for gapless playback.
+    /// Cancels the prefetched worker and releases its prepared PCM.
     ClearNext,
 
     /// 暂停当前曲目。
@@ -33,11 +41,9 @@ pub(crate) enum AudioCommand {
     /// 从暂停态恢复。
     Resume,
 
-    /// 停掉当前曲目并清空 sink。
+    /// 停掉当前曲目并取消解码与预排。
     Stop,
 
     /// 设置音量(0..=100)。
     SetVolume(u8),
-    // seek 不走 channel,走 [`crate::handle::AudioHandle`] 的 `Arc<Mutex<Option<Duration>>>`
-    // mailbox(latest-wins),engine 主循环每 tick `take()` 一次 —— 长按 ←/→ 时合并。
 }

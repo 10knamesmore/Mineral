@@ -1,243 +1,256 @@
-//! Playback commands, decoder queue accounting, and shared audio snapshots.
+//! Audio control and snapshots. Decoder workers and CPAL share one playback state.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use mineral_playback::OpenedMedia;
 use parking_lot::Mutex;
-use rodio::Source;
 
-use super::decoding::{InstanceSource, build_decoder};
 use super::output::Output;
-use crate::Error;
-use crate::command::AudioCommand;
-use crate::decoder::{DecodeOutcome, DecoderStatus};
-use crate::queue_slots::{Boundary, PlayHead, Slot};
+use super::render::{Decoding, SharedPlayback, Track, TrackSlot};
+use super::worker;
+use crate::command::{AudioCommand, SeekRequest};
 use crate::snapshot::{AudioBackend, AudioSnapshot};
-use crate::tap::{SharedProd, TapSource};
+use crate::{Bps, Error, Result};
 
-/// Maps a UI volume percentage onto perceptual cubic gain.
-pub(super) fn pct_to_gain(percent: u8) -> f32 {
+pub(crate) fn pct_to_gain(percent: u8) -> f32 {
     let ratio = f32::from(percent.min(100)) / 100.0;
     ratio * ratio * ratio
 }
 
-/// Mutable state owned by the audio engine thread.
 pub(super) struct Engine {
-    /// System output stream and rodio queue.
     output: Output,
 
-    /// Shared PCM tap producer.
-    tap_producer: SharedProd,
+    playback: Arc<SharedPlayback>,
 
-    /// Current sample rate shared with the spectrum consumer.
-    sample_rate: Arc<AtomicU32>,
+    next_id: u64,
 
-    /// 累计尝试写入 tap 的 mono 样本数(缺口辨认)。
-    tap_pushed: Arc<AtomicU64>,
-
-    /// Current and gapless-prefetched decoder accounting.
-    head: PlayHead,
+    tick: Duration,
 }
 
 impl Engine {
-    /// Creates engine state around an initialized output.
-    pub(super) fn new(
-        output: Output,
-        tap_producer: &SharedProd,
-        sample_rate: &Arc<AtomicU32>,
-        tap_pushed: &Arc<AtomicU64>,
-    ) -> Self {
+    pub(super) fn new(output: Output, playback: Arc<SharedPlayback>, tick: Duration) -> Self {
         Self {
             output,
-            tap_producer: Arc::clone(tap_producer),
-            sample_rate: Arc::clone(sample_rate),
-            tap_pushed: Arc::clone(tap_pushed),
-            head: PlayHead::default(),
+            playback,
+            next_id: 0,
+            tick,
         }
     }
 
-    /// Applies one command and contains command-local failures.
     pub(super) fn handle_command(&mut self, command: AudioCommand) {
         self.output.refresh_device();
         match command {
             AudioCommand::Play(media) => {
-                if let Err(error) = self.play(media) {
+                self.stop();
+                if let Err(error) = self.install(media, false) {
                     mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "play error");
                 }
             }
             AudioCommand::AppendNext(media) => {
-                if let Err(error) = self.append_next(media) {
-                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "prefetch decode error");
+                if let Err(error) = self.install(media, true) {
+                    mineral_log::warn!(target: "audio", error = mineral_log::chain(&error), "prefetch error");
                 }
+            }
+            AudioCommand::ClearNext => {
+                let mut state = self.playback.state.lock();
+                if let Some(index) = state.next.take() {
+                    *state.track_mut(index) = None;
+                }
+            }
+            AudioCommand::Pause => self.playback.state.lock().paused = true,
+            AudioCommand::Resume => self.playback.state.lock().paused = false,
+            AudioCommand::Stop => self.stop(),
+            AudioCommand::SetVolume(percent) => {
+                self.playback.state.lock().gain = pct_to_gain(percent);
             }
             AudioCommand::ListOutputs(reply) => {
                 let _ = reply.send(Output::devices());
             }
             AudioCommand::SelectOutput { target, reply } => {
-                let result = self.output.select(target);
-                if let Err(error) = &result {
-                    mineral_log::warn!(target: "audio", error = mineral_log::chain(error), "audio output selection failed");
-                }
-                let _ = reply.send(result);
-            }
-            AudioCommand::ClearNext => self.clear_next(),
-            AudioCommand::Pause => self.output.player().pause(),
-            AudioCommand::Resume => self.output.player().play(),
-            AudioCommand::Stop => self.stop(),
-            AudioCommand::SetVolume(percent) => {
-                self.output.player().set_volume(pct_to_gain(percent));
+                let _ = reply.send(self.output.select(target));
             }
         }
     }
 
-    /// Replaces the output queue with one already-opened current media item.
-    fn play(&mut self, media: OpenedMedia) -> crate::Result<()> {
-        // rodio append after stop waits for the callback to drain the previous queue.
+    /// Allocate and publish a track before its worker starts. Only the engine destroys slots.
+    fn install(&mut self, media: OpenedMedia, prefetched: bool) -> Result<()> {
         if self.output.info().is_none() {
             media.cancellation().cancel();
             return Err(Error::OutputUnavailable);
         }
-        let song_id = media.info().song_id.qualified();
-        self.output.player().stop();
-        self.head.stop();
-        self.sample_rate.store(0, Ordering::Relaxed);
-        let slot = self.append_opened(media, "current", None)?;
-        mineral_log::info!(target: "audio", song_id, "start decoding");
-        self.output.player().play();
-        self.sample_rate.store(slot.sample_rate, Ordering::Relaxed);
-        self.head.start(slot);
-        Ok(())
-    }
-
-    /// Appends already-opened next media behind current without reopening it.
-    fn append_next(&mut self, media: OpenedMedia) -> crate::Result<()> {
-        if !self.head.cur.occupied {
+        self.next_id += 1;
+        let id = self.next_id;
+        let mut state = self.playback.state.lock();
+        let index = if prefetched {
+            let Some(current) = state.current else {
+                media.cancellation().cancel();
+                return Ok(());
+            };
+            current.other()
+        } else {
+            TrackSlot::First
+        };
+        let Some(output) = &state.output else {
             media.cancellation().cancel();
-            return Ok(());
+            return Err(Error::OutputUnavailable);
+        };
+        let capacity = output.capacity_samples;
+        *state.track_mut(index) = Some(Track {
+            id,
+            generation: 0,
+            cancellation: media.cancellation().clone(),
+            transfer: media.transfer().cloned(),
+            source_format: None,
+            duration: None,
+            samples: VecDeque::with_capacity(capacity),
+            origin: Duration::ZERO,
+            rendered_frames: 0,
+            seek_position: None,
+            decoding: Decoding::Reading,
+            finished: false,
+        });
+        if prefetched {
+            state.next = Some(index);
+        } else {
+            state.current = Some(index);
+            state.track_token += 1;
+            state.paused = false;
         }
-        self.head.clear_next();
-        let slot = self.append_opened(media, "next", self.head.cur.decoder_status.clone())?;
-        self.head.arm_next(slot);
+        drop(state);
+        if let Err(error) = worker::spawn(media, Arc::clone(&self.playback), id, self.tick) {
+            let mut state = self.playback.state.lock();
+            *state.track_mut(index) = None;
+            if prefetched {
+                state.next = None;
+            } else {
+                state.current = None;
+            }
+            return Err(error);
+        }
         Ok(())
     }
 
-    /// Builds and appends one decoder, returning its slot accounting.
-    fn append_opened(
-        &mut self,
-        media: OpenedMedia,
-        slot_name: &'static str,
-        previous: Option<DecoderStatus>,
-    ) -> crate::Result<Slot> {
-        let transfer = media.transfer().cloned();
-        let cancellation = media.cancellation().clone();
-        let reader = media.into_reader();
-        let decoder = build_decoder(reader)?;
-        let decoder_status = decoder.status();
-        let duration_ms = decoder.total_duration().map(duration_to_ms);
-        let sample_rate = u32::from(decoder.sample_rate());
-        mineral_log::info!(
-            target: "audio",
-            slot = slot_name,
-            sample_rate,
-            duration_ms = ?duration_ms,
-            "decoder ready"
-        );
-        let source = InstanceSource::new(decoder, cancellation.clone(), previous);
-        self.output.player().append(TapSource::new(
-            source,
-            Arc::clone(&self.tap_producer),
-            Arc::clone(&self.tap_pushed),
-        ));
-        Ok(Slot {
-            duration_ms,
-            sample_rate,
-            transfer,
-            cancellation: Some(cancellation),
-            decoder_status: Some(decoder_status),
-            occupied: true,
-        })
+    fn stop(&self) {
+        self.playback.state.lock().stop();
     }
 
-    /// Cancels an armed prefetched decoder; its source drains silently when reached.
-    fn clear_next(&mut self) {
-        self.head.clear_next();
-    }
-
-    /// Stops output and cancels both decoder slots.
-    fn stop(&mut self) {
-        self.head.stop();
-        self.output.player().stop();
-        self.sample_rate.store(0, Ordering::Relaxed);
-    }
-
-    /// Applies one pending latest-wins seek request.
-    pub(super) fn drain_seek(&self, mailbox: &Arc<Mutex<Option<Duration>>>) {
-        let Some(target) = mailbox.lock().take() else {
+    pub(super) fn drain_seek(&self, mailbox: &Arc<Mutex<Option<SeekRequest>>>) {
+        let Some(request) = mailbox.lock().take() else {
             return;
         };
-        // A disconnected stream cannot acknowledge rodio's synchronous seek mailbox.
-        if self.output.info().is_none() {
-            mineral_log::warn!(target: "audio", seek_to = ?target, "seek skipped because audio output is unavailable");
+        let mut state = self.playback.state.lock();
+        mineral_log::debug!(
+            target: "audio",
+            requested_track = request.track_token,
+            current_track = state.track_token,
+            position = ?request.position,
+            "seek requested"
+        );
+        if request.track_token != state.track_token {
             return;
         }
-        if let Err(error) = self.output.player().try_seek(target) {
-            mineral_log::warn!(
-                target: "audio",
-                seek_to = ?target,
-                error = mineral_log::chain(&error),
-                "seek failed"
-            );
+        let rate = state.output.as_ref().map(|output| output.pcm.sample_rate);
+        if let Some(rate) = rate
+            && let Some(index) = state.current
+            && let Some(track) = state.track_mut(index).as_mut()
+            && !matches!(track.decoding, Decoding::Failed(_))
+        {
+            track.rewind(request.position, rate);
+            state.rendering = false;
         }
+        drop(state);
     }
 
-    /// Updates shared playback state and observes natural decoder boundaries.
     pub(super) fn update_snapshot(&mut self, snapshot: &Arc<Mutex<AudioSnapshot>>) {
         self.output.refresh_device();
-        // Read the queue count before outcomes: sources publish failures before rodio removes them.
-        let queued_sources = self.output.player().len();
-        let failure = [&self.head.cur, &self.head.next]
-            .into_iter()
-            .find_map(|slot| match slot.decoder_status.as_ref()?.outcome()? {
-                DecodeOutcome::Failed(error) => Some(error),
-                DecodeOutcome::Completed => None,
+        let mut state = self.playback.state.lock();
+        if let Some(index) = state.current
+            && let Some(track) = state.track(index)
+            && let Decoding::Failed(error) = &track.decoding
+        {
+            mineral_log::error!(target: "audio", error = mineral_log::chain(error.as_ref()), "playback stopped");
+            state.stop();
+        }
+        if let Some(index) = state.next
+            && state
+                .track(index)
+                .as_ref()
+                .is_some_and(|track| matches!(track.decoding, Decoding::Failed(_)))
+        {
+            state.next = None;
+            *state.track_mut(index) = None;
+        }
+        for slot in &mut state.tracks {
+            if slot.as_ref().is_some_and(|track| track.finished) {
+                *slot = None;
+            }
+        }
+        let current = state.current.and_then(|index| state.track(index).as_ref());
+        let next = state.next.and_then(|index| state.track(index).as_ref());
+        let position = current
+            .zip(state.output.as_ref())
+            .map_or(state.last_position, |(track, output)| {
+                track.position(output.pcm.sample_rate)
             });
-        if let Some(error) = failure {
-            mineral_log::error!(target: "audio", error = mineral_log::chain(error.as_ref()), "decoding failed; playback stopped");
-            self.stop();
+        let position_ms = duration_to_ms(position);
+        let playing = !state.paused && current.is_some() && self.output.info().is_some();
+        {
+            let mut snapshot = snapshot.lock();
+            snapshot.output = self.output.info().cloned();
+            snapshot.backend = if snapshot.output.is_some() {
+                AudioBackend::Device
+            } else {
+                AudioBackend::Null
+            };
+            snapshot.playing = playing;
+            snapshot.buffering = playing && !state.rendering;
+            snapshot.position_ms = position_ms;
+            snapshot.duration_ms = current.and_then(|track| track.duration).map(duration_to_ms);
+            snapshot.track_finished_seq = state.finished_seq;
+            snapshot.current_track_token = state.track_token;
+            snapshot.buffered_bps = buffered(current);
+            snapshot.next_duration_ms = next.and_then(|track| track.duration).map(duration_to_ms);
+            snapshot.next_buffered_bps = buffered(next);
+            snapshot.next_ready = next.is_some_and(|track| !track.samples.is_empty());
+            snapshot.sample_rate_hz = current
+                .and_then(|track| track.source_format)
+                .map_or(0, |format| format.sample_rate.get());
         }
-        let position_ms = duration_to_ms(self.output.player().get_pos());
-        let paused = self.output.player().is_paused();
-        let boundary = self.head.observe(queued_sources);
-        if boundary == Boundary::Gapless {
-            self.sample_rate
-                .store(self.head.cur.sample_rate, Ordering::Relaxed);
-        }
-        let playing = !paused && self.head.cur.occupied && self.output.info().is_some();
+        drop(state);
         self.output.recover_if_stalled(playing, position_ms);
-        let fields = self.head.snapshot_fields();
-        let mut current = snapshot.lock();
-        current.output = self.output.info().cloned();
-        current.backend = if current.output.is_some() {
-            AudioBackend::Device
-        } else {
-            AudioBackend::Null
-        };
-        current.playing = playing;
-        current.position_ms = position_ms;
-        current.duration_ms = fields.duration_ms;
-        current.track_finished_seq = fields.track_finished_seq;
-        current.current_track_token = fields.current_track_token;
-        current.buffered_bps = fields.buffered_bps;
-        current.next_duration_ms = fields.next_duration_ms;
-        current.next_buffered_bps = fields.next_buffered_bps;
-        current.next_ready = fields.next_ready;
-        current.sample_rate_hz = self.head.cur.sample_rate;
     }
 }
 
-/// Converts a duration to milliseconds with saturation on impossible overflow.
+impl Drop for Engine {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn buffered(track: Option<&Track>) -> Bps {
+    match track {
+        None => Bps::ZERO,
+        Some(track) => match &track.transfer {
+            None => Bps::FULL,
+            Some(transfer) => {
+                let snapshot = transfer.snapshot();
+                if snapshot.complete {
+                    Bps::FULL
+                } else {
+                    snapshot
+                        .total
+                        .map_or(Bps::ZERO, |total| Bps::ratio(snapshot.downloaded, total))
+                }
+            }
+        },
+    }
+}
+
 fn duration_to_ms(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    duration
+        .as_secs()
+        .saturating_mul(1_000)
+        .saturating_add(u64::from(duration.subsec_millis()))
 }

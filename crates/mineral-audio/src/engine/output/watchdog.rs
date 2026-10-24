@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-/// 当前 rodio 队列是否应该持续收到 output callback。
+/// 当前播放是否应该持续收到 output callback。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum OutputActivity {
     /// 当前有曲目且未暂停。

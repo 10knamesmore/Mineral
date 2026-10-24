@@ -3,7 +3,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rodio::cpal;
+use std::num::TryFromIntError;
+
+use audioadapter_buffers::SizeError;
+use cpal::{
+    BuildStreamError, DefaultStreamConfigError, DeviceIdError, DeviceNameError, DevicesError,
+    PauseStreamError, PlayStreamError, SampleFormat,
+};
+use rubato::{ResampleError, ResamplerConstructionError};
 use thiserror::Error;
 
 use crate::DecoderError;
@@ -55,7 +62,7 @@ pub enum Error {
     ListDevices {
         /// CPAL device discovery failure.
         #[source]
-        source: cpal::DevicesError,
+        source: DevicesError,
     },
 
     /// No default output device exists.
@@ -70,7 +77,7 @@ pub enum Error {
 
         /// CPAL identifier parse failure.
         #[source]
-        source: cpal::DeviceIdError,
+        source: DeviceIdError,
     },
 
     /// A requested output device is not present.
@@ -85,7 +92,7 @@ pub enum Error {
     DeviceId {
         /// CPAL device identifier failure.
         #[source]
-        source: cpal::DeviceIdError,
+        source: DeviceIdError,
     },
 
     /// Reading an output device description failed.
@@ -93,7 +100,7 @@ pub enum Error {
     DeviceName {
         /// CPAL device description failure.
         #[source]
-        source: cpal::DeviceNameError,
+        source: DeviceNameError,
     },
 
     /// Reading the default output format failed.
@@ -101,7 +108,7 @@ pub enum Error {
     OutputConfig {
         /// CPAL configuration failure.
         #[source]
-        source: cpal::DefaultStreamConfigError,
+        source: DefaultStreamConfigError,
     },
 
     /// A device supplied an invalid channel count.
@@ -116,7 +123,7 @@ pub enum Error {
     #[error("unsupported output sample format: {format:?}")]
     UnsupportedSampleFormat {
         /// CPAL sample format supplied by the device.
-        format: cpal::SampleFormat,
+        format: SampleFormat,
     },
 
     /// Building an output stream failed.
@@ -124,7 +131,7 @@ pub enum Error {
     BuildStream {
         /// CPAL stream construction failure.
         #[source]
-        source: cpal::BuildStreamError,
+        source: BuildStreamError,
     },
 
     /// Starting an output stream failed.
@@ -132,7 +139,7 @@ pub enum Error {
     PlayStream {
         /// CPAL stream playback failure.
         #[source]
-        source: cpal::PlayStreamError,
+        source: PlayStreamError,
     },
 
     /// Pausing an output stream failed.
@@ -140,7 +147,7 @@ pub enum Error {
     PauseStream {
         /// CPAL stream pause failure.
         #[source]
-        source: cpal::PauseStreamError,
+        source: PauseStreamError,
     },
 
     /// The encoded media could not be decoded.
@@ -149,6 +156,31 @@ pub enum Error {
         /// Container or audio decoder failure.
         #[source]
         source: Arc<DecoderError>,
+    },
+
+    /// A PCM buffer size cannot be represented on this host.
+    #[error("PCM buffer capacity exceeds the supported range")]
+    BufferCapacity {
+        #[source]
+        source: TryFromIntError,
+    },
+
+    #[error("create audio resampler")]
+    Resampler {
+        #[source]
+        source: ResamplerConstructionError,
+    },
+
+    #[error("resample audio")]
+    Resample {
+        #[source]
+        source: ResampleError,
+    },
+
+    #[error("invalid interleaved PCM buffer")]
+    PcmBuffer {
+        #[source]
+        source: SizeError,
     },
 
     /// Reading an audio file failed.

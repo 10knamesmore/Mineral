@@ -50,6 +50,9 @@ pub enum DecoderError {
     #[error("seek encoded audio")]
     Seek(#[source] SymphoniaError),
 
+    #[error("audio track has no time base for seeking")]
+    SeekUnsupported,
+
     #[error("audio ended before seek position {position:?}")]
     SeekPastEnd { position: Duration },
 }

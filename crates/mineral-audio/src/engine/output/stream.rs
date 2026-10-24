@@ -4,12 +4,12 @@ use std::num::{NonZeroU16, NonZeroU32};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use rodio::cpal;
-use rodio::cpal::traits::{DeviceTrait, StreamTrait};
-use rodio::cpal::{FromSample, Sample, SizedSample, StreamError};
+use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::{FromSample, SizedSample, StreamError};
 
 use super::devices;
-use super::source::{QueueHandoff, take_samples};
+use crate::decoder::PcmFormat;
+use crate::engine::render::SharedPlayback;
 use crate::{AudioOutput, Error, OutputTarget, Result};
 
 /// 缓冲请求以约 50 ms 音频时长为目标；帧数随后取最近的 2 的幂。
@@ -17,11 +17,13 @@ const OUTPUT_BUFFERS_PER_SECOND: u32 = 20;
 
 /// 一条已启动的系统流及其回调状态。
 pub(super) struct DeviceStream {
-    /// 销毁时回调归还队列，供下一条流继续读取。
+    /// Owned system stream; dropping it retires this device callback.
     stream: cpal::Stream,
 
     /// 该流使用的设备与配置。
     pub(super) info: Arc<AudioOutput>,
+
+    pub(super) format: PcmFormat,
 
     /// 系统异步报告的流错误。
     failed: Arc<AtomicBool>,
@@ -31,8 +33,12 @@ pub(super) struct DeviceStream {
 }
 
 impl DeviceStream {
-    /// 先打开并启动目标流；旧流仍持有队列时，新流只输出静音。
-    pub(super) fn open(target: OutputTarget, handoff: QueueHandoff) -> Result<Self> {
+    /// 打开并启动目标流；输出管理器提交该代次前，新回调只输出静音。
+    pub(super) fn open(
+        target: OutputTarget,
+        playback: Arc<SharedPlayback>,
+        generation: u64,
+    ) -> Result<Self> {
         let device = devices::resolve(&target)?;
         let (device_id, device_name) = devices::describe(&device)?;
         let supported = device
@@ -45,12 +51,16 @@ impl DeviceStream {
         ));
         let channels = NonZeroU16::new(config.channels).ok_or(Error::ZeroChannels)?;
         let sample_rate = NonZeroU32::new(config.sample_rate).ok_or(Error::ZeroSampleRate)?;
+        let format = PcmFormat {
+            channels,
+            sample_rate,
+        };
         let failed = Arc::new(AtomicBool::new(false));
         let callback_sequence = Arc::new(AtomicU64::new(0));
         let state = CallbackState {
-            handoff,
-            channels,
-            sample_rate,
+            playback,
+            format,
+            generation,
             failed: Arc::clone(&failed),
             sequence: Arc::clone(&callback_sequence),
         };
@@ -69,6 +79,7 @@ impl DeviceStream {
         Ok(Self {
             stream,
             info: Arc::new(info),
+            format,
             failed,
             callback_sequence,
         })
@@ -96,16 +107,14 @@ impl DeviceStream {
     }
 }
 
-/// 转移给一个系统回调的队列入口与运行状态。
+/// One device callback's format, identity, and shared playback state.
 struct CallbackState {
-    /// 旧回调释放后可接管的播放队列。
-    handoff: QueueHandoff,
+    /// Prepared PCM shared with worker threads.
+    playback: Arc<SharedPlayback>,
 
-    /// 新流的声道数量。
-    channels: rodio::ChannelCount,
+    format: PcmFormat,
 
-    /// 新流的采样率。
-    sample_rate: rodio::SampleRate,
+    generation: u64,
 
     /// 异步错误标记。
     failed: Arc<AtomicBool>,
@@ -132,20 +141,19 @@ fn build_output_stream(
     build!(F32, f32; F64, f64; I8, i8; I16, i16; I24, cpal::I24; I32, i32; I64, i64; U8, u8; U16, u16; U24, cpal::U24; U32, u32; U64, u64;)
 }
 
-/// 通过移交锁接管队列，再由 rodio 转换声道和采样率，逐个填入输出采样。
+/// Copy prepared PCM to the device; this callback does not read or decode media.
 fn build_typed_output_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     state: CallbackState,
 ) -> Result<cpal::Stream>
 where
-    T: SizedSample + FromSample<rodio::Sample>,
+    T: SizedSample + FromSample<f32>,
 {
-    let mut samples = None;
     let CallbackState {
-        handoff,
-        channels,
-        sample_rate,
+        playback,
+        format,
+        generation,
         failed,
         sequence,
     } = state;
@@ -154,16 +162,7 @@ where
             config,
             move |data, _| {
                 sequence.fetch_add(1, Ordering::Relaxed);
-                if samples.is_none() {
-                    samples = take_samples(&handoff, channels, sample_rate);
-                }
-                for sample in data {
-                    *sample = samples
-                        .as_mut()
-                        .and_then(Iterator::next)
-                        .map(Sample::from_sample)
-                        .unwrap_or(T::EQUILIBRIUM);
-                }
+                playback.render(data, format, generation);
             },
             move |error| match error {
                 StreamError::BufferUnderrun => {

@@ -21,8 +21,11 @@ pub struct AudioSnapshot {
     /// 当前已打开的设备与实际流配置；没有可用输出流时为 `None`。
     pub output: Option<std::sync::Arc<crate::AudioOutput>>,
 
-    /// 是否正在出声(暂停 / 已结束 / 没有曲目时为 false)。
+    /// 当前曲目已启用播放；暂停、结束、无曲目或无设备时为 false。
     pub playing: bool,
+
+    /// 播放已启用但输出回调正在等待 PCM，期间位置不应外推。
+    pub buffering: bool,
 
     /// 当前播放位置(ms)。
     pub position_ms: u64,
@@ -34,9 +37,8 @@ pub struct AudioSnapshot {
     /// 当前音量(0..=100)。
     pub volume_pct: u8,
 
-    /// 单调递增的「曲终事件 latch」。每次 sink 自然播完一首歌(非 user-stop)engine
-    /// 把它 +1。UI 维护 `last_seen_finished_seq`,看到增长就触发 advance —— 用 seq
-    /// 而非 transient bool 是为了让 UI 在 tick 间隙也能可靠捕获边界,不会漏。
+    /// 每次输出回调消费完一首曲目的 PCM 后递增；失败、取消和停止不计入。
+    /// 控制线程读取序号判断曲终，不依赖队列长度或瞬时布尔值。
     pub track_finished_seq: u64,
 
     /// 音频输出后端形态。`Null` 表示当前没有可用输出流,
@@ -58,7 +60,7 @@ pub struct AudioSnapshot {
     /// 已预排的下一曲缓冲比例;未预排恒零。
     pub next_buffered_bps: Bps,
 
-    /// 已预排的下一曲是否缓冲到「可无缝接续」(已 append 进 rodio 队列即为 true)。
+    /// 下一曲已准备出可供输出回调消费的 PCM。
     pub next_ready: bool,
 
     /// 当前曲目采样率(Hz),由 decoder 解出后写入;无缝边界轮转时切到下一曲的值。

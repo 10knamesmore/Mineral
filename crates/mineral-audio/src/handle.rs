@@ -1,5 +1,6 @@
 //! UI 持有的 audio handle:线程安全、可 clone,所有方法都是非阻塞。
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -12,10 +13,10 @@ use ringbuf::traits::{Consumer, Split};
 use ringbuf::{HeapCons, HeapRb};
 use tokio::sync::Notify;
 
-use crate::command::AudioCommand;
+use crate::command::{AudioCommand, SeekRequest};
 use crate::engine;
 use crate::snapshot::AudioSnapshot;
-use crate::tap::SharedProd;
+use crate::tap::TapWriter;
 use crate::{Error, Result};
 
 /// 音频引擎启动参数(来自用户配置 `audio` 段;生产构造方为 daemon 启动链)。
@@ -27,6 +28,9 @@ pub struct EngineParams {
 
     /// 引擎主循环 tick 间隔(毫秒):命令空转 / snapshot 刷新 / seek drain 节拍。
     tick_ms: u64,
+
+    /// Maximum prepared output PCM duration per track, in milliseconds.
+    pcm_buffer_ms: NonZeroU32,
 
     /// 流式播放起播前预拉的字节数。
     prefetch_bytes: u64,
@@ -56,7 +60,7 @@ struct Inner {
     snapshot: Arc<Mutex<AudioSnapshot>>,
 
     /// 最新待执行的 seek 目标位置;engine 每 tick `take()` 一次实际打 demuxer,长按 ←/→ 时只生效最后一次。
-    seek_mailbox: Arc<Mutex<Option<Duration>>>,
+    seek_mailbox: Arc<Mutex<Option<SeekRequest>>>,
 
     /// 快照写入信号:每次 `snapshot` 被改写唤醒一个等待者,读取方据此即时跟进
     /// (见 [`AudioHandle::snapshot_changes`])。
@@ -71,7 +75,7 @@ pub struct SpectrumTap {
     /// ringbuf 读端。
     consumer: HeapCons<f32>,
 
-    /// 当前轨道采样率(Hz),engine 在每首歌包 TapSource 时写入。
+    /// 渲染 PCM 的采样率(Hz)，随输出设备格式更新。
     sample_rate: Arc<AtomicU32>,
 
     /// 累计尝试写入的 mono 样本数(含丢弃);与消费计数比较可辨认上游缺口。
@@ -118,14 +122,19 @@ impl AudioHandle {
             ..AudioSnapshot::default()
         }));
 
-        let seek_mailbox = Arc::new(Mutex::new(None::<Duration>));
+        let seek_mailbox = Arc::new(Mutex::new(None));
         let snapshot_changes = Arc::new(Notify::new());
 
         let rb = HeapRb::<f32>::new(*params.tap_capacity());
         let (producer, consumer) = rb.split();
-        let shared_prod: SharedProd = Arc::new(Mutex::new(producer));
         let sr_atomic = Arc::new(AtomicU32::new(0));
         let tap_pushed = Arc::new(AtomicU64::new(0));
+        let tap = TapWriter::new(producer, Arc::clone(&sr_atomic), Arc::clone(&tap_pushed));
+        let playback = Arc::new(engine::SharedPlayback::new(
+            *params.pcm_buffer_ms(),
+            engine::pct_to_gain(*params.initial_volume()),
+            tap,
+        ));
 
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<()>>(1);
         let io = engine::EngineIo {
@@ -133,9 +142,7 @@ impl AudioHandle {
             seek_mailbox: Arc::clone(&seek_mailbox),
             snapshot_changes: Arc::clone(&snapshot_changes),
             ready_tx,
-            tap_producer: Arc::clone(&shared_prod),
-            sr_atomic: Arc::clone(&sr_atomic),
-            tap_pushed: Arc::clone(&tap_pushed),
+            playback,
         };
         thread::Builder::new()
             .name(String::from("mineral-audio"))
@@ -182,7 +189,7 @@ impl AudioHandle {
         self.send(AudioCommand::AppendNext(media));
     }
 
-    /// Cancels and disarms the decoder appended for gapless playback.
+    /// Cancels the prefetched worker and releases its prepared PCM.
     pub fn clear_next(&self) {
         self.send(AudioCommand::ClearNext);
     }
@@ -203,10 +210,13 @@ impl AudioHandle {
     }
 
     /// 跳到绝对位置(ms)。语义是 latest-wins:多次连按只生效最后一次,
-    /// engine 主循环每 tick `take()` 一次实际打 demuxer。
-    /// 部分容器 seek 不准是已知 trade-off。
+    /// engine 每 tick 取出最后一个请求，由当前播放实例的工作线程定位。
+    /// 起播或自然换曲后，属于旧曲目的请求被丢弃。
     pub fn seek(&self, position_ms: u64) {
-        *self.inner.seek_mailbox.lock() = Some(Duration::from_millis(position_ms));
+        *self.inner.seek_mailbox.lock() = Some(SeekRequest {
+            track_token: self.inner.snapshot.lock().current_track_token,
+            position: Duration::from_millis(position_ms),
+        });
     }
 
     /// 设置音量百分比(0..=100)。本地立刻更新 snapshot,免 UI 闪一帧旧值。
@@ -269,6 +279,7 @@ impl AudioHandle {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::num::NonZeroU32;
     use std::time::Duration;
 
     use mineral_model::{PlaybackMediaInfo, SongId, SourceKind};
@@ -300,19 +311,23 @@ mod tests {
 
     /// 测试基线使用任意合理值;生产默认只来自
     /// `crates/mineral-server/src/config/lua/daemon-default.lua`。
-    fn params(initial_volume: u8) -> EngineParams {
-        EngineParams::builder()
+    fn params(initial_volume: u8) -> color_eyre::Result<EngineParams> {
+        Ok(EngineParams::builder()
             .initial_volume(initial_volume)
             .tick_ms(20)
+            .pcm_buffer_ms(
+                NonZeroU32::new(200)
+                    .ok_or_else(|| color_eyre::eyre::eyre!("invalid buffer duration"))?,
+            )
             .prefetch_bytes(256 * 1024)
             .tap_capacity(8192)
-            .build()
+            .build())
     }
 
     /// 逐旋钮生效:注入初始音量反映在 snapshot。
     #[test]
     fn initial_volume_injection_lands_in_snapshot() -> color_eyre::Result<()> {
-        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull, params(30))?;
+        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull, params(30)?)?;
         assert_eq!(
             handle.snapshot().volume_pct,
             30,
@@ -321,19 +336,19 @@ mod tests {
         Ok(())
     }
 
-    /// `ForceNull` 起得来、snapshot 标 `Null`,且无 sink 也接受命令、引擎线程不死。
+    /// `ForceNull` 起得来、snapshot 标 `Null`,且无设备也接受命令、引擎线程不死。
     ///
     /// 无 env、无真音频设备,确定性复现降级路径。
     #[test]
     fn force_null_spawns_in_null_mode_and_accepts_commands() -> color_eyre::Result<()> {
-        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull, params(100))?;
+        let (handle, _tap) = AudioHandle::spawn(AudioMode::ForceNull, params(100)?)?;
         assert_eq!(
             handle.snapshot().backend,
             AudioBackend::Null,
             "ForceNull 应让 snapshot.backend == Null"
         );
 
-        // 无 sink 也得吃命令、不 panic;set_volume 由 handle 直接写 snapshot。
+        // 无设备也得吃命令、不 panic;set_volume 由 handle 直接写 snapshot。
         handle.set_volume(50);
         handle.pause();
         handle.resume();

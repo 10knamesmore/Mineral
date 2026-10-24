@@ -1,6 +1,6 @@
 [package]
 name        = "mineral-audio"
-description = "音频播放引擎(rodio + symphonia)"
+description = "音频播放引擎(Symphonia + CPAL)"
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -17,7 +17,10 @@ thiserror       = { workspace = true }
 derive-getters  = { workspace = true }
 parking_lot     = { workspace = true }
 ringbuf         = { workspace = true }
-rodio           = { workspace = true }
+cpal            = { workspace = true }
+rubato          = { workspace = true }
+audioadapter-buffers = { workspace = true }
+spin            = { workspace = true }
 serde           = { workspace = true, features = ["rc"] }
 symphonia       = { workspace = true, features = ["mpa", "aac", "alac", "aiff", "adpcm", "flac", "ogg", "vorbis", "wav", "pcm"] }
 tokio           = { workspace = true }
