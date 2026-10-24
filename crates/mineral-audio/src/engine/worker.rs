@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use mineral_common::revision::Revision;
 use mineral_playback::OpenedMedia;
 
 use super::convert::PcmConverter;
@@ -43,7 +44,7 @@ pub(super) fn spawn(
 }
 
 struct Work {
-    generation: u64,
+    generation: Revision,
 
     output: PcmFormat,
 
@@ -55,7 +56,7 @@ struct Work {
 fn wait_for_work(
     playback: &SharedPlayback,
     id: u64,
-    generation: Option<u64>,
+    generation: Option<Revision>,
     ended: bool,
     tick: Duration,
 ) -> Option<Work> {
@@ -121,7 +122,7 @@ fn decode(media: OpenedMedia, playback: &SharedPlayback, id: u64, tick: Duration
                     let actual = decoder.seek(position).map_err(|source| Error::Decode {
                         source: Arc::new(source),
                     })?;
-                    mineral_log::debug!(target: "audio", id, generation = work.generation, position = ?actual, "decoder seek completed");
+                    mineral_log::debug!(target: "audio", id, generation = ?work.generation, position = ?actual, "decoder seek completed");
                     if let Some(track) = playback
                         .state
                         .lock()

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mineral_audio::{AudioHandle, SpectrumTap};
+use mineral_common::revision::Revision;
 use mineral_protocol::PcmChunk;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -63,10 +64,10 @@ struct RelayState {
     consumed: u64,
 
     /// 播放代次(切歌 / seek / 格式变化 +1)。
-    generation: u64,
+    generation: Revision,
 
     /// 上次观察到的音频轨道令牌。
-    track_token: u64,
+    track_token: Revision,
 
     /// 上次观察到的采样率(`None` = 尚未就绪)。
     sample_rate: Option<u32>,
@@ -87,7 +88,7 @@ struct RelayState {
 impl RelayState {
     /// 换代:清空窗口并让所有订阅者下一块带缺口。
     fn bump_generation(&mut self) {
-        self.generation = self.generation.saturating_add(1);
+        self.generation = self.generation.next();
         self.history.clear();
         for subscriber in self.subscribers.values_mut() {
             subscriber.gap_pending = true;
@@ -111,7 +112,7 @@ impl RelayState {
 /// 一次取样的输入(生产路径来自 audio 引擎;测试可直接脚本化)。
 struct RelayInput {
     /// 当前轨道令牌(切歌辨认)。
-    track_token: u64,
+    track_token: Revision,
 
     /// 引擎报告的播放位置(ms)。
     position_ms: u64,
@@ -146,8 +147,8 @@ impl PcmRelay {
         let relay = Self {
             inner: Arc::new(Mutex::new(RelayState {
                 consumed: 0,
-                generation: 1,
-                track_token: 0,
+                generation: Revision::default().next(),
+                track_token: Revision::default(),
                 sample_rate: None,
                 expected_position_ms: 0,
                 history: VecDeque::new(),
@@ -166,8 +167,8 @@ impl PcmRelay {
         Self {
             inner: Arc::new(Mutex::new(RelayState {
                 consumed: 0,
-                generation: 1,
-                track_token: 0,
+                generation: Revision::default().next(),
+                track_token: Revision::default(),
                 sample_rate: None,
                 expected_position_ms: 0,
                 history: VecDeque::new(),
@@ -216,7 +217,7 @@ impl PcmRelay {
 
     /// 当前播放代次(测试 / 日志)。
     #[cfg(test)]
-    pub(crate) fn generation(&self) -> u64 {
+    pub(crate) fn generation(&self) -> Revision {
         self.inner.lock().generation
     }
 
@@ -373,6 +374,7 @@ fn rate_known(state: &RelayState) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use mineral_common::revision::Revision;
     use tokio::sync::mpsc;
 
     use super::{MAX_CHUNK, MAX_HISTORY, PcmChunk, PcmRelay, RelayInput, SUBSCRIBER_QUEUE_CHUNKS};
@@ -385,7 +387,7 @@ mod tests {
     /// 造一轮脚本化取样(默认 44.1kHz / 在播 / 轨道 1)。
     fn input(samples: usize) -> RelayInput {
         RelayInput {
-            track_token: 1,
+            track_token: Revision::default().next(),
             position_ms: 0,
             playing: true,
             sample_rate: 44_100,
@@ -408,7 +410,7 @@ mod tests {
     fn subscriber_lifecycle_is_balanced() {
         let relay = relay();
         assert_eq!(relay.subscriber_count(), 0);
-        assert_eq!(relay.generation(), 1);
+        assert_eq!(relay.generation(), Revision::default().next());
         let (token, _rx) = relay.subscribe();
         assert_eq!(token.value(), 0);
         assert_eq!(relay.subscriber_count(), 1);
@@ -490,14 +492,14 @@ mod tests {
         let _ = drain(&mut rx);
         let before = relay.generation();
         let mut next = input(/*samples*/ 100);
-        next.track_token = 2;
+        next.track_token = next.track_token.next();
         relay.pump(&next);
-        assert_eq!(relay.generation(), before.saturating_add(1));
+        assert_eq!(relay.generation(), before.next());
         let chunks = drain(&mut rx);
         assert!(
             chunks
                 .first()
-                .is_some_and(|chunk| chunk.generation == before.saturating_add(1) && chunk.gap),
+                .is_some_and(|chunk| chunk.generation == before.next() && chunk.gap),
             "换代后的首块应带新代次与缺口"
         );
         relay.unsubscribe(token);
@@ -516,7 +518,7 @@ mod tests {
         let mut changed = input(/*samples*/ 10);
         changed.sample_rate = 48_000;
         relay.pump(&changed);
-        assert_eq!(relay.generation(), baseline.saturating_add(1));
+        assert_eq!(relay.generation(), baseline.next());
     }
 
     /// 上游丢样本(写入数超过已消费数)让下一块带缺口。
@@ -546,7 +548,7 @@ mod tests {
         let mut jumped = input(/*samples*/ 100);
         jumped.position_ms = 60_000;
         relay.pump(&jumped);
-        assert_eq!(relay.generation(), baseline.saturating_add(1));
+        assert_eq!(relay.generation(), baseline.next());
     }
 
     /// 窗口只保留近 [`MAX_HISTORY`] 样本:迟到订阅者从窗口头开始。

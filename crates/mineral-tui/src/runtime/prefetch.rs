@@ -520,6 +520,7 @@ mod tests {
     use crate::image::graphics::GraphicsProtocol;
     use crate::runtime::state::{AppState, ArtistSection, DetailFrame, EntityRef, View};
     use crate::test_support::{TestClient, state_with_mixed_tracks};
+    use mineral_common::revision::Revision;
     use mineral_task::{ChannelFetchKind, TaskKind};
 
     /// 浏览停留和进入歌单只加载首批；接近 tracks 底部才沿来源的游标逐批推进。
@@ -1088,7 +1089,7 @@ mod tests {
         state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
-                revision: 0,
+                revision: Revision::default(),
                 entries: views,
                 complete: true,
                 next_offset: None,

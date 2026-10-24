@@ -12,6 +12,7 @@ use color_eyre::eyre::{WrapErr, eyre};
 use mineral_client::Client;
 use mineral_client::connection::{ClientConfig, ConnectError};
 use mineral_client::operation::{Outcome, SubmitError, UnknownReason};
+use mineral_common::revision::Revision;
 use mineral_protocol::{
     FailureKind, MessageBatch, OperationResult, PlayQueueError, QueueContextWire, RejectReason,
     Request, Response, ServerHello, SessionMessage, SessionResult, SubscribeRequest,
@@ -558,7 +559,9 @@ async fn reader_stays_live_while_writer_blocks() -> color_eyre::Result<()> {
         let mut wire = server_wire;
         accept_handshake(&mut wire).await?;
         // 之后刻意不再读 client → 方向;持续向 client 推播放锚点。
+        let mut version = Revision::default();
         for volume in 1_u8..=5 {
+            version = version.next();
             let snapshot = mineral_audio::AudioSnapshot {
                 playing: true,
                 volume_pct: volume,
@@ -567,7 +570,7 @@ async fn reader_stays_live_while_writer_blocks() -> color_eyre::Result<()> {
             wire.send(MessageBatch::one(SessionMessage::Update(
                 mineral_protocol::UpdateEnvelope {
                     subscription: SubscriptionId::new(0),
-                    version: u64::from(volume),
+                    version,
                     parts: 1,
                     index: 0,
                     payload: mineral_protocol::UpdatePayload::Playback(Box::new(snapshot)),

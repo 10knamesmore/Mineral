@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use mineral_common::revision::Revision;
 use mineral_model::{PlaylistId, SourceKind};
 use mineral_protocol::QueueContextWire;
 use mineral_task::TaskEvent;
@@ -48,7 +49,7 @@ fn long_playlists() -> color_eyre::Result<(App, Arc<TestClient>)> {
     app.state.models.library.tracks.insert(
         id,
         CollectionTracks {
-            revision: 0,
+            revision: Revision::default(),
             entries: entry_views(
                 (0..30)
                     .map(|i| with_name(song(&format!("t{i}")), &format!("Track {i:02}")))
@@ -181,13 +182,13 @@ fn clearing_track_filter_preserves_exact_occurrence() -> color_eyre::Result<()> 
     app.state.models.library.tracks.insert(
         id,
         CollectionTracks {
-            revision: app.state.models.library.tracks_generation + 1,
+            revision: app.state.models.library.tracks_generation.next(),
             entries: entry_views(entries),
             complete: true,
             next_offset: None,
         },
     );
-    app.state.models.library.tracks_generation += 1;
+    app.state.models.library.tracks_generation = app.state.models.library.tracks_generation.next();
     app.state.refresh_collection_lists();
     press(&mut app, KeyCode::Char('l'));
     while !app.state.ui.browse.view.at_max() {
@@ -271,13 +272,14 @@ fn deep_search_updates_keep_selection_during_navigation() -> color_eyre::Result<
         app.state.models.library.tracks.insert(
             target.clone(),
             CollectionTracks {
-                revision: app.state.models.library.tracks_generation + 1,
+                revision: app.state.models.library.tracks_generation.next(),
                 entries: entry_views(vec![with_name(song("spaced"), "a-b-c")]),
                 complete: true,
                 next_offset: None,
             },
         );
-        app.state.models.library.tracks_generation += 1;
+        app.state.models.library.tracks_generation =
+            app.state.models.library.tracks_generation.next();
         search(&mut app, "abc");
         assert_eq!(app.state.filtered_playlists().len(), 1);
         press(&mut app, KeyCode::Char('l'));

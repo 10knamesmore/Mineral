@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use mineral_common::revision::Revision;
 use mineral_protocol::{
     DownloadDetailDelta, PlayerVersions, SessionMessage, SubscriptionId, UpdateEnvelope,
     UpdatePayload, fragment_download_detail, fragment_player_update,
@@ -22,11 +23,11 @@ pub(super) async fn pump_player(
     out: mpsc::Sender<SessionMessage>,
 ) {
     let mut changes = client.state_changes();
-    let mut version = 0_u64;
+    let mut version = Revision::default();
     loop {
         let sync = client.player_sync(known);
         known = sync.versions;
-        version = version.saturating_add(1);
+        version = version.next();
         for message in fragment_player_update(id, version, sync) {
             if out.send(message).await.is_err() {
                 return;
@@ -39,9 +40,9 @@ pub(super) async fn pump_player(
                 }
             }
             () = resync.notified() => {
-                // 重同步:清已知版本并从版本 1 重发完整快照(与 client 重置基线配对)。
+                // 重同步：清已知版本并重置更新序列，重发完整快照。
                 known = PlayerVersions::default();
-                version = 0;
+                version = Revision::default();
             }
         }
     }
@@ -57,10 +58,10 @@ async fn pump_watch<T, F>(
     T: Clone + Send + Sync + 'static,
     F: Fn(T) -> UpdatePayload + Send + 'static,
 {
-    let mut version = 0_u64;
+    let mut version = Revision::default();
     loop {
         let value = rx.borrow_and_update().clone();
-        version = version.saturating_add(1);
+        version = version.next();
         let message = SessionMessage::Update(UpdateEnvelope {
             subscription: id,
             version,
@@ -121,13 +122,13 @@ pub(super) async fn pump_downloads_detail(
     resync: Arc<Notify>,
     out: mpsc::Sender<SessionMessage>,
 ) {
-    let mut version = 0_u64;
+    let mut version = Revision::default();
     loop {
         let rows = snapshot
             .borrow_and_update()
             .as_ref()
             .map_or_else(Vec::new, |rows| rows.as_ref().clone());
-        version = version.saturating_add(1);
+        version = version.next();
         for message in fragment_download_detail(id, version, rows) {
             if out.send(message).await.is_err() {
                 return;
@@ -136,7 +137,7 @@ pub(super) async fn pump_downloads_detail(
         let reason = tokio::select! {
             result = deltas.recv() => match result {
                 Ok(delta) => {
-                    version = version.saturating_add(1);
+                    version = version.next();
                     let message = SessionMessage::Update(UpdateEnvelope {
                         subscription: id,
                         version,
@@ -162,7 +163,7 @@ pub(super) async fn pump_downloads_detail(
             // 仅 client 请求重同步时重置版本基线(它同步清空了已应用版本);
             // daemon 侧重建快照继续递增,client 以非增量载荷直接采纳。
             if matches!(source, ResyncSource::Client) {
-                version = 0;
+                version = Revision::default();
             }
             continue;
         }
@@ -185,9 +186,9 @@ pub(super) async fn pump_pcm(
     id: SubscriptionId,
     out: mpsc::Sender<SessionMessage>,
 ) {
-    let mut version = 0_u64;
+    let mut version = Revision::default();
     while let Some(chunk) = rx.recv().await {
-        version = version.saturating_add(1);
+        version = version.next();
         let message = SessionMessage::Update(UpdateEnvelope {
             subscription: id,
             version,
@@ -210,7 +211,7 @@ pub(super) async fn pump_events(
     client: ClientHandle,
     out: mpsc::Sender<SessionMessage>,
 ) {
-    let mut version = 0_u64;
+    let mut version = Revision::default();
     let replay = client.replay_frames(&[category]).await;
     if send_events(&replay, id, &mut version, &out).await.is_err() {
         return;
@@ -252,11 +253,11 @@ pub(super) async fn pump_events(
 async fn send_events(
     events: &[mineral_protocol::Event],
     id: SubscriptionId,
-    version: &mut u64,
+    version: &mut Revision,
     out: &mpsc::Sender<SessionMessage>,
 ) -> Result<(), mpsc::error::SendError<SessionMessage>> {
     for event in events {
-        *version = version.saturating_add(1);
+        *version = version.next();
         let message = SessionMessage::Update(UpdateEnvelope {
             subscription: id,
             version: *version,

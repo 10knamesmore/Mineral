@@ -120,6 +120,7 @@ pub(crate) fn draw(
 mod tests {
     use std::sync::Arc;
 
+    use mineral_common::revision::Revision;
     use mineral_model::{MediaUrl, PlaylistId, SourceKind};
     use ratatui::layout::Rect;
 
@@ -137,7 +138,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
-                revision: 0,
+                revision: Revision::default(),
                 entries: entry_views(vec![entry]),
                 complete: true,
                 next_offset: None,

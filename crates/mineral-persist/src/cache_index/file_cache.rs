@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use mineral_common::revision::Revision;
 use mineral_log::{debug, trace};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -18,8 +19,8 @@ struct Entry {
     /// 文件字节数(实测 stat / 写入长度;LRU 容量核算用)。
     bytes: u64,
 
-    /// 最近访问的逻辑时钟值(LRU 排序用;仅内存,不落库)。
-    last_access: u64,
+    /// 最近访问的修订，用于 LRU 排序；写入条目时落库，读取命中只更新内存。
+    last_access: Revision,
 }
 
 /// 一条被 LRU 驱逐出缓存的记录(供上层埋点 / 诊断;缓存本身不依赖它)。
@@ -41,7 +42,7 @@ struct Index {
     total_bytes: u64,
 
     /// 单调逻辑时钟(每次访问 / 写入 +1)。
-    clock: u64,
+    clock: Revision,
 }
 
 /// 真实后端(启用态)。
@@ -125,7 +126,7 @@ impl CacheIndex {
             index: Mutex::new(Index {
                 map: FxHashMap::default(),
                 total_bytes: 0,
-                clock: 0,
+                clock: Revision::default(),
             }),
         };
         backend.reconcile(rows).await?;
@@ -167,7 +168,7 @@ impl CacheIndex {
             }
             return None;
         }
-        idx.clock = idx.clock.saturating_add(1);
+        idx.clock = idx.clock.next();
         let clock = idx.clock;
         if let Some(e) = idx.map.get_mut(key) {
             e.last_access = clock;
@@ -349,7 +350,7 @@ impl CacheIndex {
             let mut idx = backend.index.lock();
             let total_bytes = idx.total_bytes;
             idx.total_bytes = 0;
-            idx.clock = 0;
+            idx.clock = Revision::default();
             let entries = idx
                 .map
                 .drain()
@@ -397,8 +398,6 @@ impl Backend {
                     dead.push(key);
                     continue;
                 }
-                let bytes = u64::try_from(bytes).unwrap_or(0);
-                let last_access = u64::try_from(last_access).unwrap_or(0);
                 idx.total_bytes = idx.total_bytes.saturating_add(bytes);
                 idx.clock = idx.clock.max(last_access);
                 idx.map.insert(
@@ -426,9 +425,9 @@ impl Backend {
     ///
     /// # Return:
     ///   本次写入分配的 `last_access`(供随后落库)。
-    fn insert_mirror(&self, key: &str, relpath: String, bytes: u64) -> u64 {
+    fn insert_mirror(&self, key: &str, relpath: String, bytes: u64) -> Revision {
         let mut idx = self.index.lock();
-        idx.clock = idx.clock.saturating_add(1);
+        idx.clock = idx.clock.next();
         let last_access = idx.clock;
         if let Some(old) = idx.map.insert(
             key.to_owned(),
@@ -450,7 +449,7 @@ impl Backend {
         key: &str,
         relpath: &str,
         bytes: u64,
-        last_access: u64,
+        last_access: Revision,
     ) -> crate::Result<()> {
         trace!(target: "persist", table = self.table.name(), key, "缓存索引 upsert");
         self.table
@@ -459,8 +458,8 @@ impl Backend {
                 CacheRow {
                     key: key.to_owned(),
                     relpath: relpath.to_owned(),
-                    bytes: i64::try_from(bytes)?,
-                    last_access: i64::try_from(last_access)?,
+                    bytes,
+                    last_access,
                 },
             )
             .await

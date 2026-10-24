@@ -5,6 +5,7 @@
 
 use std::time::Instant;
 
+use mineral_common::revision::Revision;
 use mineral_model::{Song, SongId};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -71,7 +72,7 @@ pub struct DeepSearchCache {
 /// 一个集合在当前查询下的匹配结果，包括已确认的无命中。
 struct CollectionMatch {
     /// 对应 CollectionTracks 的内容版本。
-    revision: u64,
+    revision: Revision,
 
     /// 没有曲目命中时为 None。
     hit: Option<DeepHit>,
@@ -361,19 +362,20 @@ mod tests {
         PlaylistId::new(SourceKind::NETEASE, "p2")
     }
 
-    /// 把裸 Song 列表包成 CollectionTrackView 塞进某歌单的 library.tracks 并 bump 版本。
+    /// 把裸 Song 列表包成 CollectionTrackView 塞进某歌单的 library.tracks 并推进版本。
     fn fill_tracks(s: &mut AppState, id: &PlaylistId, tracks: Vec<mineral_model::Song>) {
         let views = entry_views(tracks);
+        let revision = s.models.library.tracks_generation.next();
         s.models.library.tracks.insert(
             id.clone(),
             crate::runtime::state::CollectionTracks {
-                revision: s.models.library.tracks_generation.wrapping_add(1),
+                revision,
                 entries: views,
                 complete: true,
                 next_offset: None,
             },
         );
-        s.models.library.tracks_generation = s.models.library.tracks_generation.wrapping_add(1);
+        s.models.library.tracks_generation = revision;
         s.refresh_collection_lists();
     }
 

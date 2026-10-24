@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::config::CoverProtocolMode;
 use arc_swap::ArcSwap;
+use mineral_common::revision::Revision;
 
 use super::protocol::{GraphicsProtocol, TerminalRelay};
 use super::query::DetectedGraphics;
@@ -12,7 +13,7 @@ use crate::image::kitty::probe_shared_memory;
 
 /// 编码 worker 与图片引擎共享的当前 terminal backend。
 ///
-/// 协议切换会原子替换完整状态并递增 generation；字号刷新只替换像素尺寸，generation
+/// 协议切换会原子替换完整状态并推进 generation；字号刷新只替换像素尺寸，generation
 /// 保持不变。编码请求不复制协议状态，只用 generation 读取匹配的 backend。
 #[derive(Clone)]
 pub(crate) struct TerminalBackend {
@@ -23,7 +24,7 @@ pub(crate) struct TerminalBackend {
 /// 一个 generation 对应的不可变 terminal backend 快照。
 struct BackendState {
     /// terminal backend generation。
-    generation: u64,
+    generation: Revision,
 
     /// 该 generation 唯一的终端图片能力。
     graphics: Arc<TerminalGraphics>,
@@ -39,7 +40,7 @@ impl TerminalBackend {
         let _ = graphics.apply_mode(mode);
         Self {
             current: Arc::new(ArcSwap::from_pointee(BackendState {
-                generation: 0,
+                generation: Revision::default(),
                 graphics: Arc::new(graphics),
             })),
         }
@@ -96,7 +97,7 @@ impl TerminalBackend {
     }
 
     /// 返回当前 terminal backend generation。
-    pub(crate) fn generation(&self) -> u64 {
+    pub(crate) fn generation(&self) -> Revision {
         self.current.load().generation
     }
 
@@ -104,14 +105,14 @@ impl TerminalBackend {
     ///
     /// # Params:
     ///   - `generation`: 编码请求提交时的 backend generation
-    pub(crate) fn graphics_for(&self, generation: u64) -> Option<Arc<TerminalGraphics>> {
+    pub(crate) fn graphics_for(&self, generation: Revision) -> Option<Arc<TerminalGraphics>> {
         let current = self.current.load_full();
         (current.generation == generation).then(|| Arc::clone(&current.graphics))
     }
 
-    /// 递增 generation 并原子替换终端图片能力。
+    /// 推进 generation 并原子替换终端图片能力。
     fn replace(&self, graphics: Arc<TerminalGraphics>) {
-        let generation = self.current.load().generation.wrapping_add(1);
+        let generation = self.current.load().generation.next();
         self.current.store(Arc::new(BackendState {
             generation,
             graphics,

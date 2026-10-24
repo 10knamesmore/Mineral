@@ -2,6 +2,7 @@
 //! 往返(codec 可换,不绑死 bincode)。
 
 use color_eyre::eyre::eyre;
+use mineral_common::revision::Revision;
 
 use mineral_model::SongId;
 use mineral_protocol::{
@@ -81,7 +82,7 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 9,
+                version: Revision::default().next(),
                 parts: 2,
                 index: 1,
                 payload: UpdatePayload::Player {
@@ -91,18 +92,18 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 10,
+                version: Revision::default(),
                 parts: 1,
                 index: 0,
                 payload: UpdatePayload::Playback(Box::default()),
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 11,
+                version: Revision::default().next(),
                 parts: 1,
                 index: 0,
                 payload: UpdatePayload::Pcm(PcmChunk {
-                    generation: 2,
+                    generation: Revision::default().next().next(),
                     position: 4_096,
                     gap: true,
                     sample_rate: Some(44_100),
@@ -111,7 +112,7 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 12,
+                version: Revision::default().next(),
                 parts: 1,
                 index: 0,
                 payload: UpdatePayload::DownloadsSummary(DownloadSummary {
@@ -120,7 +121,7 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
                     preparing_playlists: 0,
                     speed_bps: 1_024,
                     latest_wave: Some(DownloadWave {
-                        sequence: 1,
+                        sequence: Revision::default(),
                         downloaded: 2,
                         already_present: 0,
                         skipped_by_hook: 0,
@@ -131,7 +132,7 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 13,
+                version: Revision::default().next(),
                 parts: 1,
                 index: 0,
                 payload: UpdatePayload::DownloadsDetailDelta(DownloadDetailDelta {
@@ -141,7 +142,7 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 14,
+                version: Revision::default().next(),
                 parts: 1,
                 index: 0,
                 payload: UpdatePayload::Event(Box::new(
@@ -158,7 +159,7 @@ async fn session_batch_round_trips() -> color_eyre::Result<()> {
             }),
             SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 15,
+                version: Revision::default().next(),
                 parts: 1,
                 index: 0,
                 payload: UpdatePayload::Event(Box::new(mineral_protocol::Event::Failure(
@@ -212,7 +213,7 @@ async fn player_update_preserves_non_unicode_media_path() -> color_eyre::Result<
     );
     let message = SessionMessage::Update(UpdateEnvelope {
         subscription: SubscriptionId::new(1),
-        version: 1,
+        version: Revision::default().next(),
         parts: 1,
         index: 0,
         payload: UpdatePayload::Player {
@@ -279,7 +280,7 @@ async fn task_events_round_trip() -> color_eyre::Result<()> {
     for event in cases {
         let message = SessionMessage::Update(UpdateEnvelope {
             subscription: SubscriptionId::new(7),
-            version: 1,
+            version: Revision::default().next(),
             parts: 1,
             index: 0,
             payload: UpdatePayload::Event(Box::new(mineral_protocol::Event::Task(Box::new(event)))),

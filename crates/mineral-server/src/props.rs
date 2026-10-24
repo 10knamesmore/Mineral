@@ -4,6 +4,7 @@
 //! 「高频合并只回末值」的语义由 tick 采样天然给出:tick 间无论变多少次,
 //! 下游只看到采样时刻的末值。position 只在整秒值变化时产。
 
+use mineral_common::revision::Revision;
 use mineral_protocol::{PropName, PropValue};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -33,17 +34,17 @@ pub(crate) struct TerminalReport {
 #[derive(Default)]
 pub(crate) struct TerminalStates {
     /// conn id → (更新序号, 上报状态);读取取序号最大者。
-    reports: FxHashMap<u64, (u64, TerminalReport)>,
+    reports: FxHashMap<u64, (Revision, TerminalReport)>,
 
     /// 单调更新计数(last-wins 的裁决序)。
-    seq: u64,
+    seq: Revision,
 }
 
 impl TerminalStates {
     /// 记录一条上报,返回该连接**自己的**上一份状态(fullscreen 翻转埋点用:
     /// 别的终端的全屏态不算本终端的切换)。
     pub(crate) fn set(&mut self, conn: u64, report: TerminalReport) -> Option<TerminalReport> {
-        self.seq += 1;
+        self.seq = self.seq.next();
         self.reports
             .insert(conn, (self.seq, report))
             .map(|(_seq, prev)| prev)

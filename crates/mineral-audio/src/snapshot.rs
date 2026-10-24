@@ -1,5 +1,6 @@
 //! UI 周期拉取的播放状态快照。
 
+use mineral_common::revision::Revision;
 use serde::{Deserialize, Serialize};
 
 use crate::bps::Bps;
@@ -52,7 +53,7 @@ pub struct AudioSnapshot {
 
     /// 当前曲目身份令牌:每次起播 / 无缝边界轮转 +1。上层认它的**值变化**判定换曲——
     /// 比单调 `track_finished_seq` 的边沿更稳:漏一个 tick 也不会丢轨(值对不上就重新对齐)。
-    pub current_track_token: u64,
+    pub current_track_token: Revision,
 
     /// 已预排的下一曲时长(ms);`None` = 未预排 / decoder 未探出。
     pub next_duration_ms: Option<u64>,

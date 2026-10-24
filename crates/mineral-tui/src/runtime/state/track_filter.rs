@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use mineral_common::revision::Revision;
+
 use crate::runtime::collection::CollectionId;
 
 use crate::runtime::view_model::CollectionTrackView;
@@ -21,7 +23,7 @@ struct CachedTracks {
     collection: CollectionId,
 
     /// 曲目内容版本；收藏、播放次数等装饰变化不影响匹配。
-    generation: u64,
+    generation: Revision,
 
     /// 产生当前结果的查询词。
     query: String,
@@ -107,7 +109,7 @@ impl TrackFilterCache {
     pub(crate) fn view<'a>(
         &mut self,
         collection: &CollectionId,
-        generation: u64,
+        generation: Revision,
         entries: &'a [CollectionTrackView],
         search: &SearchState,
     ) -> FilteredTracks<'a> {
@@ -130,7 +132,7 @@ impl TrackFilterCache {
     /// 查询或曲目变化时重建下标顺序；同分项保持 relation 的原始顺序。
     fn rebuild(
         collection: &CollectionId,
-        generation: u64,
+        generation: Revision,
         entries: &[CollectionTrackView],
         search: &SearchState,
     ) -> CachedTracks {

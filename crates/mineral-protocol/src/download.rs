@@ -1,5 +1,6 @@
 //! Session-only manual download protocol types.
 
+use mineral_common::revision::Revision;
 use mineral_model::{BitRate, PlaylistId, Song};
 use serde::{Deserialize, Serialize};
 
@@ -185,7 +186,7 @@ pub struct SongDownloadView {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadWave {
     /// Monotonic process-local sequence used by clients to show one flash per wave.
-    pub sequence: u64,
+    pub sequence: Revision,
 
     /// Newly exported songs.
     pub downloaded: usize,

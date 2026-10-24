@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use image::DynamicImage;
+use mineral_common::revision::Revision;
 use mineral_model::MediaUrl;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -23,10 +24,10 @@ struct Entry {
     bytes: u64,
 
     /// 上次被准备入口登记的单调序号;最小者最久未用,优先逐出。
-    last_used: u64,
+    last_used: Revision,
 
-    /// 这份像素写入时的序号，不随可见性记账改变。
-    revision: u64,
+    /// 这份像素写入时分配的内容版本，不随可见性记账改变。
+    revision: Revision,
 }
 
 /// 封面像素缓存:字节预算 LRU。
@@ -40,8 +41,8 @@ pub(crate) struct CoverCache {
     /// 当前占用字节合计(所有 `Entry::bytes` 之和)。
     total_bytes: u64,
 
-    /// 单调访问计数器,每次 `observe_visible` / `insert` 取一个新值赋给 `last_used`。
-    tick: u64,
+    /// 缓存访问修订；写入时同时标记内容版本，后续访问只更新 `last_used`。
+    tick: Revision,
 
     /// 字节预算上限(来自配置 `cover.cache.image`)。
     budget: u64,
@@ -62,7 +63,7 @@ impl CoverCache {
         Self {
             entries: FxHashMap::default(),
             total_bytes: 0,
-            tick: 0,
+            tick: Revision::default(),
             budget,
             visible: FxHashSet::default(),
             observed: FxHashSet::default(),
@@ -76,7 +77,7 @@ impl CoverCache {
     }
 
     /// 已解码内容的版本；逐出后缺失，重新装入会得到新版本。
-    pub(crate) fn revision(&self, url: &MediaUrl) -> Option<u64> {
+    pub(crate) fn revision(&self, url: &MediaUrl) -> Option<Revision> {
         self.entries.get(url).map(|entry| entry.revision)
     }
 
@@ -178,9 +179,9 @@ impl CoverCache {
         self.evict_over_budget(/*keep*/ None)
     }
 
-    /// 取下一个访问序号(单调递增,`wrapping` 免溢出 panic —— u64 实际到不了上限)。
-    fn next_tick(&mut self) -> u64 {
-        let next = self.tick.wrapping_add(1);
+    /// 推进访问修订；重新装入同一 URL 也会获得新内容版本。
+    fn next_tick(&mut self) -> Revision {
+        let next = self.tick.next();
         self.tick = next;
         next
     }

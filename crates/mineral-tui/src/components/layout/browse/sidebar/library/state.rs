@@ -3,6 +3,7 @@
 use crate::runtime::collection::CollectionId;
 use crate::runtime::scroll::list::ScrollList;
 use crate::runtime::state::{ListExpansionState, SearchState};
+use mineral_common::revision::Revision;
 use mineral_model::CollectionIndex;
 
 /// 随页面保留的曲目列表；共享数据由调用方借入。
@@ -43,7 +44,7 @@ impl TrackList {
     pub(crate) fn filtered<'a>(
         &self,
         collection: &CollectionId,
-        generation: u64,
+        generation: Revision,
         entries: &'a [crate::runtime::view_model::CollectionTrackView],
     ) -> crate::runtime::state::FilteredTracks<'a> {
         self.filtered

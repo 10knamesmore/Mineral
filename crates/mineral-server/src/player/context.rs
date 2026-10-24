@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use crate::persistence::ServerStore;
 use mineral_audio::AudioHandle;
 use mineral_channel_core::MusicChannel;
+use mineral_common::revision::Revision;
 use mineral_model::{BitRate, SourceKind};
 use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{PlayerSync, PlayerVersions};
@@ -75,7 +76,7 @@ pub(crate) struct Inner {
     pub(crate) state: Mutex<State>,
 
     /// 播放状态变更订阅端(订阅者被唤醒后按自己已知版本拉取重段)。
-    pub(crate) state_changes: watch::Receiver<u64>,
+    pub(crate) state_changes: watch::Receiver<Revision>,
 
     /// 已转发给 client 的最新 finished seq;auto-next 监听它。
     pub(super) last_seen_finished_seq: AtomicU64,
@@ -130,7 +131,7 @@ pub(crate) struct Inner {
 
 impl PlayerCore {
     /// 播放状态变更订阅端(会话发布器被唤醒后按自己已知版本拉取重段)。
-    pub(crate) fn state_changes(&self) -> watch::Receiver<u64> {
+    pub(crate) fn state_changes(&self) -> watch::Receiver<Revision> {
         self.inner.state_changes.clone()
     }
 

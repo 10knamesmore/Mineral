@@ -1,0 +1,15 @@
+[package]
+name        = "mineral-common"
+description = "跨模块共享的基础类型"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

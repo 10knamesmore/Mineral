@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
+use mineral_common::revision::Revision;
 use mineral_playback::OpenedMedia;
 use parking_lot::Mutex;
 
@@ -99,7 +100,7 @@ impl Engine {
         let capacity = output.capacity_samples;
         *state.track_mut(index) = Some(Track {
             id,
-            generation: 0,
+            generation: Revision::default(),
             cancellation: media.cancellation().clone(),
             transfer: media.transfer().cloned(),
             source_format: None,
@@ -115,7 +116,7 @@ impl Engine {
             state.next = Some(index);
         } else {
             state.current = Some(index);
-            state.track_token += 1;
+            state.track_token = state.track_token.next();
             state.paused = false;
         }
         drop(state);
@@ -143,8 +144,8 @@ impl Engine {
         let mut state = self.playback.state.lock();
         mineral_log::debug!(
             target: "audio",
-            requested_track = request.track_token,
-            current_track = state.track_token,
+            requested_track = ?request.track_token,
+            current_track = ?state.track_token,
             position = ?request.position,
             "seek requested"
         );

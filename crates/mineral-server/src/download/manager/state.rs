@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use mineral_common::revision::Revision;
 use mineral_model::{BitRate, SongId};
 use mineral_protocol::{
     DownloadFailure, DownloadId, DownloadStatus, DownloadSummary, DownloadWave, SongDownloadView,
@@ -34,7 +35,7 @@ pub(super) struct ManagerState {
     pub(super) terminal: VecDeque<DownloadId>,
 
     /// Monotonic admission order.
-    pub(super) next_admission: u64,
+    pub(super) next_admission: Revision,
 
     /// Download quality applied to new admissions.
     pub(super) quality: BitRate,
@@ -64,7 +65,7 @@ pub(super) struct SongDownload {
     pub(super) key: DownloadKey,
 
     /// Monotonic admission order.
-    pub(super) admission_order: u64,
+    pub(super) admission_order: Revision,
 }
 
 /// Duplicate identity for one export request.
@@ -90,7 +91,7 @@ impl ManagerState {
             active: FxHashMap::default(),
             dedup: FxHashMap::default(),
             terminal: VecDeque::new(),
-            next_admission: 0,
+            next_admission: Revision::default(),
             quality,
             max_concurrent,
             preparing_playlists: 0,
@@ -210,8 +211,10 @@ impl ManagerState {
         if !self.wave_open || queued || !self.active.is_empty() || self.preparing_playlists > 0 {
             return;
         }
-        let previous = self.latest_wave.as_ref().map_or(0, |wave| wave.sequence);
-        self.wave.sequence = previous.wrapping_add(1);
+        self.wave.sequence = self
+            .latest_wave
+            .as_ref()
+            .map_or_else(Revision::default, |wave| wave.sequence.next());
         self.latest_wave = Some(self.wave.clone());
         self.wave_open = false;
     }

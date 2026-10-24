@@ -6,6 +6,7 @@
 //!
 //! 每条字节由编码成品报告，缓存只记账不重算。最近准备的显示需求包含的工作集不被后台预热逐出。
 
+use mineral_common::revision::Revision;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::image::key::{ImageIdentity, TerminalImageKey};
@@ -23,13 +24,13 @@ struct Slot {
     bytes: u64,
 
     /// 上次被准备入口登记的单调序号;最小者最久未使用,优先逐出。
-    last_used: u64,
+    last_used: Revision,
 
     /// 成品内容写入版本，不随准备或协议提交改变。
-    revision: u64,
+    revision: Revision,
 }
 
-/// 缓存条目、使用顺序与当前显示需求。
+/// 缓存条目、使用顺序、内容版本与当前显示需求。
 struct Inner {
     /// 图片身份 → 源图片、行内缩略图或各 rasterized 尺寸的槽。
     entries: FxHashMap<ImageIdentity, Vec<Slot>>,
@@ -37,8 +38,8 @@ struct Inner {
     /// 当前占用字节合计(所有 [`Slot::bytes`] 之和)。
     total_bytes: u64,
 
-    /// 单调访问计数器,每次 `observe` / `insert` 自增后赋给 `last_used`。
-    tick: u64,
+    /// 缓存访问修订；写入时同时标记内容版本，后续访问只更新 `last_used`。
+    tick: Revision,
 
     /// 最近准备的显示需求包含的成品，回填期间保留整个可见工作集。
     visible: FxHashSet<TerminalImageKey>,
@@ -69,7 +70,7 @@ impl TerminalImageCache {
             inner: Inner {
                 entries: FxHashMap::default(),
                 total_bytes: 0,
-                tick: 0,
+                tick: Revision::default(),
                 visible: FxHashSet::default(),
                 observed: FxHashSet::default(),
             },
@@ -106,7 +107,7 @@ impl TerminalImageCache {
     pub(crate) fn observe(&mut self, key: &TerminalImageKey) {
         let inner = &mut self.inner;
         inner.observed.insert(key.clone());
-        inner.tick = inner.tick.wrapping_add(1);
+        inner.tick = inner.tick.next();
         if let Some(slot) = inner
             .entries
             .get_mut(key.identity())
@@ -163,7 +164,7 @@ impl TerminalImageCache {
     ///   - `bytes`: 该成品持有的像素或协议 payload 字节数
     pub(crate) fn insert(&mut self, key: &TerminalImageKey, image: TerminalImage, bytes: u64) {
         let inner = &mut self.inner;
-        inner.tick = inner.tick.wrapping_add(1);
+        inner.tick = inner.tick.next();
         let last_used = inner.tick;
         let identity = key.identity().clone();
         let slots = inner.entries.entry(identity.clone()).or_default();
@@ -187,7 +188,7 @@ impl TerminalImageCache {
     }
 
     /// 仅观察一个图片身份的就绪尺寸与内容版本，不续命也不保留像素。
-    pub(crate) fn revisions(&self, identity: &ImageIdentity) -> Vec<(TerminalImageKey, u64)> {
+    pub(crate) fn revisions(&self, identity: &ImageIdentity) -> Vec<(TerminalImageKey, Revision)> {
         self.inner
             .entries
             .get(identity)

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::config::CoverCellFit;
 use image::{DynamicImage, RgbaImage};
+use mineral_common::revision::Revision;
 use mineral_model::MediaUrl;
 use mineral_model::SourceKind;
 use mineral_protocol::AdvanceKind;
@@ -330,7 +331,7 @@ impl ImageEngine {
     }
 
     /// 返回当前 terminal backend generation。
-    pub(crate) fn graphics_generation(&self) -> u64 {
+    pub(crate) fn graphics_generation(&self) -> Revision {
         self.terminal_backend.generation()
     }
 

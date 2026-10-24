@@ -43,7 +43,7 @@ pub use mineral_model::StoreValue;
 pub use mineral_task::ChannelFetchKindTag;
 pub use player::{
     AdvanceKind, CurrentSync, PlayCursor, PlayMode, PlaybackOrigin, PlayerSync, PlayerVersions,
-    QueueSync, Repeat, SegmentVersion,
+    QueueSync, Repeat,
 };
 pub use playlist::PlaylistOp;
 pub use queue_edit::{QueueAnchor, QueueEditOutcome, QueueOp, QueuePos};

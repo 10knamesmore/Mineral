@@ -2,12 +2,13 @@
 
 use color_eyre::eyre::eyre;
 use mineral_audio::AudioSnapshot;
+use mineral_common::revision::Revision;
 use mineral_model::{BitRate, PlaylistId, SongId, SourceKind};
 use mineral_protocol::{
     AdvanceKind, CurrentSync, DownloadId, DownloadOrigin, DownloadStatus, DownloadSummary,
     DownloadTarget, DownloadWave, FailureKind, OperationFailure, PlayMode, PlayerSync,
-    PlayerVersions, QueueSync, Request, Response, SegmentVersion, SongDownloadView, SongStatsWire,
-    StoreValue, framed, recv, send,
+    PlayerVersions, QueueSync, Request, Response, SongDownloadView, SongStatsWire, StoreValue,
+    framed, recv, send,
 };
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use mineral_test::song;
@@ -115,7 +116,7 @@ async fn round_trip_response_playback_payload() -> color_eyre::Result<()> {
         backend: mineral_audio::AudioBackend::Null,
         buffered_bps: mineral_audio::Bps::new(4_200),
         // gapless 字段给辨识度非默认值,roundtrip 等值断言覆盖到它们(bincode 位置式,守住没被 skip)。
-        current_track_token: 9,
+        current_track_token: Revision::default().next(),
         next_duration_ms: Some(180_000),
         next_buffered_bps: mineral_audio::Bps::new(6_000),
         next_ready: true,
@@ -254,8 +255,8 @@ async fn round_trip_love_and_stats() -> color_eyre::Result<()> {
 async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
     let sync = PlayerSync {
         versions: PlayerVersions {
-            queue: SegmentVersion::new(4),
-            current: SegmentVersion::new(9),
+            queue: Some(Revision::default()),
+            current: Some(Revision::default().next()),
         },
         cursor: mineral_protocol::PlayCursor::InQueue(1),
         play_mode: PlayMode::Shuffle,
@@ -292,8 +293,8 @@ async fn round_trip_player_sync_rich() -> color_eyre::Result<()> {
 async fn round_trip_player_sync_light_only() -> color_eyre::Result<()> {
     let sync = PlayerSync {
         versions: PlayerVersions {
-            queue: SegmentVersion::new(4),
-            current: SegmentVersion::new(9),
+            queue: Some(Revision::default()),
+            current: Some(Revision::default().next()),
         },
         cursor: mineral_protocol::PlayCursor::InQueue(2),
         play_mode: PlayMode::RepeatAll,
@@ -461,7 +462,7 @@ async fn round_trip_download_info_copy_terminal() -> color_eyre::Result<()> {
             preparing_playlists: 1,
             speed_bps: 512,
             latest_wave: Some(DownloadWave {
-                sequence: 3,
+                sequence: Revision::default().next(),
                 downloaded: 5,
                 already_present: 1,
                 skipped_by_hook: 0,

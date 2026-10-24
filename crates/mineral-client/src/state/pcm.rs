@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use mineral_common::revision::Revision;
 use mineral_protocol::PcmChunk;
 
 /// 有界 PCM 窗口。
@@ -13,7 +14,7 @@ pub(super) struct PcmWindow {
     samples: VecDeque<f32>,
 
     /// 当前播放代次(`None` = 尚未收到样本)。
-    generation: Option<u64>,
+    generation: Option<Revision>,
 
     /// Rate of these rendered samples, independent of the encoded track's rate.
     sample_rate: Option<u32>,
@@ -103,10 +104,11 @@ impl PcmWindow {
 #[cfg(test)]
 mod tests {
     use super::PcmWindow;
+    use mineral_common::revision::Revision;
     use mineral_protocol::PcmChunk;
 
     /// 造一块样本。
-    fn chunk(generation: u64, position: u64, gap: bool, samples: &[f32]) -> PcmChunk {
+    fn chunk(generation: Revision, position: u64, gap: bool, samples: &[f32]) -> PcmChunk {
         PcmChunk {
             generation,
             position,
@@ -120,9 +122,9 @@ mod tests {
     #[test]
     fn generation_change_clears_window() {
         let mut window = PcmWindow::new(/*capacity*/ 16);
-        window.push(&chunk(1, 0, false, &[1.0, 2.0]));
+        window.push(&chunk(Revision::default(), 0, false, &[1.0, 2.0]));
         let _ = window.take_discontinuity();
-        window.push(&chunk(2, 0, false, &[3.0]));
+        window.push(&chunk(Revision::default().next(), 0, false, &[3.0]));
         assert_eq!(window.len(), 1, "换代应清空旧流样本");
         assert!(window.take_discontinuity(), "换代应标断续");
         assert_eq!(window.drain(), vec![3.0]);
@@ -132,11 +134,11 @@ mod tests {
     #[test]
     fn gaps_mark_discontinuity() {
         let mut window = PcmWindow::new(/*capacity*/ 16);
-        window.push(&chunk(1, 0, false, &[1.0, 2.0]));
+        window.push(&chunk(Revision::default(), 0, false, &[1.0, 2.0]));
         let _ = window.take_discontinuity();
-        window.push(&chunk(1, 5, false, &[3.0]));
+        window.push(&chunk(Revision::default(), 5, false, &[3.0]));
         assert!(window.take_discontinuity(), "位置跳变应标断续");
-        window.push(&chunk(1, 6, true, &[4.0]));
+        window.push(&chunk(Revision::default(), 6, true, &[4.0]));
         assert!(window.take_discontinuity(), "gap 标记应标断续");
     }
 
@@ -144,7 +146,12 @@ mod tests {
     #[test]
     fn window_is_bounded() {
         let mut window = PcmWindow::new(/*capacity*/ 4);
-        window.push(&chunk(1, 0, false, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        window.push(&chunk(
+            Revision::default(),
+            0,
+            false,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        ));
         assert_eq!(window.len(), 4);
         assert_eq!(window.drain(), vec![3.0, 4.0, 5.0, 6.0]);
         assert!(window.take_discontinuity(), "溢出应标断续");
@@ -154,7 +161,7 @@ mod tests {
     #[test]
     fn drain_consumes_once() {
         let mut window = PcmWindow::new(/*capacity*/ 16);
-        window.push(&chunk(1, 0, false, &[1.0]));
+        window.push(&chunk(Revision::default(), 0, false, &[1.0]));
         assert_eq!(window.drain(), vec![1.0]);
         assert!(window.drain().is_empty());
         assert!(window.take_discontinuity());

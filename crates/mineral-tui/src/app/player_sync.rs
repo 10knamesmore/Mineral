@@ -60,6 +60,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use mineral_common::revision::Revision;
     use mineral_protocol::{PlayMode, PlayerSync, QueueSync};
 
     use crate::test_support::{app_with_queue, endserenading};
@@ -110,8 +111,8 @@ mod tests {
             .ok_or_else(|| color_eyre::eyre::eyre!("前置:队列应有歌"))?;
         app.apply_player_sync(PlayerSync {
             versions: mineral_protocol::PlayerVersions {
-                queue: mineral_protocol::SegmentVersion::ZERO,
-                current: mineral_protocol::SegmentVersion::new(3),
+                queue: None,
+                current: Some(Revision::default().next()),
             },
             current: Some(mineral_protocol::CurrentSync {
                 current_song: Some(song),
@@ -139,11 +140,12 @@ mod tests {
     #[test]
     fn sync_with_sections_replaces_and_records_versions() -> color_eyre::Result<()> {
         let mut app = app_with_queue(2, /*current_idx*/ 0)?;
+        let versions = mineral_protocol::PlayerVersions {
+            queue: Some(Revision::default().next()),
+            current: Some(Revision::default().next().next()),
+        };
         let sync = PlayerSync {
-            versions: mineral_protocol::PlayerVersions {
-                queue: mineral_protocol::SegmentVersion::new(7),
-                current: mineral_protocol::SegmentVersion::new(9),
-            },
+            versions,
             queue: Some(QueueSync {
                 queue: endserenading(4),
                 original_queue: None,
@@ -157,12 +159,8 @@ mod tests {
             "queue 重段应整体替换"
         );
         assert_eq!(
-            app.state.models.player.versions.queue,
-            mineral_protocol::SegmentVersion::new(7)
-        );
-        assert_eq!(
-            app.state.models.player.versions.current,
-            mineral_protocol::SegmentVersion::new(9)
+            app.state.models.player.versions, versions,
+            "收到的版本应原样记录供下次回报"
         );
         Ok(())
     }

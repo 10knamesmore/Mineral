@@ -1,11 +1,12 @@
 //! AudioHandle 投递给 engine 线程的内部命令。
 
+use mineral_common::revision::Revision;
 use mineral_playback::OpenedMedia;
 use std::time::Duration;
 
 /// A seek belongs to the track visible when it was requested.
 pub(crate) struct SeekRequest {
-    pub(crate) track_token: u64,
+    pub(crate) track_token: Revision,
 
     pub(crate) position: Duration,
 }

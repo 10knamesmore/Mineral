@@ -6,12 +6,13 @@ use mineral_client::Client;
 use mineral_client::connection::ClientConfig;
 use mineral_client::operation::Outcome;
 use mineral_client::state::DownloadsDetailMirror;
+use mineral_common::revision::Revision;
 use mineral_model::Song;
 use mineral_protocol::{
     DownloadId, DownloadOrigin, DownloadStatus, MessageBatch, OperationResult, PlayCursor,
-    PlayMode, PlayerSync, PlayerVersions, QueueSync, Request, SegmentVersion, SessionMessage,
-    SessionResult, SongDownloadView, SubscriptionId, SubscriptionTopic, UpdateEnvelope,
-    UpdatePayload, assembly_limits, fragment_download_detail, fragment_player_update,
+    PlayMode, PlayerSync, PlayerVersions, QueueSync, Request, SessionMessage, SessionResult,
+    SongDownloadView, SubscriptionId, SubscriptionTopic, UpdateEnvelope, UpdatePayload,
+    assembly_limits, fragment_download_detail, fragment_player_update,
 };
 use tokio::time::timeout;
 
@@ -44,11 +45,11 @@ fn queue_of(len: usize) -> Vec<Song> {
 }
 
 /// 造一份带 queue 重段的播放同步。
-fn sync_with_queue(version: u64, queue: Vec<Song>) -> PlayerSync {
+fn sync_with_queue(version: Revision, queue: Vec<Song>) -> PlayerSync {
     PlayerSync {
         versions: PlayerVersions {
-            queue: SegmentVersion::new(version),
-            current: SegmentVersion::ZERO,
+            queue: Some(version),
+            current: None,
         },
         cursor: PlayCursor::default(),
         play_mode: PlayMode::default(),
@@ -78,13 +79,13 @@ fn row(index: usize) -> SongDownloadView {
 }
 
 /// 等订阅的播放队列版本到位(订阅即推,正常毫秒级)。
-async fn wait_versions(client: &Client, expected: SegmentVersion) -> color_eyre::Result<()> {
+async fn wait_versions(client: &Client, expected: Revision) -> color_eyre::Result<()> {
     timeout(std::time::Duration::from_secs(5), async {
         loop {
             let versions = client
                 .mirror()
                 .read_player(|player| player.versions().queue);
-            if versions == expected {
+            if versions == Some(expected) {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -122,8 +123,8 @@ async fn player_queue_fragments_assemble_atomically() -> color_eyre::Result<()> 
             let request = request.ok_or_else(|| eyre!("没有收到请求"))?;
             let parts = fragment_player_update(
                 subscription,
-                1,
-                sync_with_queue(/*version*/ 1, queue_of(300)),
+                Revision::default().next(),
+                sync_with_queue(Revision::default().next(), queue_of(300)),
             );
             assert_eq!(parts.len(), 3, "{transport:?}: 300 首应拆成头段 + 2 片");
             wire.send(MessageBatch::one(
@@ -147,7 +148,7 @@ async fn player_queue_fragments_assemble_atomically() -> color_eyre::Result<()> 
         client.subscribe(SubscriptionTopic::Player);
         let pending = client.submit(Request::Pause, applied)?;
         assert!(matches!(pending.outcome().await, Outcome::Applied(())));
-        wait_versions(&client, SegmentVersion::FIRST).await?;
+        wait_versions(&client, Revision::default().next()).await?;
         let queue = client.mirror().read_player(|player| player.queue().len());
         assert_eq!(queue, 300, "{transport:?}");
         server.await??;
@@ -166,8 +167,8 @@ async fn missing_part_requests_resync() -> color_eyre::Result<()> {
             let subscription = read_subscription(&mut wire).await?;
             let parts = fragment_player_update(
                 subscription,
-                1,
-                sync_with_queue(/*version*/ 1, queue_of(300)),
+                Revision::default().next(),
+                sync_with_queue(Revision::default().next(), queue_of(300)),
             );
             // 只发头段,制造缺片。
             wire.send(MessageBatch::one(
@@ -177,8 +178,8 @@ async fn missing_part_requests_resync() -> color_eyre::Result<()> {
             // 下一个版本到来 = 旧组永远不会补齐 → client 必须请求重同步。
             let next = fragment_player_update(
                 subscription,
-                2,
-                sync_with_queue(/*version*/ 2, queue_of(300)),
+                Revision::default().next().next(),
+                sync_with_queue(Revision::default().next().next(), queue_of(300)),
             );
             wire.send(MessageBatch::one(
                 next.first().cloned().ok_or_else(|| eyre!("分片组为空"))?,
@@ -189,11 +190,11 @@ async fn missing_part_requests_resync() -> color_eyre::Result<()> {
             // 补发整段快照:重同步后版本基线由 1 重新建立(与 daemon 泵一致)。
             wire.send(MessageBatch::one(SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 1,
+                version: Revision::default().next(),
                 parts: 1,
                 index: 0,
                 payload: UpdatePayload::Player {
-                    sync: Box::new(sync_with_queue(/*version*/ 1, queue_of(300))),
+                    sync: Box::new(sync_with_queue(Revision::default().next(), queue_of(300))),
                     queue_parts: 0,
                 },
             })))
@@ -202,7 +203,7 @@ async fn missing_part_requests_resync() -> color_eyre::Result<()> {
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
         client.subscribe(SubscriptionTopic::Player);
-        wait_versions(&client, SegmentVersion::FIRST).await?;
+        wait_versions(&client, Revision::default().next()).await?;
         let queue = client.mirror().read_player(|player| player.queue().len());
         assert_eq!(queue, 300, "{transport:?}");
         server.await??;
@@ -221,8 +222,8 @@ async fn duplicate_part_is_rejected() -> color_eyre::Result<()> {
             let subscription = read_subscription(&mut wire).await?;
             let parts = fragment_player_update(
                 subscription,
-                1,
-                sync_with_queue(/*version*/ 1, queue_of(300)),
+                Revision::default().next(),
+                sync_with_queue(Revision::default().next(), queue_of(300)),
             );
             let head = parts.first().cloned().ok_or_else(|| eyre!("分片组为空"))?;
             wire.send(MessageBatch::one(head.clone())).await?;
@@ -258,11 +259,11 @@ async fn too_many_parts_is_rejected() -> color_eyre::Result<()> {
             let subscription = read_subscription(&mut wire).await?;
             wire.send(MessageBatch::one(SessionMessage::Update(UpdateEnvelope {
                 subscription,
-                version: 1,
+                version: Revision::default().next(),
                 parts: assembly_limits::MAX_PARTS.saturating_add(1),
                 index: 0,
                 payload: UpdatePayload::Pcm(mineral_protocol::PcmChunk {
-                    generation: 1,
+                    generation: Revision::default().next(),
                     position: 0,
                     gap: false,
                     sample_rate: Some(44_100),
@@ -300,7 +301,7 @@ async fn downloads_detail_fragments_assemble_in_order() -> color_eyre::Result<()
             accept_handshake(&mut wire).await?;
             let subscription = read_subscription(&mut wire).await?;
             let rows = (0..600).map(row).collect::<Vec<_>>();
-            let parts = fragment_download_detail(subscription, 1, rows);
+            let parts = fragment_download_detail(subscription, Revision::default().next(), rows);
             assert_eq!(parts.len(), 3, "{transport:?}: 600 行应拆成头段 + 2 片");
             for part in parts {
                 wire.send(MessageBatch::one(part)).await?;

@@ -1,5 +1,6 @@
 //! 按订阅和版本有界组装分片，合并播放队列与下载明细载荷。
 
+use mineral_common::revision::Revision;
 use mineral_protocol::{SubscriptionId, UpdateEnvelope, UpdatePayload, assembly_limits};
 use thiserror::Error;
 
@@ -75,7 +76,7 @@ pub(super) enum AssemblyError {
 #[derive(Default)]
 pub(super) struct Assembler {
     /// 进行中的组装组(插入序用于超限时驱逐最旧)。
-    groups: Vec<(SubscriptionId, u64, Group)>,
+    groups: Vec<(SubscriptionId, Revision, Group)>,
 }
 
 /// 一个组装组。
@@ -97,7 +98,7 @@ impl Assembler {
     /// # Params:
     ///   - `subscription`: 目标订阅
     ///   - `version`: 新到的版本
-    fn drop_superseded(&mut self, subscription: SubscriptionId, version: u64) -> bool {
+    fn drop_superseded(&mut self, subscription: SubscriptionId, version: Revision) -> bool {
         let before = self.groups.len();
         self.groups
             .retain(|(id, existing, _group)| !(*id == subscription && *existing < version));
@@ -108,7 +109,7 @@ impl Assembler {
     pub(super) fn accept(
         &mut self,
         envelope: UpdateEnvelope,
-    ) -> Result<Option<(SubscriptionId, u64, UpdatePayload)>, AssemblyError> {
+    ) -> Result<Option<(SubscriptionId, Revision, UpdatePayload)>, AssemblyError> {
         // 新版本到来 = 旧版本的未完成组再也不会补齐;丢掉并显式报告中断。
         let superseded = self.drop_superseded(envelope.subscription, envelope.version);
         if envelope.parts == 1 {
@@ -147,7 +148,7 @@ impl Assembler {
                     mineral_log::warn!(
                         target: "ipc",
                         subscription = evicted.0.value(),
-                        version = evicted.1,
+                        version = ?evicted.1,
                         "组装组超限,放弃最旧组"
                     );
                 }

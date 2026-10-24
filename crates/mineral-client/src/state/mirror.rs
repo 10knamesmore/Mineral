@@ -6,6 +6,7 @@
 //! - **播放位置本地推进**:锚点 + 本地单调钟,不直接相减两进程的 `Instant`。
 //! - **PCM 近期窗口有界**:落后跳窗并留下缺口事实,不无限追旧样本。
 
+use mineral_common::revision::Revision;
 use std::collections::VecDeque;
 use std::time::Instant;
 
@@ -123,7 +124,7 @@ impl PlayerMirror {
     /// 队列重段是否已到过(供 UI 区分「尚未就绪」与「已知为空」)。
     #[must_use]
     pub fn queue_ready(&self) -> bool {
-        !self.versions.queue.is_initial()
+        self.versions.queue.is_some()
     }
 }
 
@@ -274,8 +275,8 @@ struct SubscriptionState {
     /// 订阅主题,决定载荷是否要求连续版本。
     topic: SubscriptionTopic,
 
-    /// 最近应用的正版本号;`None` 表示尚未收到更新或正在重同步。
-    last_version: Option<u64>,
+    /// 最近应用的修订；`None` 表示尚未收到更新或正在重同步。
+    last_version: Option<Revision>,
 }
 
 /// 镜像内部可变状态。
@@ -511,7 +512,7 @@ impl Mirror {
     pub(crate) fn apply_update(
         &self,
         id: SubscriptionId,
-        version: u64,
+        version: Revision,
         payload: UpdatePayload,
     ) -> ApplyOutcome {
         let mut guard = self.state.write();
@@ -520,10 +521,9 @@ impl Mirror {
             // 未知 / 已取消的订阅:迟到更新直接忽略,不污染镜像。
             return ApplyOutcome::Ignored;
         };
-        if version == 0
-            || subscription
-                .last_version
-                .is_some_and(|last| version <= last)
+        if subscription
+            .last_version
+            .is_some_and(|last| version <= last)
         {
             return ApplyOutcome::Ignored;
         }
@@ -535,9 +535,7 @@ impl Mirror {
                     UpdatePayload::DownloadsDetailDelta(_)
                 )
         );
-        let next_version = subscription
-            .last_version
-            .map_or(/*default*/ 1, |last| last.saturating_add(1));
+        let next_version = subscription.last_version.unwrap_or_default().next();
         if incremental && version != next_version {
             return ApplyOutcome::Resync;
         }
