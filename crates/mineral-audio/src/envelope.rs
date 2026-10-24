@@ -16,6 +16,9 @@ use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 use mineral_model::Envelope;
 use rodio::Source;
 
+use crate::Error;
+use crate::decoder::DecodeOutcome;
+
 /// 包络算法版本:滤波 / 分块统计 / 归一 / 量化的结构变更时 bump;读取方版本
 /// 不符视同缺失、触发重算。当前值标识 K-weighting、momentary 时窗与固定时长块粒度。
 ///
@@ -344,17 +347,18 @@ pub fn envelope_from_file(
         path: path.to_path_buf(),
         source,
     })?;
-    let byte_len = file.metadata().ok().map(|metadata| metadata.len());
     let reader = std::io::BufReader::new(file);
-    let decoder = crate::engine::build_decoder(reader, byte_len)?;
+    let decoder = crate::engine::build_decoder(reader)?;
+    let status = decoder.status();
     let channels = decoder.channels();
     let sample_rate = decoder.sample_rate();
-    let points =
-        envelope_from_samples(decoder, channels, sample_rate, params).ok_or_else(|| {
-            crate::Error::NoFrames {
-                path: path.to_path_buf(),
-            }
-        })?;
+    let points = envelope_from_samples(decoder, channels, sample_rate, params);
+    if let Some(DecodeOutcome::Failed(source)) = status.outcome() {
+        return Err(Error::Decode { source });
+    }
+    let points = points.ok_or_else(|| crate::Error::NoFrames {
+        path: path.to_path_buf(),
+    })?;
     Ok(Envelope {
         points,
         version: ENVELOPE_VERSION,

@@ -7,20 +7,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{CaptureReceipt, CaptureTarget, TransferState};
 
-/// Object-safe synchronous decoder input facade.
+/// Synchronous encoded-media input supporting random byte access.
 pub trait MediaReader: Read + Seek + Send + Sync {}
 
 impl<T: Read + Seek + Send + Sync> MediaReader for T {}
-
-/// The random-access capability of opened encoded media.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SeekSupport {
-    /// The reader may only advance from its current position.
-    ForwardOnly,
-
-    /// The reader supports arbitrary absolute access.
-    RandomAccess,
-}
 
 /// Execution controls supplied when consuming a prepared playback.
 ///
@@ -89,9 +79,6 @@ pub struct OpenedMedia {
     /// Synchronous decoder-facing reader.
     reader: Box<dyn MediaReader>,
 
-    /// Random-access capability of the reader.
-    seek_support: SeekSupport,
-
     /// Encoded byte length when known.
     byte_len: Option<u64>,
 
@@ -113,7 +100,6 @@ impl OpenedMedia {
     ///
     /// # Params:
     ///   - `reader`: Synchronous encoded-media reader.
-    ///   - `seek_support`: Reader random-access capability.
     ///   - `byte_len`: Encoded byte length when known.
     ///   - `info`: Final source-neutral media facts.
     ///   - `transfer`: Optional streaming transfer progress.
@@ -121,7 +107,6 @@ impl OpenedMedia {
     #[must_use]
     pub fn new(
         reader: Box<dyn MediaReader>,
-        seek_support: SeekSupport,
         byte_len: Option<u64>,
         info: PlaybackMediaInfo,
         transfer: Option<TransferState>,
@@ -129,7 +114,6 @@ impl OpenedMedia {
     ) -> Self {
         Self {
             reader,
-            seek_support,
             byte_len,
             info,
             transfer,
@@ -146,12 +130,6 @@ impl OpenedMedia {
     pub fn with_capture(mut self, capture: CaptureReceipt) -> Self {
         self.capture = Some(capture);
         self
-    }
-
-    /// Returns the reader access capability.
-    #[must_use]
-    pub fn seek_support(&self) -> SeekSupport {
-        self.seek_support
     }
 
     /// Returns the encoded byte length when known.

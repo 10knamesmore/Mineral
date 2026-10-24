@@ -1,9 +1,12 @@
 //! Audio engine startup, decoding, and output failures.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rodio::cpal;
 use thiserror::Error;
+
+use crate::DecoderError;
 
 /// Failures exposed by the audio engine.
 #[derive(Debug, Error)]
@@ -143,9 +146,9 @@ pub enum Error {
     /// The encoded media could not be decoded.
     #[error("decode media")]
     Decode {
-        /// Rodio decoder failure.
+        /// Container or audio decoder failure.
         #[source]
-        source: rodio::decoder::DecoderError,
+        source: Arc<DecoderError>,
     },
 
     /// Reading an audio file failed.

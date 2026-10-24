@@ -1,12 +1,14 @@
 //! Encoded-media decoder construction and playback instance cancellation.
 
 use std::io::{Read, Seek};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rodio::Source;
-use rodio::decoder::DecoderBuilder;
 use rodio::source::SeekError;
 use tokio_util::sync::CancellationToken;
+
+use crate::decoder::{DecodeOutcome, Decoder, DecoderStatus};
 
 /// Source wrapper ending immediately after playback instance cancellation.
 pub(super) struct InstanceSource<S> {
@@ -15,14 +17,22 @@ pub(super) struct InstanceSource<S> {
 
     /// Playback instance cancellation token.
     cancellation: CancellationToken,
+
+    /// A prefetched source may start only if its predecessor did not fail.
+    previous: Option<DecoderStatus>,
 }
 
 impl<S> InstanceSource<S> {
     /// Wraps one decoder with its instance token.
-    pub(super) fn new(inner: S, cancellation: CancellationToken) -> Self {
+    pub(super) fn new(
+        inner: S,
+        cancellation: CancellationToken,
+        previous: Option<DecoderStatus>,
+    ) -> Self {
         Self {
             inner,
             cancellation,
+            previous,
         }
     }
 }
@@ -34,6 +44,11 @@ where
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(previous) = self.previous.take()
+            && matches!(previous.outcome(), Some(DecodeOutcome::Failed(_)))
+        {
+            self.cancellation.cancel();
+        }
         if self.cancellation.is_cancelled() {
             None
         } else {
@@ -76,16 +91,12 @@ where
     }
 }
 
-/// Builds a rodio decoder and enables arbitrary seek only when byte length is known.
-pub(crate) fn build_decoder<R>(reader: R, byte_len: Option<u64>) -> crate::Result<rodio::Decoder<R>>
+/// Opens the media with Symphonia while retaining its runtime decoding outcome.
+pub(crate) fn build_decoder<R>(reader: R) -> crate::Result<Decoder>
 where
     R: Read + Seek + Send + Sync + 'static,
 {
-    let mut builder = DecoderBuilder::new().with_data(reader);
-    if let Some(length) = byte_len {
-        builder = builder.with_byte_len(length);
-    }
-    builder
-        .build()
-        .map_err(|source| crate::Error::Decode { source })
+    Decoder::new(reader).map_err(|source| crate::Error::Decode {
+        source: Arc::new(source),
+    })
 }

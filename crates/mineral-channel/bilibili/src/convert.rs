@@ -228,7 +228,7 @@ pub(crate) fn playurl_to_media(song_id: SongId, result: PlayUrlResult) -> Option
         bit_depth: None,
         substituted: false,
     };
-    // B站音频是分片 fMP4:告知播放层以流式打开,避免 seekable 全扫导致起播前拉整段。
+    // DASH 音频使用分片 fMP4，容器布局与 HTTP 字节随机访问能力分别表达。
     Some(DirectMedia::remote(
         info,
         url,

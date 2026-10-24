@@ -272,7 +272,7 @@ mod tests {
     use std::time::Duration;
 
     use mineral_model::{PlaybackMediaInfo, SongId, SourceKind};
-    use mineral_playback::{OpenedMedia, SeekSupport};
+    use mineral_playback::OpenedMedia;
     use tokio_util::sync::CancellationToken;
 
     use crate::handle::AudioMode;
@@ -284,7 +284,6 @@ mod tests {
     fn test_media() -> OpenedMedia {
         OpenedMedia::new(
             Box::new(Cursor::new(Vec::<u8>::new())),
-            SeekSupport::RandomAccess,
             Some(0),
             PlaybackMediaInfo {
                 song_id: SongId::new(SourceKind::NETEASE, "t"),

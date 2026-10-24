@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
-use mineral_playback::{OpenedMedia, SeekSupport};
+use mineral_playback::OpenedMedia;
 use parking_lot::Mutex;
 use rodio::Source;
 
@@ -12,6 +12,7 @@ use super::decoding::{InstanceSource, build_decoder};
 use super::output::Output;
 use crate::Error;
 use crate::command::AudioCommand;
+use crate::decoder::{DecodeOutcome, DecoderStatus};
 use crate::queue_slots::{Boundary, PlayHead, Slot};
 use crate::snapshot::{AudioBackend, AudioSnapshot};
 use crate::tap::{SharedProd, TapSource};
@@ -102,7 +103,7 @@ impl Engine {
         self.output.player().stop();
         self.head.stop();
         self.sample_rate.store(0, Ordering::Relaxed);
-        let slot = self.append_opened(media, "current")?;
+        let slot = self.append_opened(media, "current", None)?;
         mineral_log::info!(target: "audio", song_id, "start decoding");
         self.output.player().play();
         self.sample_rate.store(slot.sample_rate, Ordering::Relaxed);
@@ -117,7 +118,7 @@ impl Engine {
             return Ok(());
         }
         self.head.clear_next();
-        let slot = self.append_opened(media, "next")?;
+        let slot = self.append_opened(media, "next", self.head.cur.decoder_status.clone())?;
         self.head.arm_next(slot);
         Ok(())
     }
@@ -127,14 +128,13 @@ impl Engine {
         &mut self,
         media: OpenedMedia,
         slot_name: &'static str,
+        previous: Option<DecoderStatus>,
     ) -> crate::Result<Slot> {
-        let byte_len = (media.seek_support() == SeekSupport::RandomAccess)
-            .then_some(media.byte_len())
-            .flatten();
         let transfer = media.transfer().cloned();
         let cancellation = media.cancellation().clone();
         let reader = media.into_reader();
-        let decoder = build_decoder(reader, byte_len)?;
+        let decoder = build_decoder(reader)?;
+        let decoder_status = decoder.status();
         let duration_ms = decoder.total_duration().map(duration_to_ms);
         let sample_rate = u32::from(decoder.sample_rate());
         mineral_log::info!(
@@ -142,10 +142,9 @@ impl Engine {
             slot = slot_name,
             sample_rate,
             duration_ms = ?duration_ms,
-            byte_len_known = byte_len.is_some(),
             "decoder ready"
         );
-        let source = InstanceSource::new(decoder, cancellation.clone());
+        let source = InstanceSource::new(decoder, cancellation.clone(), previous);
         self.output.player().append(TapSource::new(
             source,
             Arc::clone(&self.tap_producer),
@@ -156,6 +155,7 @@ impl Engine {
             sample_rate,
             transfer,
             cancellation: Some(cancellation),
+            decoder_status: Some(decoder_status),
             occupied: true,
         })
     }
@@ -195,9 +195,21 @@ impl Engine {
     /// Updates shared playback state and observes natural decoder boundaries.
     pub(super) fn update_snapshot(&mut self, snapshot: &Arc<Mutex<AudioSnapshot>>) {
         self.output.refresh_device();
+        // Read the queue count before outcomes: sources publish failures before rodio removes them.
+        let queued_sources = self.output.player().len();
+        let failure = [&self.head.cur, &self.head.next]
+            .into_iter()
+            .find_map(|slot| match slot.decoder_status.as_ref()?.outcome()? {
+                DecodeOutcome::Failed(error) => Some(error),
+                DecodeOutcome::Completed => None,
+            });
+        if let Some(error) = failure {
+            mineral_log::error!(target: "audio", error = mineral_log::chain(error.as_ref()), "decoding failed; playback stopped");
+            self.stop();
+        }
         let position_ms = duration_to_ms(self.output.player().get_pos());
         let paused = self.output.player().is_paused();
-        let boundary = self.head.observe(self.output.player().len());
+        let boundary = self.head.observe(queued_sources);
         if boundary == Boundary::Gapless {
             self.sample_rate
                 .store(self.head.cur.sample_rate, Ordering::Relaxed);

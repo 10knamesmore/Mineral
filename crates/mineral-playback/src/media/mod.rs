@@ -5,5 +5,5 @@ mod opened;
 mod transfer;
 
 pub use capture::{CaptureReceipt, CaptureTarget, CapturedMedia};
-pub use opened::{MediaReader, OpenOptions, OpenedMedia, SeekSupport};
+pub use opened::{MediaReader, OpenOptions, OpenedMedia};
 pub use transfer::{TransferSnapshot, TransferState};

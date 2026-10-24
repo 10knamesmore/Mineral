@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use mineral_model::{BitRate, PlaybackMediaInfo, SongId, SourceKind};
 use mineral_playback::{
     DirectMedia, Error, MediaReader, OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRegistry,
-    PlaybackRequest, PreparedPlayback, Result, SeekSupport,
+    PlaybackRequest, PreparedPlayback, Result,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -72,7 +72,6 @@ impl PreparedPlayback for StripPrefixPrepared {
         let reader: Box<dyn MediaReader> = Box::new(Cursor::new(prepared));
         Ok(OpenedMedia::new(
             reader,
-            SeekSupport::RandomAccess,
             byte_len,
             self.info,
             None,

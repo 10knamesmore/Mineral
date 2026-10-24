@@ -276,8 +276,7 @@ pub struct RewriteSpec {
     pub(crate) stream_headers: Option<Vec<(String, String)>>,
 
     /// 改写后的流容器布局;`None` = 脚本没指定(改 URL 时由 apply 层定安全默认)。
-    /// 当改写把 URL 顶换成不同容器的流时,脚本据目标布局设置(分片流置 `Chunked` 让播放层流式
-    /// 打开、直链置 `Contiguous` 保留 seek)。
+    /// 改写 URL 时按目标容器设置布局；随机访问能力由打开后的 reader 决定。
     pub(crate) layout: Option<StreamLayout>,
 
     /// 顶换流的实测码率(bps);`None` = 脚本没给(展示层显 0)。纯展示元信息,

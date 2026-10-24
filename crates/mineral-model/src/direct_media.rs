@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{AudioFormat, MediaUrl, SongId};
 
-/// Container layout governing the cost of random access while opening a decoder.
+/// Container layout, independent of the reader's random-access capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamLayout {
@@ -15,7 +15,7 @@ pub enum StreamLayout {
     #[default]
     Contiguous,
 
-    /// A segmented container whose complete seek index requires scanning every segment.
+    /// A fragmented container whose sample index is discovered as segments are read.
     Chunked,
 }
 
