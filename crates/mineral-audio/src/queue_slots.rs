@@ -4,6 +4,7 @@ use mineral_playback::TransferState;
 use tokio_util::sync::CancellationToken;
 
 use crate::bps::Bps;
+use crate::decoder::DecoderStatus;
 
 /// Audio-engine accounting for one appended decoder.
 #[derive(Clone, Default)]
@@ -19,6 +20,9 @@ pub(crate) struct Slot {
 
     /// Cancellation token governing this decoder and its producer.
     pub(crate) cancellation: Option<CancellationToken>,
+
+    /// Decoding result retained after rodio removes the source from its queue.
+    pub(crate) decoder_status: Option<DecoderStatus>,
 
     /// Whether a decoder occupies this slot.
     pub(crate) occupied: bool,

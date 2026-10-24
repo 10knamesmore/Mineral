@@ -12,7 +12,7 @@ use mineral_model::{
 };
 use mineral_playback::{
     DirectMedia, MediaReader, OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRegistry,
-    PlaybackRequest, PreparedPlayback, SeekSupport,
+    PlaybackRequest, PreparedPlayback,
 };
 use parking_lot::Mutex;
 
@@ -131,7 +131,6 @@ impl PreparedPlayback for TestPreparedPlayback {
         let reader: Box<dyn MediaReader> = Box::new(Cursor::new(bytes));
         Ok(OpenedMedia::new(
             reader,
-            SeekSupport::RandomAccess,
             byte_len,
             self.info,
             None,

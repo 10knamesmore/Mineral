@@ -2,15 +2,13 @@
 
 use std::io::BufReader;
 
-use async_trait::async_trait;
-use mineral_model::StreamLayout;
-
-use super::reader::{CancellationReader, ForwardOnlyReader};
+use super::reader::CancellationReader;
 use super::remote::open_remote;
 use crate::{
     DirectLocator, DirectMedia, Error, MediaReader, OpenOptions, OpenedMedia, PreparedPlayback,
-    Result, SeekSupport,
+    Result,
 };
+use async_trait::async_trait;
 
 /// Built-in prepared playback for a direct locator.
 pub struct DirectPreparedPlayback {
@@ -57,7 +55,6 @@ impl DirectPreparedPlayback {
         let cancellation = options.cancellation().clone();
         Ok(OpenedMedia::new(
             Box::new(CancellationReader::new(reader, cancellation.clone())),
-            SeekSupport::RandomAccess,
             byte_len,
             self.media.info().clone(),
             None,
@@ -92,20 +89,9 @@ impl DirectPreparedPlayback {
             ) => result?,
         };
         let capture = opened.capture;
-        let (reader, seek_support, byte_len): (Box<dyn MediaReader>, SeekSupport, Option<u64>) =
-            match self.media.layout() {
-                StreamLayout::Contiguous => {
-                    (opened.reader, SeekSupport::RandomAccess, opened.byte_len)
-                }
-                StreamLayout::Chunked => (
-                    Box::new(ForwardOnlyReader::new(opened.reader)),
-                    SeekSupport::ForwardOnly,
-                    None,
-                ),
-            };
+        let byte_len = opened.byte_len;
         let media = OpenedMedia::new(
-            Box::new(CancellationReader::new(reader, cancellation.clone())),
-            seek_support,
+            Box::new(CancellationReader::new(opened.reader, cancellation.clone())),
             byte_len,
             self.media.info().clone(),
             Some(opened.transfer),

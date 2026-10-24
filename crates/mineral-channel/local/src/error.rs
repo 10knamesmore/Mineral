@@ -80,7 +80,7 @@ pub(crate) enum Error {
         path: PathBuf,
 
         /// Packet start in track time-base ticks.
-        timestamp: u64,
+        timestamp: i64,
 
         /// Packet duration in the same ticks.
         duration: u64,
