@@ -5,7 +5,10 @@ mod sampling;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(super) use sampling::resize_exact;
+
 pub(super) use sampling::{
-    fitted_pixels, resize_exact, resize_to_fill, resize_transparent, scale_to_pixels, thumbnail,
-    thumbnail_exact, thumbnail_to_fill,
+    fitted_pixels, resize_center_square, resize_to_fill, resize_transparent, scale_to_pixels,
+    thumbnail, thumbnail_exact, thumbnail_to_fill,
 };
