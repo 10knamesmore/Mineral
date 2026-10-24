@@ -1,7 +1,8 @@
 //! 使用 CPU SIMD 采样封面，统一精确尺寸、等比适配、居中裁剪与透明补边。
 
 use crate::config::CoverCellFit;
-use fast_image_resize::{CropBox, FilterType, ResizeAlg, ResizeOptions, Resizer};
+use fast_image_resize::images::CroppedImage;
+use fast_image_resize::{CropBox, FilterType, ResizeAlg, ResizeError, ResizeOptions, Resizer};
 use image::{DynamicImage, Rgba, RgbaImage};
 
 use crate::image::key::PixelSize;
@@ -19,6 +20,24 @@ enum SamplingFilter {
     Thumbnail,
 }
 
+/// 源图的取样范围；整数像素边界与按目标比例计算的浮点裁剪分别处理。
+#[derive(Clone, Copy, Debug)]
+enum SamplingRegion {
+    Whole,
+
+    Fit(PixelSize),
+
+    Crop {
+        left: u32,
+
+        top: u32,
+
+        width: u32,
+
+        height: u32,
+    },
+}
+
 /// 按 Triangle 核采样到精确尺寸；调用方负责目标区域的宽高比例。
 ///
 /// # Params:
@@ -30,7 +49,33 @@ pub(in crate::image) fn resize_exact(
     width: u32,
     height: u32,
 ) -> DynamicImage {
-    sample(source, width, height, SamplingFilter::Display, None)
+    sample(
+        source,
+        width,
+        height,
+        SamplingFilter::Display,
+        SamplingRegion::Whole,
+    )
+}
+
+/// 借用源图的整数中心方图，按 Triangle 核采样；奇数留边多出的像素位于右侧或下侧。
+pub(in crate::image) fn resize_center_square(
+    source: &DynamicImage,
+    output_side: u32,
+) -> DynamicImage {
+    let source_side = source.width().min(source.height());
+    sample(
+        source,
+        output_side,
+        output_side,
+        SamplingFilter::Display,
+        SamplingRegion::Crop {
+            left: (source.width() - source_side) / 2,
+            top: (source.height() - source_side) / 2,
+            width: source_side,
+            height: source_side,
+        },
+    )
 }
 
 /// 对带透明补边的画布执行 alpha 加权缩放，保留边缘颜色。
@@ -39,7 +84,13 @@ pub(in crate::image) fn resize_transparent(
     width: u32,
     height: u32,
 ) -> DynamicImage {
-    sample(source, width, height, SamplingFilter::Transparent, None)
+    sample(
+        source,
+        width,
+        height,
+        SamplingFilter::Transparent,
+        SamplingRegion::Whole,
+    )
 }
 
 /// 按 Box 核采样到精确尺寸，供低清预览和取色使用。
@@ -53,7 +104,13 @@ pub(in crate::image) fn thumbnail_exact(
     width: u32,
     height: u32,
 ) -> DynamicImage {
-    sample(source, width, height, SamplingFilter::Thumbnail, None)
+    sample(
+        source,
+        width,
+        height,
+        SamplingFilter::Thumbnail,
+        SamplingRegion::Whole,
+    )
 }
 
 /// 按字符外框的物理比例居中截边，再采样到低清网格；网格宽高不参与裁剪比例计算。
@@ -73,7 +130,7 @@ pub(in crate::image) fn thumbnail_to_fill(
         width,
         height,
         SamplingFilter::Thumbnail,
-        Some(bounds),
+        SamplingRegion::Fit(bounds),
     )
 }
 
@@ -130,7 +187,7 @@ pub(in crate::image) fn scale_to_pixels(
                 pixels.width(),
                 pixels.height(),
                 SamplingFilter::Display,
-                Some(pixels),
+                SamplingRegion::Fit(pixels),
             )
             .into_rgba8();
         }
@@ -160,15 +217,18 @@ pub(in crate::image) fn scale_to_pixels(
 ///   - `width`: 输出像素宽度
 ///   - `height`: 输出像素高度
 ///   - `filter`: 双线性显示采样或 Box 预览采样
-///   - `crop_to`: 要铺满的真实像素比例；`None` 表示采样全部原图
+///   - `region`: 采样全部原图、按目标比例裁剪或取整数像素区域
 fn sample(
     source: &DynamicImage,
     width: u32,
     height: u32,
     filter: SamplingFilter,
-    crop_to: Option<PixelSize>,
+    region: SamplingRegion,
 ) -> DynamicImage {
-    if crop_to.is_none() && source.width() == width && source.height() == height {
+    if matches!(region, SamplingRegion::Whole)
+        && source.width() == width
+        && source.height() == height
+    {
         return source.clone();
     }
     let mut output = DynamicImage::new(width, height, source.color());
@@ -179,7 +239,7 @@ fn sample(
     let mut options = ResizeOptions::new()
         .resize_alg(ResizeAlg::Convolution(fast_filter))
         .use_alpha(matches!(filter, SamplingFilter::Transparent));
-    if let Some(bounds) = crop_to {
+    if let SamplingRegion::Fit(bounds) = region {
         let crop = CropBox::fit_src_into_dst_size(
             source.width(),
             source.height(),
@@ -191,14 +251,38 @@ fn sample(
     }
 
     let mut fast_resizer = Resizer::new();
-    if let Err(error) = fast_resizer.resize(source, &mut output, &options) {
+    let result = match region {
+        SamplingRegion::Crop {
+            left,
+            top,
+            width,
+            height,
+        } => CroppedImage::new(source, left, top, width, height)
+            .map_err(ResizeError::from)
+            .and_then(|cropped| fast_resizer.resize(&cropped, &mut output, &options)),
+        SamplingRegion::Whole | SamplingRegion::Fit(_) => {
+            fast_resizer.resize(source, &mut output, &options)
+        }
+    };
+    if let Err(error) = result {
         mineral_log::warn!(target: "cover", %error,
             source_width = source.width(), source_height = source.height(),
-            width, height, pixel_format = ?source.color(), ?filter, ?crop_to,
+            width, height, pixel_format = ?source.color(), ?filter, ?region,
             cpu = ?fast_resizer.cpu_extensions(), "cover pixel sampling failed; falling back to image");
 
         drop(output);
-        let cropped = crop_to.map(|bounds| resize_to_fill(source, bounds.width(), bounds.height()));
+        let cropped = match region {
+            SamplingRegion::Whole => None,
+            SamplingRegion::Fit(bounds) => {
+                Some(resize_to_fill(source, bounds.width(), bounds.height()))
+            }
+            SamplingRegion::Crop {
+                left,
+                top,
+                width,
+                height,
+            } => Some(source.crop_imm(left, top, width, height)),
+        };
         let source = cropped.as_ref().unwrap_or(source);
 
         output = match (filter, source.color()) {

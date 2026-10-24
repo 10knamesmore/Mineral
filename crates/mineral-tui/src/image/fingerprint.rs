@@ -3,7 +3,7 @@
 
 use image::DynamicImage;
 
-use super::resize::resize_exact;
+use super::resize::resize_center_square;
 
 /// 指纹网格边长(像素)。
 const GRID: u32 = 16;
@@ -26,14 +26,7 @@ impl CoverFingerprint {
     /// # Params:
     ///   - `image`: 已解码封面；非方图按中心方阵取样
     pub(crate) fn of(image: &DynamicImage) -> Self {
-        let side = image.width().min(image.height());
-        let square = image.crop_imm(
-            (image.width() - side) / 2,
-            (image.height() - side) / 2,
-            side,
-            side,
-        );
-        let sampled = resize_exact(&square, GRID, GRID).into_luma8();
+        let sampled = resize_center_square(image, GRID).into_luma8();
         Self {
             gray: sampled.into_raw().into_boxed_slice(),
         }
