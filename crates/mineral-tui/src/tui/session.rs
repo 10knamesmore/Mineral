@@ -1,7 +1,4 @@
 //! Terminal RAII guard。
-//!
-//! [`Tui::enter`] 切到 alternate screen + raw mode,[`Tui::exit`] / `Drop`
-//! 必然恢复终端,即使发生 panic(我们在 enter 时安装了一个 chained panic hook)。
 
 use std::fmt;
 use std::io::{self, BufWriter, Stdout, Write as _};
@@ -20,10 +17,13 @@ use crossterm::terminal::{
     is_raw_mode_enabled,
 };
 use ratatui::Terminal;
-use ratatui::backend::{Backend as _, CrosstermBackend};
+use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 
 use crate::image::graphics::GraphicsProtocol;
+use crate::render::memo::Compositor;
+
+use super::output::write_cells;
 
 /// 终端 backend 的 RAII 持有者。
 pub struct Tui {
@@ -39,7 +39,7 @@ pub struct Tui {
     title_pushed: Arc<AtomicBool>,
 
     /// 与终端同生命周期的保留画布和区域输出参照。
-    compositor: crate::render::memo::Compositor,
+    compositor: Compositor,
 
     /// 已连续省略的帧数，恢复提交时记录，避免逐帧日志。
     skipped_frames: u64,
@@ -54,7 +54,7 @@ impl Tui {
             terminal,
             launch_cursor: None,
             title_pushed: Arc::new(AtomicBool::new(false)),
-            compositor: crate::render::memo::Compositor::default(),
+            compositor: Compositor::default(),
             skipped_frames: 0,
         })
     }
@@ -155,9 +155,10 @@ impl Tui {
             output.flush()?;
         }
         if !update.is_empty() || !graphics.is_empty() {
-            self.terminal
-                .backend_mut()
-                .draw(self.compositor.updates(&update))?;
+            write_cells(
+                self.terminal.backend_mut().writer_mut(),
+                self.compositor.updates(&update),
+            )?;
             self.terminal.hide_cursor()?;
             ratatui::backend::Backend::flush(self.terminal.backend_mut())?;
         }
