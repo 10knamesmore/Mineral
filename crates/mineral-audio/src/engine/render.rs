@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use cpal::{FromSample, Sample};
 use mineral_common::revision::Revision;
-use mineral_playback::TransferState;
+use mineral_playback::{ReadControl, TransferState};
 use spin::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -81,6 +81,9 @@ pub(super) struct Track {
     pub(super) generation: Revision,
 
     pub(super) cancellation: CancellationToken,
+
+    /// Attached after decoder initialization, when interrupted reads can recover by seeking.
+    pub(super) read_control: Option<ReadControl>,
 
     pub(super) transfer: Option<TransferState>,
 
@@ -191,6 +194,9 @@ impl Track {
 
     pub(super) fn rewind(&mut self, position: Duration, rate: NonZeroU32) {
         let rendered_position = self.position(rate);
+        if let Some(control) = &self.read_control {
+            control.interrupt();
+        }
         self.generation = self.generation.next();
         self.samples.clear();
         self.origin = rendered_position;

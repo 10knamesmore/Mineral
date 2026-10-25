@@ -5,7 +5,7 @@ use std::io::{Read, Seek};
 use mineral_model::PlaybackMediaInfo;
 use tokio_util::sync::CancellationToken;
 
-use super::{CaptureReceipt, CaptureTarget, TransferState};
+use super::{CaptureReceipt, CaptureTarget, ReadControl, TransferState};
 
 /// Synchronous encoded-media input supporting random byte access.
 pub trait MediaReader: Read + Seek + Send + Sync {}
@@ -88,6 +88,9 @@ pub struct OpenedMedia {
     /// Streaming transfer progress when a producer is involved.
     transfer: Option<TransferState>,
 
+    /// Read demand that the decoder worker can interrupt on seek.
+    read_control: Option<ReadControl>,
+
     /// Producer-owned completion receipt for the requested capture.
     capture: Option<CaptureReceipt>,
 
@@ -117,9 +120,20 @@ impl OpenedMedia {
             byte_len,
             info,
             transfer,
+            read_control: None,
             capture: None,
             cancellation,
         }
+    }
+
+    /// Attaches read demand shared with the provider's reader.
+    ///
+    /// # Params:
+    ///   - `control`: Demand governed by this media's reader lifetime token.
+    #[must_use]
+    pub fn with_read_control(mut self, control: ReadControl) -> Self {
+        self.read_control = Some(control);
+        self
     }
 
     /// Attaches the producer-owned completion receipt for a requested capture.
@@ -148,6 +162,12 @@ impl OpenedMedia {
     #[must_use]
     pub fn transfer(&self) -> Option<&TransferState> {
         self.transfer.as_ref()
+    }
+
+    /// Returns read demand that can be interrupted after decoder initialization.
+    #[must_use]
+    pub fn read_control(&self) -> Option<&ReadControl> {
+        self.read_control.as_ref()
     }
 
     /// Takes the producer-owned capture receipt, if capture was requested and accepted.

@@ -3366,6 +3366,7 @@ dependencies = [
  "futures-util",
  "mineral-log",
  "mineral-model",
+ "parking_lot",
  "reqwest",
  "rustc-hash 2.1.2",
  "stream-download",

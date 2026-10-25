@@ -70,6 +70,9 @@ fn wait_for_work(
             && (generation != Some(track.generation)
                 || (!ended && track.samples.len() < output.capacity_samples))
         {
+            if let Some(control) = &track.read_control {
+                control.begin_read();
+            }
             return Some(Work {
                 generation: track.generation,
                 output: output.pcm,
@@ -84,6 +87,7 @@ fn wait_for_work(
 }
 
 fn decode(media: OpenedMedia, playback: &SharedPlayback, id: u64, tick: Duration) -> Result<()> {
+    let read_control = media.read_control().cloned();
     let mut decoder = Decoder::new(media.into_reader()).map_err(|source| Error::Decode {
         source: Arc::new(source),
     })?;
@@ -97,6 +101,7 @@ fn decode(media: OpenedMedia, playback: &SharedPlayback, id: u64, tick: Duration
         else {
             return Ok(());
         };
+        track.read_control = read_control;
         track.duration = decoder.duration();
         track.source_format = Some(decoder.format());
         mineral_log::info!(
