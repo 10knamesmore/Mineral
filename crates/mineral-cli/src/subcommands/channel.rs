@@ -3,6 +3,10 @@
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, Subcommand};
+use mineral_channel_apple_music::cli::AppleMusicCli;
+use mineral_channel_apple_music::{
+    AlbumCacheConfig as AppleMusicAlbumCacheConfig, AppleMusicConfig,
+};
 use mineral_channel_bilibili::BilibiliConfig;
 use mineral_channel_bilibili::cli::BilibiliCli;
 use mineral_channel_netease::NeteaseConfig;
@@ -20,6 +24,9 @@ pub struct ChannelArgs {
 /// Supported music sources.
 #[derive(Debug, Subcommand)]
 pub enum ChannelCommand {
+    /// Apple Music
+    Am(AppleMusicCli),
+
     /// NetEase Cloud Music
     Netease(NeteaseCli),
 
@@ -36,6 +43,13 @@ pub enum ChannelCommand {
 ///   命令执行结果。
 pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
     match args.channel {
+        ChannelCommand::Am(cli) => {
+            let (config, _warnings) = super::config::load_daemon().await?;
+            let config = apple_music_config_from(config.sources().am());
+            mineral_channel_apple_music::cli::run(cli, &config)
+                .await
+                .map_err(Into::into)
+        }
         ChannelCommand::Netease(cli) => {
             // 加载 daemon 的网络参数，不执行 setup；代理与超时对扫码登录同样生效。
             let (config, _warnings) = super::config::load_daemon().await?;
@@ -52,6 +66,30 @@ pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
                 .map_err(Into::into)
         }
     }
+}
+
+/// Supplies daemon settings without opening the optional playback device file.
+pub fn apple_music_config_from(
+    section: &mineral_server::config::AppleMusicSection,
+) -> AppleMusicConfig {
+    AppleMusicConfig::builder()
+        .proxy(section.proxy().clone())
+        .timeout_secs(*section.timeout_secs())
+        .developer_token_cache_ttl(Duration::from_secs(
+            u64::from(section.developer_token_cache_ttl_days().get()) * 24 * 60 * 60,
+        ))
+        .lyrics_translation_language(section.lyrics_translation_language().clone())
+        .lyrics_romanization_script(section.lyrics_romanization_script().clone())
+        .album_cache(
+            AppleMusicAlbumCacheConfig::builder()
+                .ttl_days(*section.album_cache().ttl_days())
+                .ttl_jitter_days(*section.album_cache().ttl_jitter_days())
+                .build(),
+        )
+        .device_file(section.device_file().clone())
+        .media_concurrency(*section.media_concurrency())
+        .fragment_header_prefetch_bytes(*section.fragment_header_prefetch_bytes())
+        .build()
 }
 
 /// 把配置的网易云段映射成构造参数(`NeteaseConfig` 是叶子类型,不依赖配置 crate,

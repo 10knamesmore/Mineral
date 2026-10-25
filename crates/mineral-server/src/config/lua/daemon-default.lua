@@ -39,6 +39,20 @@ return {
     tagging_workers = 4,
   },
   sources = {
+    am = {
+      timeout_secs = 100,
+      proxy = false,
+      developer_token_cache_ttl_days = 30,
+      lyrics_translation_language = "zh-hans-cn",
+      lyrics_romanization_script = "ja-Latn",
+      album_cache = {
+        ttl_days = 30,
+        ttl_jitter_days = 7,
+      },
+      device_file = nil, -- nil 使用内置身份；填写路径则只使用指定 WVD。
+      media_concurrency = 16,
+      fragment_header_prefetch_bytes = 16 * KB,
+    },
     ["local"] = {
       roots = {},
     },

@@ -9,6 +9,7 @@ use std::time::Instant;
 use mineral_channel_core::PlaylistLoad;
 use mineral_common::revision::Revision;
 use mineral_model::{AlbumId, Lyrics, PlaylistId, SongId, SourceKind};
+use mineral_task::Priority;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::playlist_tracks::{CollectionTracks, PlaylistRequests};
@@ -54,20 +55,25 @@ pub struct LibraryData {
 
 /// 专辑详情请求的生命周期，失败只在下一次导航后重试。
 pub(crate) enum AlbumRequest {
-    /// 请求仍在后端运行。
-    Loading,
+    /// 已提交的最高优先级；选中后台请求时只提交一次升级。
+    Loading(Priority),
 
     /// 当前光标停留期间已经失败。
     Failed(Instant),
 }
 
 impl LibraryData {
-    /// 只有未加载且未在途的详情需要提交，失败后等待新的导航。
-    pub(crate) fn needs_album(&self, id: &AlbumId, changed_at: Instant) -> bool {
+    /// 未加载的详情可以首次提交或提升在途优先级；失败后等待新的导航。
+    pub(crate) fn needs_album(
+        &self,
+        id: &AlbumId,
+        priority: Priority,
+        changed_at: Instant,
+    ) -> bool {
         !self.album_tracks.contains_key(id)
             && match self.albums_requested.get(id) {
                 None => true,
-                Some(AlbumRequest::Loading) => false,
+                Some(AlbumRequest::Loading(submitted)) => priority > *submitted,
                 Some(AlbumRequest::Failed(at)) => *at != changed_at,
             }
     }
@@ -83,8 +89,9 @@ impl LibraryData {
     }
 
     /// 提交详情后登记在途状态。
-    pub(crate) fn request_album(&mut self, id: AlbumId) {
-        self.albums_requested.insert(id, AlbumRequest::Loading);
+    pub(crate) fn request_album(&mut self, id: AlbumId, priority: Priority) {
+        self.albums_requested
+            .insert(id, AlbumRequest::Loading(priority));
     }
 
     /// 失败收束后，在当前导航位置停止重试。
@@ -102,7 +109,7 @@ impl LibraryData {
             + self
                 .albums_requested
                 .values()
-                .filter(|request| matches!(request, AlbumRequest::Loading))
+                .filter(|request| matches!(request, AlbumRequest::Loading(_)))
                 .count()
     }
 

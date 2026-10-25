@@ -22,6 +22,7 @@ thiserror               = { workspace = true }
 mineral-channel-core    = { workspace = true }
 mineral-channel-mineral = { workspace = true }
 mineral-channel-netease = { workspace = true }
+mineral-channel-apple-music = { workspace = true }
 mineral-channel-bilibili = { workspace = true }
 mineral-cli             = { workspace = true }
 mineral-config          = { workspace = true }

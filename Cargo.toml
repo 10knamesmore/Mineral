@@ -19,6 +19,7 @@ members = [
     "crates/mineral-test",
     "crates/mineral-channel/core",
     "crates/mineral-channel/netease",
+    "crates/mineral-channel/apple-music",
     "crates/mineral-channel/bilibili",
     "crates/mineral-channel/mineral",
     "crates/mineral-channel/local",
@@ -87,6 +88,7 @@ mineral-spectrum        = { path = "crates/mineral-spectrum", version = "0.5.10"
 mineral-test            = { path = "crates/mineral-test" }
 mineral-channel-core    = { path = "crates/mineral-channel/core", version = "0.5.10" }
 mineral-channel-netease = { path = "crates/mineral-channel/netease", version = "0.5.10" }
+mineral-channel-apple-music = { path = "crates/mineral-channel/apple-music", version = "0.5.10" }
 mineral-channel-bilibili = { path = "crates/mineral-channel/bilibili", version = "0.5.10" }
 mineral-channel-mineral = { path = "crates/mineral-channel/mineral", version = "0.5.10" }
 mineral-channel-local = { path = "crates/mineral-channel/local", version = "0.5.10" }

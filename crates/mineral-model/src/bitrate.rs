@@ -1,12 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-/// 跨 channel 的最小公约数音质枚举。
+/// 跨 channel 的音质偏好档位。
 ///
-/// channel-only 的更高规格(网易的 JYEffect / Sky / JYMaster 等)在本枚举不暴露,
-/// 由各 channel 实现内部归一化到这套值之一(就近映射或拒绝)。
-///
-/// `Ord` 语义 = **音频质量升序**(`Standard < Higher < Exhigh < Lossless < Hires`),由
-/// variant 声明顺序保证;调用方据此比较「本地副本是否够格」。新增 variant 务必按质量插对位置。
+/// channel 尽力选择接近偏好的可播资源, 来源特有规格由 channel 内部选择
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]

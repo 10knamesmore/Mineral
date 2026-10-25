@@ -5,6 +5,7 @@ local GB = MB * 1024
 ---@type mineral.TuiConfig
 return {
   source_colors = {
+    am = "#FA243C",
     netease = "#9D2928",
     bilibili = "#FF8cB0",
     mineral = "#2a6511",
@@ -262,7 +263,7 @@ return {
     },
     channel = {
       detail_debounce_ms = 500,
-      sources = { "netease", "bilibili" },
+      sources = { "netease", "bilibili", "am" },
       kinds = { "song", "album", "artist", "playlist", "user" },
     },
   },

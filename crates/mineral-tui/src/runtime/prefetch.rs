@@ -264,7 +264,7 @@ pub(crate) fn request_play_count(state: &mut AppState, client: &dyn Backend) {
 }
 
 /// search 布局态下，结果列/详情光标停留超防抖窗后，给当前 detail 栈顶帧补拉列表/详情
-/// （Background 优先级），并把该实体封面搭车投给图片引擎。
+/// （专辑为 User，其余为 Background），并把该实体封面搭车投给图片引擎。
 ///
 /// 同帧只派一次（`DetailFrame.requested`）；移光标 / 下钻换新帧后可再派——失败的帧换走
 /// 再回即重试（驻留窗口重新触发），与 spec「预览失败驻留重试」一致。布局态未开则不派。
@@ -300,7 +300,11 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
     };
     let source = fetch.source();
     mineral_log::debug!(target: "prefetch", ?source, key = %fetch.dedup_key(), "request detail");
-    submit_detail_tasks(client, &mut state.models.library, fetch);
+    let priority = match &fetch {
+        DetailFetch::AlbumDetail(_) => Priority::User,
+        DetailFetch::PlaylistDetail(_) | DetailFetch::Artist(_) => Priority::Background,
+    };
+    submit_detail_tasks(client, &mut state.models.library, fetch, priority);
     if let Some(url) = cover {
         state.resources.images.prefetch([(source, url)]);
     }
@@ -365,17 +369,20 @@ fn collect_detail_cover_candidates(
     out
 }
 
-/// 按 [`DetailFetch`] 派对应的 channel 拉取任务（artist 两路：详情 + 专辑列表；其余单路）。
+/// 按调用方的优先级派详情任务；手动操作使用 User，自动预览由调用方区分实体。
+/// artist 两路：详情 + 专辑列表；其余单路。
 pub(crate) fn submit_detail_tasks(
     client: &dyn Backend,
     library: &mut crate::runtime::state::LibraryData,
     fetch: DetailFetch,
+    priority: Priority,
 ) {
     match fetch {
         DetailFetch::AlbumDetail(id) => {
+            library.request_album(id.clone(), priority);
             client.submit_task(
                 TaskKind::ChannelFetch(ChannelFetchKind::AlbumDetail { id }),
-                Priority::Background,
+                priority,
             );
         }
         DetailFetch::PlaylistDetail(id) => {
@@ -385,20 +392,20 @@ pub(crate) fn submit_detail_tasks(
                     id,
                     load: PlaylistLoad::Complete,
                 }),
-                Priority::Background,
+                priority,
             );
         }
         DetailFetch::Artist(id) => {
             client.submit_task(
                 TaskKind::ChannelFetch(ChannelFetchKind::ArtistDetail { id: id.clone() }),
-                Priority::Background,
+                priority,
             );
             client.submit_task(
                 TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
                     id,
                     page: Page::default(),
                 }),
-                Priority::Background,
+                priority,
             );
         }
     }
@@ -444,24 +451,24 @@ fn request_album_tracks(state: &mut AppState, client: &dyn Backend) {
         Vec::new()
     };
     for id in ids {
-        if !state
-            .models
-            .library
-            .needs_album(&id, state.ui.browse.nav.last_sel_change)
-        {
-            continue;
-        }
         let priority = if selected.as_ref() == Some(&CollectionId::Album(id.clone())) {
             Priority::User
         } else {
             Priority::Background
         };
+        if !state
+            .models
+            .library
+            .needs_album(&id, priority, state.ui.browse.nav.last_sel_change)
+        {
+            continue;
+        }
         mineral_log::debug!(target: "prefetch", album = %id, ?priority, "request library album tracks");
         client.submit_task(
             TaskKind::ChannelFetch(ChannelFetchKind::AlbumDetail { id: id.clone() }),
             priority,
         );
-        state.models.library.request_album(id);
+        state.models.library.request_album(id, priority);
     }
 }
 

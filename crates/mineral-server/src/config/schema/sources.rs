@@ -17,6 +17,9 @@ use std::{
     "跨源策展:各源函数跑完、按注册序合并后的列表(条目带 source 字段),可全局排序/交错"
 )]
 pub struct SourcesConfig {
+    /// Apple Music
+    am: AppleMusicSection,
+
     /// 网易云音乐
     netease: NeteaseSection,
 
@@ -60,6 +63,59 @@ pub struct BackfillSection {
     "该源歌单(= 收藏夹)列表的呈现策展(过滤/改名/重排)"
 )]
 pub struct BilibiliSection {}
+
+/// Apple Music
+#[config_section]
+#[lua_extra_field(
+    "curate_playlists?",
+    "mineral.CuratePlaylistsFn",
+    "该源歌单列表的呈现策展(过滤/改名/重排)"
+)]
+pub struct AppleMusicSection {
+    /// API 请求超时，单位为秒
+    timeout_secs: u64,
+
+    /// 代理 URL；false 为禁用
+    #[serde(deserialize_with = "de_proxy")]
+    #[lua_type("string|false")]
+    proxy: Option<String>,
+
+    /// Developer token 磁盘缓存有效天数，须大于 0；token 自身更早过期时提前刷新
+    #[lua_type("integer")]
+    developer_token_cache_ttl_days: NonZeroU32,
+
+    /// 歌词翻译的语言标签，对应 Apple 的 l[lyrics]
+    lyrics_translation_language: Option<String>,
+
+    /// 歌词音译的语言与文字标签，对应 Apple 的 l[script]
+    lyrics_romanization_script: Option<String>,
+
+    /// 专辑详情持久缓存
+    album_cache: AppleMusicAlbumCacheSection,
+
+    /// 播放设备身份文件；未设置时使用内置身份，指定文件不可用时报错
+    device_file: Option<PathBuf>,
+
+    /// 构建播放索引时并发读取的分片头数量，须大于 0
+    #[lua_type("integer")]
+    media_concurrency: NonZeroUsize,
+
+    /// 建立索引时每个分片首次读取的字节数，须大于 0；超出部分按实际头部长度读取
+    #[lua_type("integer")]
+    fragment_header_prefetch_bytes: NonZeroUsize,
+}
+
+/// Apple Music 专辑详情持久缓存；读取不延长有效期
+#[config_section]
+pub struct AppleMusicAlbumCacheSection {
+    /// 基础有效天数，可为 0
+    #[lua_type("integer")]
+    ttl_days: u32,
+
+    /// 有效天数的随机增减上限，可为 0；结果已过期时下次读取重新抓取
+    #[lua_type("integer")]
+    ttl_jitter_days: u32,
+}
 
 /// 网易云音乐
 #[source_section]

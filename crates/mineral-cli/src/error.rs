@@ -45,6 +45,10 @@ pub enum Error {
     #[error(transparent)]
     Netease(#[from] mineral_channel_netease::Error),
 
+    /// Apple Music channel 命令失败。
+    #[error(transparent)]
+    AppleMusic(#[from] mineral_channel_apple_music::Error),
+
     /// B 站 channel 命令失败。
     #[error(transparent)]
     Bilibili(#[from] mineral_channel_bilibili::Error),

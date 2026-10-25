@@ -59,13 +59,21 @@ impl TransferState {
         }
     }
 
-    /// Updates the number of available bytes.
-    pub(crate) fn set_downloaded(&self, downloaded: u64) {
+    /// Reports the number of bytes actually made available by the provider's producer.
+    ///
+    /// # Params:
+    ///   - `downloaded`: Available byte count, rather than a reader's seek position.
+    pub fn set_downloaded(&self, downloaded: u64) {
         self.inner.downloaded.store(downloaded, Ordering::Release);
     }
 
-    /// Marks the producer as complete.
-    pub(crate) fn mark_complete(&self) {
+    /// Adds newly available, non-overlapping bytes from concurrent producer tasks.
+    pub fn add_downloaded(&self, bytes: u64) {
+        self.inner.downloaded.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    /// Reports that the provider's producer has made all encoded media available.
+    pub fn mark_complete(&self) {
         self.inner.complete.store(true, Ordering::Release);
     }
 }

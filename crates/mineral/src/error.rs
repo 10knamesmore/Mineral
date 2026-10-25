@@ -41,6 +41,10 @@ pub(crate) enum Error {
     #[error(transparent)]
     Netease(#[from] mineral_channel_netease::Error),
 
+    /// Apple Music 凭证读取或适配器初始化失败。
+    #[error(transparent)]
+    AppleMusic(#[from] mineral_channel_apple_music::Error),
+
     /// B站凭证读取或适配器初始化失败。
     #[error(transparent)]
     Bilibili(#[from] mineral_channel_bilibili::Error),
