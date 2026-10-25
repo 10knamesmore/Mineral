@@ -16,6 +16,7 @@ async-trait     = { workspace = true }
 bytes           = { workspace = true }
 thiserror       = { workspace = true }
 futures-util    = { workspace = true }
+parking_lot     = { workspace = true }
 reqwest         = { workspace = true }
 rustc-hash      = { workspace = true }
 stream-download = { workspace = true }

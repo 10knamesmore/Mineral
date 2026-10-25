@@ -102,6 +102,7 @@ impl Engine {
             id,
             generation: Revision::default(),
             cancellation: media.cancellation().clone(),
+            read_control: None,
             transfer: media.transfer().cloned(),
             source_format: None,
             duration: None,
