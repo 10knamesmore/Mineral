@@ -7,19 +7,7 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
-/// 标识一份资源(歌曲、专辑……)的来源(source)——强类型、开放集合、自描述。
-///
-/// 仿 `http::StatusCode` 的「newtype + 关联常量」:内置源是常量
-/// ([`SourceKind::NETEASE`] 等),运行时扩展源可经 [`SourceKind::from_static`] 构造。
-/// 全字段都是 `Copy`,故可零成本嵌进每个 ID 的 namespace。
-///
-/// **身份只看 [`name`](SourceKind::name)**——`label` 是随 `name` 走的展示元数据,**不参与**
-/// 相等 / 哈希 / 序列化(序列化只写 `name`,反序列化按 `name` 解析回完整定义)。这样同一来源
-/// 无论从哪构造,相等性与 HashMap key 行为都一致。
-///
-/// 来源徽标**颜色不在此声明**:它是 per-source 的配置(`sources.<name>.color`),由 TUI 按
-/// `name` 从配置解析(命中的走配置色 / 未配置的走中立兜底)——避免把一个闭合调色枚举强塞进
-/// 开放的来源集合。
+/// 标识一份资源(歌曲、专辑……)的来源(source)
 #[derive(Clone, Copy)]
 pub struct SourceKind {
     /// 稳定标识——跨进程身份、serde 表示就是它。
@@ -30,10 +18,16 @@ pub struct SourceKind {
 }
 
 impl SourceKind {
+    /// Apple Music.
+    pub const APPLE_MUSIC: Self = Self {
+        name: "am",
+        label: " Apple",
+    };
+
     /// 网易云音乐。
     pub const NETEASE: Self = Self {
         name: "netease",
-        label: "♫ netease",
+        label: "󰎆 NetEase",
     };
 
     /// 本地文件系统(用户的 music 目录)。
@@ -45,13 +39,13 @@ impl SourceKind {
     /// 哔哩哔哩。
     pub const BILIBILI: Self = Self {
         name: "bilibili",
-        label: "󰟴 bilibili",
+        label: "󰟴 BiliBili",
     };
 
     /// Mineral 自身——跨源聚合内容(如全源收藏合集)的挂靠来源,无网络后端。
     pub const MINERAL: Self = Self {
         name: "mineral",
-        label: "◆ mineral",
+        label: "◆ Mineral",
     };
 
     /// 铸造一个来源(插件 / 运行时扩展用)。
@@ -87,6 +81,7 @@ impl SourceKind {
     ///   命中内置常量则返回之;未知名 intern 成 `&'static str` 并给默认展示(label = name)。
     pub fn from_name(name: &str) -> Self {
         match name {
+            "am" => Self::APPLE_MUSIC,
             "netease" => Self::NETEASE,
             "local" => Self::LOCAL,
             "bilibili" => Self::BILIBILI,

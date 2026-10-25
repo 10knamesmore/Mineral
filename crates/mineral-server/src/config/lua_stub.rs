@@ -1,11 +1,11 @@
 //! 从 daemon schema 的宏生成片段拼装本宿主 LuaLS 配置类型。
 
 use super::schema::{
-    AudioConfig, BackendKind, BackfillSection, BilibiliSection, CacheConfig, DaemonConfig,
-    DownloadConfig, EnvelopeConfig, HighpassConfig, LocalSection, MineralSection,
-    NeteaseAlbumCacheSection, NeteaseRequestsSection, NeteaseSection, PlaylistFetchSection,
-    QueueConfig, QueueTransform, ReportConfig, ScriptConfig, SearchQueryMode, ShelfConfig,
-    SourcesConfig, StatsConfig, StatsLevel,
+    AppleMusicAlbumCacheSection, AppleMusicSection, AudioConfig, BackendKind, BackfillSection,
+    BilibiliSection, CacheConfig, DaemonConfig, DownloadConfig, EnvelopeConfig, HighpassConfig,
+    LocalSection, MineralSection, NeteaseAlbumCacheSection, NeteaseRequestsSection, NeteaseSection,
+    PlaylistFetchSection, QueueConfig, QueueTransform, ReportConfig, ScriptConfig, SearchQueryMode,
+    ShelfConfig, SourcesConfig, StatsConfig, StatsLevel,
 };
 
 /// LuaLS 文件头与使用说明。
@@ -31,6 +31,8 @@ pub(super) fn meta_config_lua() -> String {
         CacheConfig::LUA_STUB,
         DownloadConfig::LUA_STUB,
         SourcesConfig::LUA_STUB,
+        AppleMusicSection::LUA_STUB,
+        AppleMusicAlbumCacheSection::LUA_STUB,
         LocalSection::LUA_STUB,
         QueueConfig::LUA_STUB,
         QueueTransform::LUA_STUB,

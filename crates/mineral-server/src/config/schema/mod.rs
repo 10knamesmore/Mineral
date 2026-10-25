@@ -18,7 +18,8 @@ pub use queue::{QueueConfig, QueueTransform};
 pub use root::DaemonConfig;
 pub use script::ScriptConfig;
 pub use sources::{
-    BackfillSection, BilibiliSection, LocalSection, MineralSection, NeteaseAlbumCacheSection,
-    NeteaseRequestsSection, NeteaseSection, PlaylistFetchSection, SourcesConfig,
+    AppleMusicAlbumCacheSection, AppleMusicSection, BackfillSection, BilibiliSection, LocalSection,
+    MineralSection, NeteaseAlbumCacheSection, NeteaseRequestsSection, NeteaseSection,
+    PlaylistFetchSection, SourcesConfig,
 };
 pub use stats::{ReportConfig, RetentionDays, SearchQueryMode, StatsConfig, StatsLevel};

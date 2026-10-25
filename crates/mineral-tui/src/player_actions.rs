@@ -4,7 +4,7 @@
 
 use mineral_model::{PlaylistEntry, Song};
 use mineral_protocol::DownloadTarget;
-use mineral_task::TaskEvent;
+use mineral_task::{Priority, TaskEvent};
 
 use crate::app::App;
 use crate::components::popup::{ContainerRef, MenuAction};
@@ -238,6 +238,7 @@ impl App {
             &*self.client,
             &mut self.state.models.library,
             fetch.clone(),
+            Priority::User,
         );
         self.pending_container.insert(fetch.dedup_key(), mode);
     }
@@ -308,6 +309,7 @@ impl App {
                     &*self.client,
                     &mut self.state.models.library,
                     DetailFetch::PlaylistDetail(id.clone()),
+                    Priority::User,
                 );
                 mineral_log::info!(target: "tui", playlist = %id, "等待完整歌单后起播");
                 return;

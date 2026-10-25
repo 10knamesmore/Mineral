@@ -16,7 +16,8 @@ pub(crate) use loader::daemon_from_tree;
 pub(crate) use loader::default_daemon_tree;
 pub use loader::{DaemonLoad, load_daemon, load_daemon_with_vm};
 pub use schema::{
-    BackendKind, BilibiliSection, DaemonConfig, NeteaseSection, SourcesConfig, StatsLevel,
+    AppleMusicSection, BackendKind, BilibiliSection, DaemonConfig, NeteaseSection, SourcesConfig,
+    StatsLevel,
 };
 pub(crate) use schema::{
     DownloadConfig, EnvelopeConfig, RetentionDays, SearchQueryMode, StatsConfig,

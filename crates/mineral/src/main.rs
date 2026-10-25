@@ -5,12 +5,15 @@ use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
+use mineral_channel_apple_music::AppleMusicChannel;
 use mineral_channel_bilibili::BilibiliChannel;
 use mineral_channel_core::MusicChannel;
 use mineral_channel_netease::{NeteaseChannel, load_stored};
 use mineral_cli::{Args, Command};
 use mineral_config::ConfigWarning;
+use mineral_model::SourceKind;
 use mineral_playback::{PlaybackProvider, PlaybackRegistry};
+use mineral_server::ServerStore;
 use mineral_server::config::DaemonLoad;
 use tokio::runtime::Runtime;
 
@@ -178,8 +181,8 @@ fn log_config_warnings(warnings: &[ConfigWarning]) {
 
 /// 构造内建 channel 与对应的 playback provider。
 ///
-/// Mineral 聚合 channel 恒注册。单个远端源构建失败(如凭证损坏)只 warn + 跳过,
-/// 不阻塞其他源或 daemon。
+/// Mineral 聚合 channel 恒注册。Apple Music 凭证损坏会中止构建；
+/// 网易和 B站构建失败只 warn + 跳过。
 ///
 /// # Params:
 ///   - `persist`: 服务端存储；为各 channel 注入固定来源的存储句柄。
@@ -202,6 +205,10 @@ fn build_sources(
     ));
     channels.push(library.clone());
     providers.push(library);
+    if let Some(pair) = build_apple_music(persist, sources.am())? {
+        channels.push(pair.channel);
+        providers.push(pair.provider);
+    }
     match build_netease(persist, sources.netease()) {
         Ok(Some(pair)) => {
             channels.push(pair.channel);
@@ -230,6 +237,25 @@ fn build_sources(
         channels,
         playback: PlaybackRegistry::new(providers)?,
     })
+}
+
+/// Metadata and playback share one account client; device files are not read at startup.
+fn build_apple_music(
+    persist: &ServerStore,
+    section: &mineral_server::config::AppleMusicSection,
+) -> Result<Option<SourcePair>> {
+    let Some(auth) = mineral_channel_apple_music::load_stored()? else {
+        return Ok(None);
+    };
+    let config = mineral_cli::apple_music_config_from(section);
+    let concrete = Arc::new(AppleMusicChannel::with_credential(
+        &config,
+        auth,
+        Some(Arc::new(persist.scope(SourceKind::APPLE_MUSIC))),
+    )?);
+    let channel: Arc<dyn MusicChannel> = concrete.clone();
+    let provider: Arc<dyn PlaybackProvider> = concrete;
+    Ok(Some(SourcePair { channel, provider }))
 }
 
 /// 构造 B站 channel；有已存凭证时带登录态，否则使用 guest 模式。
