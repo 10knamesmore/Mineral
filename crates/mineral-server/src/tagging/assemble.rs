@@ -168,12 +168,10 @@ async fn fetch_cover(http: Option<&reqwest::Client>, song: &Song) -> Option<Vec<
 ///
 /// # Return:
 ///   公历年;未知 / 溢出为 `None`。
-fn publish_year(ms: i64) -> Option<i32> {
-    if ms <= 0 {
-        return None;
-    }
+fn publish_year(ms: Option<i64>) -> Option<i32> {
+    let ms = ms?;
     let beijing = time::UtcOffset::from_hms(8, 0, 0).ok()?;
-    let dt = time::OffsetDateTime::from_unix_timestamp(ms / 1000).ok()?;
+    let dt = time::OffsetDateTime::from_unix_timestamp(ms.div_euclid(1000)).ok()?;
     Some(dt.to_offset(beijing).year())
 }
 
@@ -228,7 +226,7 @@ mod tests {
                 },
             ])
             .company(Some("杰威尔".to_owned()))
-            .publish_time_ms(1_059_379_200_000) // 2003-07-31 北京
+            .publish_time_ms(Some(1_059_379_200_000)) // 2003-07-31 北京
             .build()
     }
 
@@ -319,10 +317,10 @@ mod tests {
 
     #[test]
     fn publish_year_uses_beijing_offset() {
-        assert_eq!(publish_year(1_059_379_200_000), Some(2003));
+        assert_eq!(publish_year(Some(1_059_379_200_000)), Some(2003));
         // 2020-01-01 00:00 北京(= 2019-12-31 16:00 UTC)→ 2020;UTC 读会错成 2019。
-        assert_eq!(publish_year(1_577_808_000_000), Some(2020));
-        assert_eq!(publish_year(0), None);
-        assert_eq!(publish_year(-1), None);
+        assert_eq!(publish_year(Some(1_577_808_000_000)), Some(2020));
+        assert_eq!(publish_year(None), None);
+        assert_eq!(publish_year(Some(-1)), Some(1970));
     }
 }

@@ -86,9 +86,9 @@ pub struct ArtistAlbum {
     #[serde(default, rename = "picUrl")]
     pub pic_url: Option<String>,
 
-    /// 发行时间(毫秒时间戳)。
-    #[serde(default, rename = "publishTime")]
-    pub publish_time: i64,
+    /// 发行时间(毫秒时间戳)；缺失或 null 时为 None。
+    #[serde(rename = "publishTime")]
+    pub publish_time: Option<i64>,
 
     /// 曲目数。
     #[serde(default)]

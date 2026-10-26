@@ -182,7 +182,7 @@ pub(crate) fn view_to_album(info: VideoInfo) -> Album {
         .track_count(Some(track_count))
         .artists(vec![owner_artist_ref(&owner)])
         .description(desc.unwrap_or_default())
-        .publish_time_ms(pubdate.map(|s| s.saturating_mul(1000)).unwrap_or(0))
+        .publish_time_ms(pubdate.map(|s| s.saturating_mul(1000)))
         .cover_url(cover)
         .tracks(AlbumTrack::enumerate(songs))
         .build()
@@ -426,7 +426,7 @@ pub(crate) fn arc_video_to_album(item: ArcVideoItem) -> Option<Album> {
             .name(item.title.unwrap_or_default())
             .artists(artists)
             .description(item.description.unwrap_or_default())
-            .publish_time_ms(item.created.map(|s| s.saturating_mul(1000)).unwrap_or(0))
+            .publish_time_ms(item.created.map(|s| s.saturating_mul(1000)))
             .cover_url(item.pic.as_deref().and_then(cover_media_url))
             .build(),
     )
@@ -580,7 +580,7 @@ mod tests {
         assert_eq!(s1.id, SongId::new(SourceKind::BILIBILI, "BV1xx:2"));
         assert_eq!(s0.name, "第一话");
         assert_eq!(s0.duration_ms, Some(240_000));
-        assert_eq!(album.publish_time_ms, 1_600_000_000_000);
+        assert_eq!(album.publish_time_ms, Some(1_600_000_000_000));
         mineral_test::assert_snap_debug!(
             "多P视频详情 → Album(2P 逐 P 成曲 + owner + 封面补 https)",
             album
@@ -826,7 +826,7 @@ mod tests {
             arc_video_to_album(item).ok_or_else(|| color_eyre::eyre::eyre!("应产出 Album"))?;
         assert_eq!(album.id, AlbumId::new(SourceKind::BILIBILI, "BV1xx"));
         assert_eq!(album.name, "投稿一");
-        assert_eq!(album.publish_time_ms, 1_600_000_000_000);
+        assert_eq!(album.publish_time_ms, Some(1_600_000_000_000));
         assert_eq!(
             album.track_count, None,
             "列表页不知 P 数(未知非 0),详情再补"

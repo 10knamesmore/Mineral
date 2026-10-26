@@ -32,8 +32,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub company: Option<String>,
 
-    /// 发行时间，Unix 毫秒。
-    pub publish_time_ms: i64,
+    /// 发行时间，Unix 毫秒；来源未提供时为空。
+    pub publish_time_ms: Option<i64>,
 
     /// 来源给出的曲目数，未知时为空。
     pub track_count: Option<i64>,

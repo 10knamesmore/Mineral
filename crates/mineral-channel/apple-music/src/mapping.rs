@@ -112,7 +112,7 @@ pub(crate) fn album(resource: &Resource) -> Result<Album> {
         let midnight = date.and_hms_opt(0, 0, 0).ok_or(Error::InvalidData {
             field: "album release date",
         })?;
-        album.publish_time_ms = midnight.and_utc().timestamp_millis();
+        album.publish_time_ms = Some(midnight.and_utc().timestamp_millis());
     }
     Ok(album)
 }
