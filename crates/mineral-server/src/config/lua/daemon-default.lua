@@ -88,7 +88,7 @@ return {
   queue = {
     transforms = {},
   },
-  gapless_prefetch_ms = 10000,
+  gapless_prefetch_ms = 20000,
   prev_restart_threshold_ms = 3000,
   player_tick_ms = 20,
   session_save_secs = 15,
