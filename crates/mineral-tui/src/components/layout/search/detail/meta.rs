@@ -192,12 +192,10 @@ fn album_meta_line(a: &Album) -> Option<String> {
 ///
 /// netease `publishTime` 是**北京零点**对齐的时间戳,故按 +8 偏移读年份——直接用 UTC 会让
 /// 北京 1 月 1 日发行的专辑落到上一年 12 月 31 日、年份少算一年。
-pub(crate) fn publish_year(ms: i64) -> Option<i32> {
-    if ms <= 0 {
-        return None;
-    }
+pub(crate) fn publish_year(ms: Option<i64>) -> Option<i32> {
+    let ms = ms?;
     let beijing = time::UtcOffset::from_hms(8, 0, 0).ok()?;
-    let dt = time::OffsetDateTime::from_unix_timestamp(ms / 1000).ok()?;
+    let dt = time::OffsetDateTime::from_unix_timestamp(ms.div_euclid(1000)).ok()?;
     Some(dt.to_offset(beijing).year())
 }
 

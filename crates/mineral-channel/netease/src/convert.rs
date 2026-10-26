@@ -640,7 +640,7 @@ mod tests {
         let model = artist_album_to_model(dto);
         assert!(model.artists.is_empty());
         assert!(model.tracks.is_empty());
-        assert_eq!(model.publish_time_ms, 715_000_000_000);
+        assert_eq!(model.publish_time_ms, Some(715_000_000_000));
         Ok(())
     }
 

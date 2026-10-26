@@ -30,9 +30,9 @@ pub struct Album {
     #[builder(default)]
     pub company: Option<String>,
 
-    /// 发行时间(Unix epoch ms)。
+    /// 发行时间(Unix epoch ms)；来源未提供时为 None。
     #[builder(default)]
-    pub publish_time_ms: i64,
+    pub publish_time_ms: Option<i64>,
 
     /// album 曲目总数;`None` = **未知**(搜索 / 投稿列表等轻量投影拿不到,须下钻 `album_detail`
     /// 才确定)——与「真的 0 曲」区分开,展示层据此画 `-` 而非 `0`。与 `tracks` 是否已填充无关。

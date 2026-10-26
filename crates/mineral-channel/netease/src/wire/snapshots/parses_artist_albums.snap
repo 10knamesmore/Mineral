@@ -12,7 +12,9 @@ ArtistAlbumsResult {
             pic_url: Some(
                 "https://p1.music.126.net/a.jpg",
             ),
-            publish_time: 736185600000,
+            publish_time: Some(
+                736185600000,
+            ),
             size: 10,
             company: Some(
                 "滚石",
@@ -29,7 +31,9 @@ ArtistAlbumsResult {
             id: 8,
             name: "继续革命",
             pic_url: None,
-            publish_time: 715000000000,
+            publish_time: Some(
+                715000000000,
+            ),
             size: 0,
             company: None,
             artist: None,
