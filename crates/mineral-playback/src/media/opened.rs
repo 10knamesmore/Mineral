@@ -206,7 +206,10 @@ impl OpenedMedia {
     pub fn into_audio_input(self) -> AudioInput {
         match self.audio_packets {
             Some(packets) => AudioInput::Packets(packets),
-            None => AudioInput::Bytes(self.reader),
+            None => AudioInput::Bytes {
+                reader: self.reader,
+                byte_len: self.byte_len,
+            },
         }
     }
 }

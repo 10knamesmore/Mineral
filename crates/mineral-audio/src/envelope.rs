@@ -19,8 +19,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use mineral_model::Envelope;
+use mineral_playback::AudioInput;
 
-use crate::decoder::{DecodedAudio, Decoder};
+use crate::decoder::{DecodedAudio, Decoder, DecoderError};
 use crate::{Error, Result};
 
 /// 包络算法版本:滤波 / 分块统计 / 归一 / 量化的结构变更时 bump;读取方版本
@@ -348,7 +349,17 @@ pub fn envelope_from_file(path: &Path, params: &EnvelopeParams) -> Result<Envelo
         path: path.to_path_buf(),
         source,
     })?;
-    let mut decoder = Decoder::new(BufReader::new(file)).map_err(|source| Error::Decode {
+    let byte_len = file
+        .metadata()
+        .map_err(|source| Error::Decode {
+            source: Arc::new(DecoderError::ReaderLength(source)),
+        })?
+        .len();
+    let mut decoder = Decoder::from_input(AudioInput::Bytes {
+        reader: Box::new(BufReader::new(file)),
+        byte_len: Some(byte_len),
+    })
+    .map_err(|source| Error::Decode {
         source: Arc::new(source),
     })?;
     let format = decoder.format();

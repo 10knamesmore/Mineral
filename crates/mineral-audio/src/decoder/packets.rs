@@ -16,8 +16,8 @@ use super::reader::EncodedReader;
 pub(super) fn open(input: AudioInput) -> Result<Box<dyn AudioPacketSource>, DecoderError> {
     match input {
         AudioInput::Packets(packets) => Ok(packets),
-        AudioInput::Bytes(reader) => {
-            let reader = EncodedReader::new(reader)?;
+        AudioInput::Bytes { reader, byte_len } => {
+            let reader = EncodedReader::new(reader, byte_len);
             let stream = MediaSourceStream::new(Box::new(reader), Default::default());
             let format = get_probe()
                 .probe(
