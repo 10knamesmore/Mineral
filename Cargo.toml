@@ -29,7 +29,15 @@ members = [
     "crates/mineral-script",
     "crates/mineral-stats",
 ]
+exclude = [
+    "vendor/symphonia-bundle-flac",
+    "vendor/symphonia-format-isomp4",
+]
 resolver = "2"
+
+[patch.crates-io]
+symphonia-bundle-flac = { path = "vendor/symphonia-bundle-flac" }
+symphonia-format-isomp4 = { path = "vendor/symphonia-format-isomp4" }
 
 [workspace.metadata]
 name = "mineral"
