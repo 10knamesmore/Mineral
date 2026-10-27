@@ -36,8 +36,11 @@ struct AudioSample {
 
 struct SegmentPackets {
     index: usize,
+
     bytes: Vec<u8>,
+
     samples: Vec<AudioSample>,
+
     next: usize,
 }
 
@@ -99,9 +102,13 @@ impl SegmentPackets {
 
 pub(super) struct AudioPackets {
     store: Arc<MediaStore>,
+
     control: ReadControl,
+
     track: Track,
+
     current: SegmentPackets,
+
     _lifetime: Arc<DropGuard>,
 }
 

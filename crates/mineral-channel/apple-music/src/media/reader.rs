@@ -11,8 +11,11 @@ use super::store::MediaStore;
 /// Complete encoded-file access, deliberately separate from progressive audio packets.
 pub(super) struct MediaReader {
     store: Arc<MediaStore>,
+
     file: Option<File>,
+
     read_control: Option<ReadControl>,
+
     _lifetime: Arc<DropGuard>,
 }
 
