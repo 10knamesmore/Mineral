@@ -28,7 +28,8 @@ typed-builder = { workspace = true }
 derive-getters = { workspace = true }
 clap = { workspace = true }
 tempfile = "3"
-rpassword = "7"
+inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
+indicatif = "0.18"
 base64 = { workspace = true }
 regex = { workspace = true }
 roxmltree = "0.21"

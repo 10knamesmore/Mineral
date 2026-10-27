@@ -80,11 +80,18 @@ pub(crate) fn read() -> Result<Credentials> {
     }
 }
 
-/// Rejects empty values and cookie delimiters before making network requests.
+/// Accepts a cookie value, rejecting empty input, cookie assignments and headers.
 pub(crate) fn from_token(token: &str) -> Result<StoredAppleMusicAuth> {
     let token = token.trim();
-    if token.is_empty() || token.contains(['\r', '\n', ';']) {
-        return Err(Error::AuthRequired);
+    let cookie_header = token
+        .split_once(':')
+        .is_some_and(|(name, _)| name.eq_ignore_ascii_case("cookie"));
+    if token.is_empty()
+        || token.contains(['\r', '\n', ';'])
+        || token.starts_with("media-user-token=")
+        || cookie_header
+    {
+        return Err(Error::InvalidTokenValue);
     }
     Ok(StoredAppleMusicAuth {
         media_user_token: token.to_owned(),

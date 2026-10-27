@@ -78,16 +78,18 @@ pub enum Command {
 ///   进程退出码;子命令本身失败(如配置解析)冒泡为 `Err`。
 pub fn run(command: Command) -> Result<ExitCode> {
     let runtime = Runtime::new().map_err(Error::Runtime)?;
-    runtime.block_on(async move { run_async(command).await })
+    let result = runtime.block_on(async move { run_async(command).await });
+    runtime.shutdown_background();
+    result
 }
 
 /// 在 tokio 上下文里按 [`Command`] 分发;`Serve` 由 caller(binary)拦截不该到这里。
 ///
-/// 只有 `ctl` 有自己的退出码契约(成功 0 / 被拒 1 / 没执行 3),其余子命令沿用
-/// 「成功即 0」。
+/// `ctl` 与 `channel` 返回各自的退出码，其余子命令成功时返回 0。
 async fn run_async(command: Command) -> Result<ExitCode> {
     match command {
         Command::Ctl(args) => ctl::run(args).await,
+        Command::Channel(args) => channel::run(args).await,
         other => {
             run_plain(other).await?;
             Ok(ExitCode::SUCCESS)
@@ -99,11 +101,10 @@ async fn run_async(command: Command) -> Result<ExitCode> {
 async fn run_plain(command: Command) -> Result<()> {
     match command {
         Command::Cache { cmd } => cache::run(cmd).await,
-        Command::Channel(args) => channel::run(args).await,
         Command::Config { cmd } => config::run(cmd).await,
         Command::Stats { cmd } => stats::run(cmd).await,
         Command::Status => status::run().await,
         Command::Stop => stop::run().await,
-        Command::Ctl(_) | Command::Serve => Err(Error::InvalidDispatch),
+        Command::Ctl(_) | Command::Channel(_) | Command::Serve => Err(Error::InvalidDispatch),
     }
 }

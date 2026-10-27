@@ -85,7 +85,7 @@ pub(crate) fn account(account: Account) -> Result<Session> {
     let storefront = account
         .meta
         .subscription
-        .ok_or(Error::AuthRequired)?
+        .ok_or(Error::SubscriptionUnavailable)?
         .storefront;
     mineral_log::info!(target: "apple_music", %storefront, "account session validated");
     Ok(Session { storefront })
