@@ -1,5 +1,6 @@
 //! `mineral channel ...` 子命令分发。
 
+use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, Subcommand};
@@ -41,14 +42,12 @@ pub enum ChannelCommand {
 ///
 /// # Return:
 ///   命令执行结果。
-pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
+pub async fn run(args: ChannelArgs) -> crate::error::Result<ExitCode> {
     match args.channel {
         ChannelCommand::Am(cli) => {
             let (config, _warnings) = super::config::load_daemon().await?;
             let config = apple_music_config_from(config.sources().am());
-            mineral_channel_apple_music::cli::run(cli, &config)
-                .await
-                .map_err(Into::into)
+            Ok(mineral_channel_apple_music::cli::run(cli, &config).await)
         }
         ChannelCommand::Netease(cli) => {
             // 加载 daemon 的网络参数，不执行 setup；代理与超时对扫码登录同样生效。
@@ -56,6 +55,7 @@ pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
             let nc = netease_config_from(config.sources().netease());
             mineral_channel_netease::cli::run(cli, &nc)
                 .await
+                .map(|()| ExitCode::SUCCESS)
                 .map_err(Into::into)
         }
         ChannelCommand::Bilibili(cli) => {
@@ -63,6 +63,7 @@ pub async fn run(args: ChannelArgs) -> crate::error::Result<()> {
             let bc = bilibili_config_from(config.sources().bilibili());
             mineral_channel_bilibili::cli::run(cli, &bc)
                 .await
+                .map(|()| ExitCode::SUCCESS)
                 .map_err(Into::into)
         }
     }

@@ -2,6 +2,7 @@
 
 use std::io;
 
+use inquire::InquireError;
 use mineral_channel_core::store::StoreError;
 use thiserror::Error as ThisError;
 
@@ -23,6 +24,24 @@ pub enum Error {
     /// Credentials are missing, expired or rejected by Apple.
     #[error("Apple Music login required; run mineral channel am login")]
     AuthRequired,
+
+    /// Input must contain only the cookie value, not a Cookie header or assignment.
+    #[error(
+        "Paste only the media-user-token cookie value from music.apple.com, not its name or a Cookie header."
+    )]
+    InvalidTokenValue,
+
+    /// Account validation rejected the credentials supplied to the login command.
+    #[error(
+        "Apple did not accept these credentials. Sign in at music.apple.com and copy a fresh media-user-token value."
+    )]
+    LoginRejected,
+
+    /// The account response did not include subscription information.
+    #[error(
+        "Apple Music returned no subscription information. Check your subscription at music.apple.com."
+    )]
+    SubscriptionUnavailable,
 
     /// Apple returned an unsuccessful HTTP status.
     #[error("Apple Music HTTP status {status}")]
@@ -92,6 +111,10 @@ pub enum Error {
     #[error("Apple Music local I/O failed")]
     Io(#[from] io::Error),
 
+    /// The terminal token prompt could not complete.
+    #[error("Apple Music token input failed")]
+    Prompt(#[source] InquireError),
+
     /// Application paths could not be resolved.
     #[error(transparent)]
     Paths(#[from] mineral_paths::Error),
@@ -122,7 +145,10 @@ impl From<Error> for mineral_channel_core::Error {
             Error::Storage(source) => Self::Storage {
                 source: Box::new(source),
             },
-            Error::AuthRequired => Self::AuthRequired,
+            Error::AuthRequired
+            | Error::InvalidTokenValue
+            | Error::LoginRejected
+            | Error::SubscriptionUnavailable => Self::AuthRequired,
             Error::Http { status: 404 } => Self::NotFound,
             Error::Http { status: 429 } => Self::RateLimited,
             Error::InvalidData { field } => Self::InvalidData { field },
