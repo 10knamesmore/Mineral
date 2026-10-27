@@ -14,15 +14,21 @@ use super::transport::{Part, read_header_prefix, read_header_range};
 pub(super) struct Fragment {
     /// tfdt origin in track ticks; absent origins are resolved from preceding headers.
     pub decode_start: Option<u64>,
+
     pub duration: u64,
+
     pub byte_len: u64,
+
     samples: Vec<FragmentSample>,
 }
 
 struct FragmentSample {
     duration: u32,
+
     byte_len: usize,
+
     keyframe: bool,
+
     composition_time_offset: Option<i64>,
 }
 
@@ -97,8 +103,11 @@ impl Fragment {
 /// One regular-MP4 builder serves both segment demuxing and complete file export.
 pub(super) struct RegularMp4 {
     muxer: Mp4FileMuxer,
+
     first_entry: Option<SampleEntry>,
+
     position: u64,
+
     timescale: NonZeroU32,
 }
 
