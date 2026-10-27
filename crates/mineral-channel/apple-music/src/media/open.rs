@@ -1,4 +1,4 @@
-//! Opens the selected rendition and attaches indexed media and independent cache production.
+//! Opens the selected rendition with progressive audio and complete-file export.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,8 +9,9 @@ use zeroize::Zeroizing;
 
 use super::cenc::AudioInitialization;
 use super::error::{Error, Result};
+use super::packets::AudioPackets;
 use super::store::MediaStore;
-use super::{index, transport};
+use super::transport;
 use crate::api::Api;
 
 pub(crate) enum PlaybackIdentity {
@@ -29,9 +30,9 @@ pub(crate) async fn open(
     api.session().await?;
     let asset = transport::asset(&api, &identity).await?;
     mineral_log::debug!(target: "apple_music", stage = "asset", elapsed_ms = started.elapsed().as_millis(), "playback preparation");
-    let mut info = PlaybackMediaInfo {
+    let info = PlaybackMediaInfo {
         song_id,
-        bitrate_bps: None,
+        bitrate_bps: asset.bitrate_bps,
         size: None,
         format: Some(AudioFormat::Mp4),
         bit_depth: None,
@@ -40,7 +41,7 @@ pub(crate) async fn open(
     let PlaybackIdentity::Catalog(track_id) = identity else {
         let prepared = DirectPreparedPlayback::boxed(DirectMedia::remote(
             info,
-            asset,
+            asset.url,
             Vec::new(),
             StreamLayout::Contiguous,
         ));
@@ -49,21 +50,15 @@ pub(crate) async fn open(
             .await
             .map_err(|detail| Error::Upload { detail });
     };
-    let manifest = transport::manifest(&api.client, &asset).await?;
+    let manifest = transport::manifest(&api.client, &asset.url).await?;
     mineral_log::debug!(target: "apple_music", stage = "manifest", segments = manifest.segments.len(), elapsed_ms = started.elapsed().as_millis(), "playback preparation");
     let initialization = async {
         let bytes = transport::download(&api.client, &manifest.initialization).await?;
         Ok::<_, Error>(AudioInitialization::parse(&bytes)?)
     };
-    let (initialization, keys, fragments) = tokio::try_join!(
+    let (initialization, keys) = tokio::try_join!(
         initialization,
         transport::content_keys(&api, &track_id, &manifest.key_uri),
-        index::read_fragment_headers(
-            &api.client,
-            &manifest.segments,
-            *api.config.media_concurrency(),
-            *api.config.fragment_header_prefetch_bytes(),
-        ),
     )?;
     mineral_log::debug!(target: "apple_music", stage = "metadata_and_license", elapsed_ms = started.elapsed().as_millis(), "playback preparation");
     let key = keys
@@ -79,30 +74,42 @@ pub(crate) async fn open(
             .map_err(|_wrong_length| Error::InvalidMedia {
                 field: "AES-128 content key",
             })?;
-    let index = index::build(manifest.segments, fragments, &initialization)?;
-    mineral_log::info!(target: "apple_music", song_id = %info.song_id.qualified(), elapsed_ms = started.elapsed().as_millis(), "indexed media ready");
-    info.size = Some(index.byte_len);
-    info.bitrate_bps = index.bitrate_bps;
+    let cancellation = options.cancellation().child_token();
+    // Only consumers retain this guard. Background tasks cannot keep a dropped
+    // playback/export session alive; open failures cancel their work as well.
+    let lifetime = Arc::new(cancellation.clone().drop_guard());
     let store = MediaStore::new(
-        index,
+        manifest.segments,
         initialization,
         Zeroizing::new(key),
         api.client.clone(),
-        options.cancellation().clone(),
+        cancellation.clone(),
+        *api.config.fragment_header_prefetch_bytes(),
+        *api.config.media_concurrency(),
     )
     .await?;
-    let control = ReadControl::new(options.cancellation().clone());
-    let reader = store.reader(Some(control.clone()));
+    store.startup(*api.config.startup_buffer()).await?;
+    store.acquire();
+    mineral_log::info!(target: "apple_music", song_id = %info.song_id.qualified(), elapsed_ms = started.elapsed().as_millis(), "contiguous startup audio ready");
+    let control = ReadControl::new(cancellation.clone());
+    let packets = {
+        let store = store.clone();
+        let control = control.clone();
+        let lifetime = lifetime.clone();
+        tokio::task::spawn_blocking(move || AudioPackets::new(store, control, lifetime)).await??
+    };
+    let reader = store.reader(Some(control.clone()), lifetime.clone());
     let media = OpenedMedia::new(
         Box::new(reader),
-        Some(store.byte_len),
+        None,
         info,
         Some(store.transfer.clone()),
-        options.cancellation().clone(),
+        cancellation,
     )
-    .with_read_control(control);
+    .with_read_control(control)
+    .with_audio_packets(Box::new(packets));
     Ok(match options.capture_target() {
-        Some(target) => media.with_capture(store.capture(target)),
+        Some(target) => media.with_capture(store.capture(target, lifetime)),
         None => media,
     })
 }

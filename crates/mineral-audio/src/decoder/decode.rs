@@ -2,16 +2,14 @@ use std::io::{Read, Seek};
 use std::num::{NonZeroU16, NonZeroU32};
 use std::time::Duration;
 
+use mineral_playback::{AudioInput, AudioPacketSource};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
-use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
+use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::{Duration as TrackDuration, Time, TimeBase, Timestamp};
-use symphonia::default::{get_codecs, get_probe};
+use symphonia::default::get_codecs;
 
 use super::error::DecoderError;
-use super::reader::EncodedReader;
+use super::packets;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PcmFormat {
@@ -42,10 +40,6 @@ pub(crate) struct Decoder {
 
     start_ts: Timestamp,
 
-    track_duration: Option<TrackDuration>,
-
-    total_duration: Option<Duration>,
-
     next_position: Duration,
 
     /// Fractional nanosecond numerator, with the current sample rate as denominator.
@@ -57,19 +51,12 @@ impl Decoder {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        let reader = EncodedReader::new(reader)?;
-        let stream = MediaSourceStream::new(Box::new(reader), Default::default());
-        let format = get_probe()
-            .probe(
-                &Hint::new(),
-                stream,
-                FormatOptions::default(),
-                MetadataOptions::default(),
-            )
-            .map_err(DecoderError::Probe)?;
-        let track = format
-            .default_track(TrackType::Audio)
-            .ok_or(DecoderError::NoAudioTrack)?;
+        Self::from_input(AudioInput::Bytes(Box::new(reader)))
+    }
+
+    pub(crate) fn from_input(input: AudioInput) -> Result<Self, DecoderError> {
+        let source = packets::open(input)?;
+        let track = source.track();
         let parameters = track
             .codec_params
             .as_ref()
@@ -81,19 +68,8 @@ impl Decoder {
         let track_id = track.id;
         let time_base = track.time_base;
         let start_ts = track.start_ts;
-        // Fragmented MP4 headers may leave duration at zero while audio follows.
-        let track_duration = track.duration.filter(|duration| !duration.is_zero());
-        let total_duration = time_base
-            .zip(track_duration)
-            .and_then(|(time_base, duration)| time_base.calc_duration(duration))
-            .and_then(|time| {
-                let (seconds, nanos) = time.parts();
-                u64::try_from(seconds)
-                    .ok()
-                    .map(|seconds| Duration::new(seconds, nanos))
-            });
         let mut packets = AudioPackets {
-            format,
+            source,
             codec,
             track_id,
         };
@@ -111,8 +87,6 @@ impl Decoder {
             format,
             time_base,
             start_ts,
-            track_duration,
-            total_duration,
             next_position: Duration::ZERO,
             position_remainder: 0,
         })
@@ -123,7 +97,35 @@ impl Decoder {
     }
 
     pub(crate) fn duration(&self) -> Option<Duration> {
-        self.total_duration
+        self.time_base
+            .zip(self.track_duration())
+            .and_then(|(time_base, duration)| time_base.calc_duration(duration))
+            .and_then(|time| {
+                let (seconds, nanos) = time.parts();
+                u64::try_from(seconds)
+                    .ok()
+                    .map(|seconds| Duration::new(seconds, nanos))
+            })
+    }
+
+    fn track_duration(&self) -> Option<TrackDuration> {
+        // Fragmented headers can leave duration at zero while audio follows.
+        self.packets
+            .source
+            .track()
+            .duration
+            .filter(|duration| !duration.is_zero())
+    }
+
+    fn end_timestamp(&self, position: Duration) -> Result<Option<Timestamp>, DecoderError> {
+        self.track_duration()
+            .filter(|_| self.duration() == Some(position))
+            .map(|duration| {
+                self.start_ts
+                    .checked_add(duration)
+                    .ok_or(DecoderError::TimingOverflow)
+            })
+            .transpose()
     }
 
     pub(crate) fn read(&mut self) -> Result<Option<DecodedAudio>, DecoderError> {
@@ -172,17 +174,9 @@ impl Decoder {
     pub(crate) fn seek(&mut self, position: Duration) -> Result<Duration, DecoderError> {
         let time_base = self.time_base.ok_or(DecoderError::SeekUnsupported)?;
         let position = self
-            .total_duration
+            .duration()
             .map_or(position, |duration| position.min(duration));
-        let end_ts = self
-            .track_duration
-            .filter(|_| self.total_duration == Some(position))
-            .map(|duration| {
-                self.start_ts
-                    .checked_add(duration)
-                    .ok_or(DecoderError::TimingOverflow)
-            })
-            .transpose()?;
+        let end_ts = self.end_timestamp(position)?;
         let target_ts = match end_ts {
             Some(timestamp) => timestamp,
             None => {
@@ -210,7 +204,7 @@ impl Decoder {
         };
         self.pending = None;
         self.packets
-            .format
+            .source
             .seek(
                 SeekMode::Accurate,
                 SeekTo::Timestamp {
@@ -221,10 +215,19 @@ impl Decoder {
             .map_err(DecoderError::Seek)?;
         self.packets.codec.reset();
 
+        // Seeking can discover an exact final segment after a declared duration
+        // was used initially. Endpoint trimming must use the newly known sample end.
+        let position = self.duration().map_or(position, |duration| {
+            if end_ts.is_some() {
+                duration
+            } else {
+                position.min(duration)
+            }
+        });
         let target = SeekTarget {
             position,
             start_ts: self.start_ts,
-            end_ts,
+            end_ts: self.end_timestamp(position)?,
             time_base,
         };
         let mut reached_target = false;
@@ -262,7 +265,7 @@ impl Decoder {
 }
 
 struct AudioPackets {
-    format: Box<dyn FormatReader>,
+    source: Box<dyn AudioPacketSource>,
 
     codec: Box<dyn AudioDecoder>,
 
@@ -273,7 +276,7 @@ impl AudioPackets {
     fn next_audio(&mut self) -> Result<Option<AudioBuffer>, DecoderError> {
         loop {
             let Some(packet) = self
-                .format
+                .source
                 .next_packet()
                 .map_err(DecoderError::ReadPacket)?
             else {

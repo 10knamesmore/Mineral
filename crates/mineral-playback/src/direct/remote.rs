@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures_util::{Stream, TryStreamExt};
+use rangemap::RangeSet;
 use reqwest::header::{self, HeaderValue};
 use stream_download::source::{DecodeError, SourceStream};
 use stream_download::storage::StorageProvider;
@@ -18,8 +19,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::storage::CaptureStorageProvider;
 use crate::{
-    CaptureReceipt, CaptureTarget, CapturedMedia, Error, MediaReader, RemoteLocator, Result,
-    TransferState,
+    BufferedPrefix, CaptureReceipt, CaptureTarget, CapturedMedia, Error, MediaReader,
+    RemoteLocator, Result, TransferState,
 };
 
 /// A buffered remote reader plus its transfer facts.
@@ -284,10 +285,22 @@ where
     P::Reader: Read + Seek + Send + Sync + 'static,
 {
     let observed = transfer.clone();
+    let mut available = RangeSet::<u64>::new();
     let settings = Settings::default()
         .prefetch_bytes(prefetch_bytes)
-        .on_progress(move |_stream: &RemoteStream, state: StreamState, _cancel| {
-            observed.set_downloaded(state.current_position);
+        .on_progress(move |stream: &RemoteStream, state: StreamState, _cancel| {
+            if !state.current_chunk.is_empty() {
+                available.insert(state.current_chunk);
+            }
+            observed.set_downloaded(available.iter().map(|range| range.end - range.start).sum());
+            if let Some(total) = stream.content_length
+                && let Some(prefix) = available.get(&0)
+            {
+                observed.set_buffered(BufferedPrefix::Bytes {
+                    end: prefix.end,
+                    total,
+                });
+            }
             if state.phase == StreamPhase::Complete {
                 observed.mark_complete();
             }

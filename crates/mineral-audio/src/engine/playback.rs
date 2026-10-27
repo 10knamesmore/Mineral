@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mineral_common::revision::Revision;
-use mineral_playback::OpenedMedia;
+use mineral_playback::{BufferedPrefix, OpenedMedia};
 use parking_lot::Mutex;
 
 use super::output::Output;
@@ -241,9 +241,13 @@ fn buffered(track: Option<&Track>) -> Bps {
                 if snapshot.complete {
                     Bps::FULL
                 } else {
-                    snapshot
-                        .total
-                        .map_or(Bps::ZERO, |total| Bps::ratio(snapshot.downloaded, total))
+                    match snapshot.buffered {
+                        Some(BufferedPrefix::Bytes { end, total }) => Bps::ratio(end, total),
+                        Some(BufferedPrefix::Time { end, total }) => {
+                            Bps::ratio(duration_to_ms(end), duration_to_ms(total))
+                        }
+                        None => Bps::ZERO,
+                    }
                 }
             }
         },

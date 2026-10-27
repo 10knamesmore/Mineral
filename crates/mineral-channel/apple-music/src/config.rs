@@ -28,10 +28,13 @@ pub struct AppleMusicConfig {
     /// Playback device file; None selects the bundled identity. File errors are returned.
     device_file: Option<PathBuf>,
 
-    /// Concurrent fragment-header requests while building the playback index.
+    /// Maximum concurrent background segment acquisitions.
     media_concurrency: NonZeroUsize,
 
-    /// Initial byte range fetched from each fragment while reading its MP4 header.
+    /// Contiguous playable duration required before the first playback handoff.
+    startup_buffer: Duration,
+
+    /// Initial byte range for a segment header needed before acquiring its audio.
     fragment_header_prefetch_bytes: NonZeroUsize,
 }
 

@@ -1,245 +1,174 @@
 use std::borrow::Cow;
-use std::num::NonZeroUsize;
-use std::ops::Range;
-use std::time::Instant;
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::num::{NonZeroU32, NonZeroUsize};
 
-use futures_util::{StreamExt, TryStreamExt, stream};
 use reqwest::Client;
-use shiguredo_mp4::boxes::{FreeBox, MdatBox, MoofBox, SampleEntry, TrafBox, TrunBox, TrunSample};
+use shiguredo_mp4::boxes::{FreeBox, MdatBox, MoofBox, SampleEntry};
 use shiguredo_mp4::mux::{Mp4FileMuxer, Sample};
-use shiguredo_mp4::{BoxHeader, BoxSize, Decode, Encode, SampleFlags, TrackKind};
+use shiguredo_mp4::{BoxHeader, BoxSize, Decode, Encode, TrackKind};
 
 use super::cenc::AudioInitialization;
 use super::error::{Error, Result};
 use super::transport::{Part, read_header_prefix, read_header_range};
 
-pub(super) struct MetadataRange {
-    pub range: Range<u64>,
-
-    pub bytes: Vec<u8>,
-}
-
-pub(super) struct SegmentRange {
-    pub range: Range<u64>,
-
-    pub source: Part,
-}
-
-/// Sample tables define the full byte layout; audio sample data is prepared separately.
-pub(super) struct AudioIndex {
-    pub metadata: Vec<MetadataRange>,
-
-    pub segments: Vec<SegmentRange>,
-
+pub(super) struct Fragment {
+    /// tfdt origin in track ticks; absent origins are resolved from preceding headers.
+    pub decode_start: Option<u64>,
+    pub duration: u64,
     pub byte_len: u64,
-
-    pub bitrate_bps: Option<u32>,
+    samples: Vec<FragmentSample>,
 }
 
-pub(super) async fn read_fragment_headers(
-    client: &Client,
-    parts: &[Part],
-    concurrency: NonZeroUsize,
-    prefetch_bytes: NonZeroUsize,
-) -> Result<Vec<MoofBox>> {
-    let started = Instant::now();
-    let mut fragments: Vec<_> = stream::iter(parts.iter().cloned().enumerate())
-        .map(|(position, part)| {
-            let client = client.clone();
-            async move {
-                let header = fragment_header(&client, &part, prefetch_bytes).await?;
-                Ok::<_, Error>((position, header))
-            }
-        })
-        .buffer_unordered(concurrency.get())
-        .try_collect()
-        .await?;
-    mineral_log::debug!(target: "apple_music", segments = parts.len(), elapsed_ms = started.elapsed().as_millis(), "fragment headers loaded");
-    fragments.sort_unstable_by_key(|(position, _)| *position);
-    Ok(fragments.into_iter().map(|(_, header)| header).collect())
+struct FragmentSample {
+    duration: u32,
+    byte_len: usize,
+    keyframe: bool,
+    composition_time_offset: Option<i64>,
 }
 
-pub(super) fn build(
-    parts: Vec<Part>,
-    fragments: Vec<MoofBox>,
-    initialization: &AudioInitialization,
-) -> Result<AudioIndex> {
-    let mut builder = IndexBuilder::new(initialization)?;
-    for (fragment, source) in fragments.into_iter().zip(parts) {
-        builder.append(&fragment, source)?;
-    }
-    builder.finish()
-}
-
-struct IndexBuilder<'a> {
-    initialization: &'a AudioInitialization,
-
-    muxer: Mp4FileMuxer,
-
-    head: Vec<u8>,
-
-    segments: Vec<SegmentRange>,
-
-    position: u64,
-
-    duration_ticks: u64,
-
-    first_entry: Option<SampleEntry>,
-}
-
-impl<'a> IndexBuilder<'a> {
-    fn new(initialization: &'a AudioInitialization) -> Result<Self> {
-        let muxer = Mp4FileMuxer::new()?;
-        let head = muxer.initial_boxes_bytes().to_vec();
-        Ok(Self {
-            initialization,
-            position: u64::try_from(head.len())?,
-            muxer,
-            head,
-            segments: Vec::new(),
-            duration_ticks: 0,
-            first_entry: Some(initialization.clear_sample_entry().clone()),
-        })
-    }
-
-    fn append(&mut self, fragment: &MoofBox, source: Part) -> Result<()> {
-        let [track] = fragment.traf_boxes.as_slice() else {
+impl Fragment {
+    pub(super) fn parse(moof: &MoofBox, initialization: &AudioInitialization) -> Result<Self> {
+        let [track] = moof.traf_boxes.as_slice() else {
             return Err(Error::Unsupported {
                 layout: "multiple fragment tracks",
             });
         };
-        if track.tfhd_box.track_id != self.initialization.track_id() {
+        if track.tfhd_box.track_id != initialization.track_id() {
             return Err(Error::InvalidMedia {
                 field: "fragment track identity",
             });
         }
-        if track
-            .tfdt_box
-            .as_ref()
-            .is_some_and(|time| time.base_media_decode_time != self.duration_ticks)
-        {
-            return Err(Error::Unsupported {
-                layout: "non-contiguous decode timeline",
-            });
-        }
-        let start = self.position;
+        let defaults = initialization.fragment_defaults();
+        let mut fragment = Self {
+            decode_start: track
+                .tfdt_box
+                .as_ref()
+                .map(|time| time.base_media_decode_time),
+            duration: 0,
+            byte_len: 0,
+            samples: Vec::new(),
+        };
         for run in &track.trun_boxes {
             for (index, sample) in run.samples.iter().enumerate() {
-                self.append_sample(track, run, sample, index)?;
+                let duration = sample
+                    .duration
+                    .or(track.tfhd_box.default_sample_duration)
+                    .unwrap_or(defaults.default_sample_duration);
+                let size = sample
+                    .size
+                    .or(track.tfhd_box.default_sample_size)
+                    .unwrap_or(defaults.default_sample_size);
+                if duration == 0 || size == 0 {
+                    return Err(Error::InvalidMedia {
+                        field: "audio sample duration or size",
+                    });
+                }
+                let flags = (index == 0)
+                    .then_some(run.first_sample_flags)
+                    .flatten()
+                    .or(sample.flags)
+                    .or(track.tfhd_box.default_sample_flags)
+                    .unwrap_or(defaults.default_sample_flags);
+                fragment.samples.push(FragmentSample {
+                    duration,
+                    keyframe: !flags.sample_is_non_sync_sample(),
+                    composition_time_offset: sample.composition_time_offset,
+                    byte_len: usize::try_from(size)?,
+                });
+                fragment.duration = fragment
+                    .duration
+                    .checked_add(u64::from(duration))
+                    .ok_or(Error::Overflow)?;
+                fragment.byte_len = fragment
+                    .byte_len
+                    .checked_add(u64::from(size))
+                    .ok_or(Error::Overflow)?;
             }
         }
-        if self.position == start {
+        if fragment.samples.is_empty() {
             return Err(Error::InvalidMedia {
                 field: "empty audio fragment",
             });
         }
-        self.segments.push(SegmentRange {
-            range: start..self.position,
-            source,
-        });
-        Ok(())
+        Ok(fragment)
     }
+}
 
-    fn append_sample(
-        &mut self,
-        track: &TrafBox,
-        run: &TrunBox,
-        sample: &TrunSample,
-        index: usize,
-    ) -> Result<()> {
-        let defaults = self.initialization.fragment_defaults();
-        let duration = sample
-            .duration
-            .or(track.tfhd_box.default_sample_duration)
-            .unwrap_or(defaults.default_sample_duration);
-        let size = sample
-            .size
-            .or(track.tfhd_box.default_sample_size)
-            .unwrap_or(defaults.default_sample_size);
-        let flags = sample_flags(track, run, sample, index, defaults.default_sample_flags);
-        self.muxer.append_sample(&Sample {
-            track_kind: TrackKind::Audio,
-            sample_entry: self.first_entry.take(),
-            timescale: self.initialization.timescale(),
-            duration,
-            keyframe: !flags.sample_is_non_sync_sample(),
-            composition_time_offset: sample.composition_time_offset,
-            data_offset: self.position,
-            data_size: usize::try_from(size)?,
-        })?;
-        self.position = self
-            .position
-            .checked_add(u64::from(size))
-            .ok_or(Error::Overflow)?;
-        self.duration_ticks = self
-            .duration_ticks
-            .checked_add(u64::from(duration))
-            .ok_or(Error::Overflow)?;
-        Ok(())
-    }
+/// One regular-MP4 builder serves both segment demuxing and complete file export.
+pub(super) struct RegularMp4 {
+    muxer: Mp4FileMuxer,
+    first_entry: Option<SampleEntry>,
+    position: u64,
+    timescale: NonZeroU32,
+}
 
-    fn finish(mut self) -> Result<AudioIndex> {
-        let mut byte_len = self.position;
-        let mut metadata = Vec::new();
-        for (position, bytes) in self.muxer.finalize()?.offset_and_bytes_pairs() {
-            let bytes = metadata_bytes(bytes)?;
-            if position < u64::try_from(self.head.len())? {
-                let start = usize::try_from(position)?;
-                let end = start.checked_add(bytes.len()).ok_or(Error::Overflow)?;
-                self.head
-                    .get_mut(start..end)
-                    .ok_or(Error::InvalidMedia {
-                        field: "MP4 header range",
-                    })?
-                    .copy_from_slice(&bytes);
-            } else {
-                let end = position
-                    .checked_add(u64::try_from(bytes.len())?)
-                    .ok_or(Error::Overflow)?;
-                byte_len = byte_len.max(end);
-                metadata.push(MetadataRange {
-                    range: position..end,
-                    bytes,
-                });
-            }
-        }
-        metadata.push(MetadataRange {
-            range: 0..u64::try_from(self.head.len())?,
-            bytes: self.head,
-        });
-        let bitrate_bps = u128::from(byte_len)
-            .checked_mul(8)
-            .and_then(|bits| bits.checked_mul(u128::from(self.initialization.timescale().get())))
-            .and_then(|scaled| scaled.checked_div(u128::from(self.duration_ticks)))
-            .and_then(|rate| u32::try_from(rate).ok());
-        Ok(AudioIndex {
-            metadata,
-            segments: self.segments,
-            byte_len,
-            bitrate_bps,
+impl RegularMp4 {
+    pub(super) fn new(
+        output: &mut impl Write,
+        initialization: &AudioInitialization,
+    ) -> Result<Self> {
+        let muxer = Mp4FileMuxer::new()?;
+        output.write_all(muxer.initial_boxes_bytes())?;
+        Ok(Self {
+            position: u64::try_from(muxer.initial_boxes_bytes().len())?,
+            muxer,
+            first_entry: Some(initialization.clear_sample_entry().clone()),
+            timescale: initialization.timescale(),
         })
     }
-}
 
-fn sample_flags(
-    track: &TrafBox,
-    run: &TrunBox,
-    sample: &TrunSample,
-    index: usize,
-    default: SampleFlags,
-) -> SampleFlags {
-    if index == 0
-        && let Some(flags) = run.first_sample_flags
-    {
-        return flags;
+    pub(super) fn position(&self) -> u64 {
+        self.position
     }
-    sample
-        .flags
-        .or(track.tfhd_box.default_sample_flags)
-        .unwrap_or(default)
+
+    pub(super) fn append(
+        &mut self,
+        output: &mut impl Write,
+        fragment: &Fragment,
+        input: &mut impl Read,
+    ) -> Result<()> {
+        for sample in &fragment.samples {
+            self.muxer.append_sample(&Sample {
+                sample_entry: self.first_entry.take(),
+                data_offset: self.position,
+                track_kind: TrackKind::Audio,
+                timescale: self.timescale,
+                duration: sample.duration,
+                keyframe: sample.keyframe,
+                composition_time_offset: sample.composition_time_offset,
+                data_size: sample.byte_len,
+            })?;
+            self.position = self
+                .position
+                .checked_add(u64::try_from(sample.byte_len)?)
+                .ok_or(Error::Overflow)?;
+        }
+        let copied = io::copy(&mut input.take(fragment.byte_len), output)?;
+        if copied != fragment.byte_len {
+            return Err(Error::InvalidMedia {
+                field: "prepared sample length",
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish(mut self, output: &mut (impl Write + Seek)) -> Result<u64> {
+        let mut byte_len = self.position;
+        for (position, bytes) in self.muxer.finalize()?.offset_and_bytes_pairs() {
+            let bytes = metadata_bytes(bytes)?;
+            output.seek(SeekFrom::Start(position))?;
+            output.write_all(&bytes)?;
+            byte_len = byte_len.max(
+                position
+                    .checked_add(u64::try_from(bytes.len())?)
+                    .ok_or(Error::Overflow)?,
+            );
+        }
+        Ok(byte_len)
+    }
 }
 
-/// Keep sample positions unchanged while using the mdat header understood by the tag writer.
+/// Preserve sample offsets while using an mdat header understood by the tag writer.
 fn metadata_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     let (header, _) = BoxHeader::decode(bytes)?;
     if header.box_type == MdatBox::TYPE
@@ -263,7 +192,27 @@ fn metadata_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
-async fn fragment_header(
+pub(super) fn fragment_from_bytes(bytes: &[u8]) -> Result<MoofBox> {
+    let mut position = 0;
+    loop {
+        let remaining = bytes.get(position..).ok_or(Error::InvalidMedia {
+            field: "fragment box",
+        })?;
+        let (header, _) = BoxHeader::decode(remaining)?;
+        let size = usize::try_from(header.box_size.get())?;
+        if header.box_type == MoofBox::TYPE {
+            return Ok(MoofBox::decode(remaining)?.0);
+        }
+        if size == 0 || header.box_type == MdatBox::TYPE {
+            return Err(Error::InvalidMedia {
+                field: "fragment header before media",
+            });
+        }
+        position = position.checked_add(size).ok_or(Error::Overflow)?;
+    }
+}
+
+pub(super) async fn fragment_header(
     client: &Client,
     part: &Part,
     prefetch_bytes: NonZeroUsize,
@@ -276,7 +225,6 @@ async fn fragment_header(
         let size = usize::try_from(header.box_size.get())?;
         if header.box_type == MoofBox::TYPE {
             let bytes = header_bytes(client, part, &prefix, position, size).await?;
-            mineral_log::debug!(target: "apple_music", offset = position, bytes = size, prefix_bytes = prefix.len(), "fragment index header");
             return Ok(MoofBox::decode(bytes.as_ref())?.0);
         }
         if size == 0 || header.box_type == MdatBox::TYPE {
@@ -288,7 +236,6 @@ async fn fragment_header(
     }
 }
 
-/// Use the fetched prefix when it covers the box; otherwise request that box's exact range.
 async fn header_bytes<'a>(
     client: &Client,
     part: &Part,

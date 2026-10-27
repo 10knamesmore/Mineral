@@ -88,6 +88,9 @@ pub fn apple_music_config_from(
         )
         .device_file(section.device_file().clone())
         .media_concurrency(*section.media_concurrency())
+        .startup_buffer(Duration::from_secs(u64::from(
+            section.startup_buffer_secs().get(),
+        )))
         .fragment_header_prefetch_bytes(*section.fragment_header_prefetch_bytes())
         .build()
 }

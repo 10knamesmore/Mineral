@@ -88,9 +88,10 @@ fn wait_for_work(
 
 fn decode(media: OpenedMedia, playback: &SharedPlayback, id: u64, tick: Duration) -> Result<()> {
     let read_control = media.read_control().cloned();
-    let mut decoder = Decoder::new(media.into_reader()).map_err(|source| Error::Decode {
-        source: Arc::new(source),
-    })?;
+    let mut decoder =
+        Decoder::from_input(media.into_audio_input()).map_err(|source| Error::Decode {
+            source: Arc::new(source),
+        })?;
     {
         let mut state = playback.state.lock();
         let Some(track) = state
@@ -212,6 +213,7 @@ fn decode(media: OpenedMedia, playback: &SharedPlayback, id: u64, tick: Duration
             if track.generation != work.generation {
                 return Ok(());
             }
+            track.duration = decoder.duration();
             if track.rendered_frames == 0
                 && track.samples.is_empty()
                 && let Some(position) = origin

@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -40,9 +40,23 @@ impl Part {
 pub(super) struct Manifest {
     pub initialization: Part,
 
-    pub segments: Vec<Part>,
+    pub segments: Vec<MediaSegment>,
 
     pub key_uri: String,
+}
+
+pub(super) struct MediaSegment {
+    pub source: Part,
+
+    /// EXTINF duration locates seek candidates; fragment samples supply exact timing.
+    pub duration: Duration,
+}
+
+pub(super) struct PlaybackAsset {
+    pub url: Url,
+
+    /// Bitrate declared for the selected rendition, converted from metadata.bitRate.
+    pub bitrate_bps: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -77,6 +91,14 @@ struct Asset {
 
     #[serde(rename = "URL")]
     url: String,
+
+    metadata: Option<AssetMetadata>,
+}
+
+#[derive(Deserialize)]
+struct AssetMetadata {
+    #[serde(rename = "bitRate")]
+    bitrate_kbps: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -108,7 +130,7 @@ struct LicenseResponse {
     failure_type: Option<String>,
 }
 
-pub(super) async fn asset(api: &Api, identity: &PlaybackIdentity) -> Result<Url> {
+pub(super) async fn asset(api: &Api, identity: &PlaybackIdentity) -> Result<PlaybackAsset> {
     let (salable_adam_id, universal_library_id) = match identity {
         PlaybackIdentity::Catalog(id) => (Some(id.as_str()), None),
         PlaybackIdentity::Library(id) => (None, Some(id.as_str())),
@@ -148,7 +170,15 @@ pub(super) async fn asset(api: &Api, identity: &PlaybackIdentity) -> Result<Url>
                 || asset.flavor.as_deref() == Some("28:ctrp256")
         })
         .ok_or(Error::NoRendition)?;
-    Ok(Url::parse(&asset.url)?)
+    let bitrate_bps = asset
+        .metadata
+        .and_then(|metadata| metadata.bitrate_kbps)
+        .map(|kbps| kbps.checked_mul(1000).ok_or(Error::Overflow))
+        .transpose()?;
+    Ok(PlaybackAsset {
+        url: Url::parse(&asset.url)?,
+        bitrate_bps,
+    })
 }
 
 pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
@@ -214,9 +244,12 @@ pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
                 layout: "changing initialization or discontinuity",
             });
         }
-        segments.push(Part {
-            url: base.join(segment.uri())?,
-            range: byte_range(segment.byte_range.map(|range| *range))?,
+        segments.push(MediaSegment {
+            source: Part {
+                url: base.join(segment.uri())?,
+                range: byte_range(segment.byte_range.map(|range| *range))?,
+            },
+            duration: segment.duration.duration(),
         });
     }
     Ok(Manifest {

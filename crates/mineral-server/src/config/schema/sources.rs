@@ -96,11 +96,15 @@ pub struct AppleMusicSection {
     /// 播放设备身份文件；未设置时使用内置身份，指定文件不可用时报错
     device_file: Option<PathBuf>,
 
-    /// 构建播放索引时并发读取的分片头数量，须大于 0
+    /// 后台获取音频分片的最大并发数，须大于 0
     #[lua_type("integer")]
     media_concurrency: NonZeroUsize,
 
-    /// 建立索引时每个分片首次读取的字节数，须大于 0；超出部分按实际头部长度读取
+    /// 首次起播前连续准备的音频时长，单位为秒，须大于 0；短曲准备整曲
+    #[lua_type("integer")]
+    startup_buffer_secs: NonZeroU32,
+
+    /// 按需获取分片索引头时首次读取的字节数，须大于 0；超出部分按实际头部长度读取
     #[lua_type("integer")]
     fragment_header_prefetch_bytes: NonZeroUsize,
 }

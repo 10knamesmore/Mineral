@@ -1,9 +1,14 @@
 use std::io;
 use std::num::TryFromIntError;
+use std::sync::Arc;
 
 use mineral_playback::Error as PlaybackError;
+use shiguredo_mp4::demux::DemuxError;
 use shiguredo_mp4::{Error as Mp4Error, mux::MuxError};
+use symphonia::core::errors::Error as SymphoniaError;
 use thiserror::Error as ThisError;
+use tokio::sync::AcquireError;
+use tokio::task::JoinError;
 
 use super::{cenc, license};
 
@@ -68,11 +73,23 @@ pub(crate) enum Error {
     #[error("prepared media I/O failed")]
     Io(#[from] io::Error),
 
-    #[error("media capture worker failed")]
-    CaptureTask(#[from] tokio::task::JoinError),
+    #[error("media preparation worker failed")]
+    WorkerTask(#[from] JoinError),
+
+    #[error("media acquisition scheduling stopped")]
+    Acquisition(#[from] AcquireError),
 
     #[error("media request cancelled")]
     Cancelled,
+
+    #[error("segment preparation failed")]
+    Preparation(#[source] Arc<Self>),
+
+    #[error("prepared AAC could not be demultiplexed")]
+    Demux(#[from] SymphoniaError),
+
+    #[error("prepared MP4 sample tables could not be read")]
+    Samples(#[from] DemuxError),
 
     // Direct opener errors may retain signed URLs, so they are not exposed as a source chain.
     #[error("could not open uploaded Apple Music media")]

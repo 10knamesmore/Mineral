@@ -5,9 +5,11 @@ use std::io::{Read, Seek};
 use mineral_model::PlaybackMediaInfo;
 use tokio_util::sync::CancellationToken;
 
-use super::{CaptureReceipt, CaptureTarget, ReadControl, TransferState};
+use super::{
+    AudioInput, AudioPacketSource, CaptureReceipt, CaptureTarget, ReadControl, TransferState,
+};
 
-/// Synchronous encoded-media input supporting random byte access.
+/// Synchronous encoded-file access supporting random byte access.
 pub trait MediaReader: Read + Seek + Send + Sync {}
 
 impl<T: Read + Seek + Send + Sync> MediaReader for T {}
@@ -74,10 +76,13 @@ impl OpenOptions {
     }
 }
 
-/// Decoder-ready encoded media returned by a prepared playback.
+/// Decoder-ready media with independent access to a complete encoded file.
 pub struct OpenedMedia {
-    /// Synchronous decoder-facing reader.
+    /// Complete encoded-file access for playback or export; reads may wait for acquisition.
     reader: Box<dyn MediaReader>,
+
+    /// Optional progressive packet delivery, independent of complete-file materialization.
+    audio_packets: Option<Box<dyn AudioPacketSource>>,
 
     /// Encoded byte length when known.
     byte_len: Option<u64>,
@@ -117,6 +122,7 @@ impl OpenedMedia {
     ) -> Self {
         Self {
             reader,
+            audio_packets: None,
             byte_len,
             info,
             transfer,
@@ -124,6 +130,14 @@ impl OpenedMedia {
             capture: None,
             cancellation,
         }
+    }
+
+    /// Uses source-prepared packets for playback while retaining encoded-file access for export.
+    /// This lets segmented sources start decoding before a complete file can be materialized.
+    #[must_use]
+    pub fn with_audio_packets(mut self, packets: Box<dyn AudioPacketSource>) -> Self {
+        self.audio_packets = Some(packets);
+        self
     }
 
     /// Attaches read demand shared with the provider's reader.
@@ -181,9 +195,18 @@ impl OpenedMedia {
         &self.cancellation
     }
 
-    /// Consumes the media and returns its decoder-facing reader.
+    /// Consumes the media and returns complete encoded-file access for export.
     #[must_use]
     pub fn into_reader(self) -> Box<dyn MediaReader> {
         self.reader
+    }
+
+    /// Consumes the media and selects its playback input independently of file export.
+    #[must_use]
+    pub fn into_audio_input(self) -> AudioInput {
+        match self.audio_packets {
+            Some(packets) => AudioInput::Packets(packets),
+            None => AudioInput::Bytes(self.reader),
+        }
     }
 }
