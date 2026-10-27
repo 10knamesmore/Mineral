@@ -51,6 +51,7 @@ return {
       },
       device_file = nil, -- nil 使用内置身份；填写路径则只使用指定 WVD。
       media_concurrency = 16,
+      startup_buffer_secs = 10,
       fragment_header_prefetch_bytes = 16 * KB,
     },
     ["local"] = {

@@ -11,8 +11,8 @@ pub use error::Error;
 /// Result of a playback operation.
 pub type Result<T> = std::result::Result<T, Error>;
 pub use media::{
-    CaptureReceipt, CaptureTarget, CapturedMedia, MediaReader, OpenOptions, OpenedMedia,
-    ReadControl, TransferSnapshot, TransferState,
+    AudioInput, AudioPacketSource, BufferedPrefix, CaptureReceipt, CaptureTarget, CapturedMedia,
+    MediaReader, OpenOptions, OpenedMedia, ReadControl, TransferSnapshot, TransferState,
 };
 pub use mineral_model::{DirectLocator, DirectMedia, RemoteLocator};
 pub use provider::{PlaybackProvider, PlaybackRequest, PreparedPlayback};

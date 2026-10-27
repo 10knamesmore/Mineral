@@ -540,7 +540,7 @@ fn prefetch_marker(stage: PrefetchStage, theme: &Theme, ink: Ink) -> Option<(&'s
     }
 }
 
-/// 当前 decoder input 的实测音质文字与颜色；open 前展示未知值。
+/// 当前音质文字与颜色；open 前展示未知值。
 fn media_spec(pb: &Playback, theme: &Theme, ink: Ink) -> (String, Color) {
     pb.media_info
         .as_ref()
@@ -563,19 +563,7 @@ fn media_spec(pb: &Playback, theme: &Theme, ink: Ink) -> (String, Color) {
         .unwrap_or_else(|| ("—".to_owned(), ink.muted))
 }
 
-/// 把 channel 实测的 format / 位深 / 采样率 / 码率拼成 fmt 段文本,如 `FLAC 24bit/96kHz 999kbps`。
-///
-/// 任一项未知即省略对应片段(码率未知不显 `0kbps` 撒谎)——故网易云 mp3 退到
-/// `MP3 44.1kHz 320kbps`、刚切歌(采样率未探出)退到 `FLAC 999kbps`;全部未知退 `—`。
-///
-/// # Params:
-///   - `format`: 实测容器格式;`None` = 未知
-///   - `bit_depth`: 位深(bit),无损实测有值,否则 `None`
-///   - `sample_rate_hz`: engine 实测采样率(Hz),`0` 表示未探出
-///   - `bitrate_bps`: 实测码率(bps);`None` = 未知
-///
-/// # Return:
-///   拼好的 fmt 段文本。
+/// 把媒体格式、位深、采样率和码率拼成 fmt 段文本,如 `FLAC 24bit/96kHz 999kbps`。
 fn fmt_spec_label(
     format: Option<&AudioFormat>,
     bit_depth: Option<u8>,

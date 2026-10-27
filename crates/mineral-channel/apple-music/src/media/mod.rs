@@ -5,6 +5,7 @@ mod error;
 mod index;
 mod license;
 mod open;
+mod packets;
 mod reader;
 mod store;
 mod transport;

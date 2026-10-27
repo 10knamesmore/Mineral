@@ -35,8 +35,9 @@ pub trait PlaybackProvider: Send + Sync {
 ///
 /// Implementations may keep arbitrary source-private state. `open` consumes the boxed plan so safe
 /// Rust cannot open the same plan twice. When [`OpenOptions`](crate::OpenOptions) contains a capture
-/// target, the producer writes its decoder-ready output to that target and attaches a
-/// [`CaptureReceipt`](crate::CaptureReceipt) to the returned media.
+/// target, the producer writes a complete encoded media file to that target and attaches a
+/// [`CaptureReceipt`](crate::CaptureReceipt) to the returned media. Playback may use incremental
+/// packets while file export independently finishes container metadata.
 #[async_trait]
 pub trait PreparedPlayback: Send {
     /// Returns an optional direct access capability available before opening.

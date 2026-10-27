@@ -69,6 +69,7 @@ libc               = "0.2"
 nix                = { version = "0.29", features = ["fs", "mman", "poll", "signal"] }
 lofty              = "0.22"
 symphonia          = { version = "0.6.1", default-features = false, features = ["isomp4", "all-meta"] }
+symphonia-core     = "0.6.1"
 mlua               = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
 mineral-audio           = { path = "crates/mineral-audio", version = "0.5.10" }
 mineral-cli             = { path = "crates/mineral-cli", version = "0.5.10" }
@@ -115,6 +116,7 @@ url                = { version = "2", features = ["serde"] }
 once_cell          = "1.21"
 openssl            = "0.10"
 rand               = "0.9"
+rangemap           = "1.7"
 realfft            = "3"
 ringbuf            = "0.4"
 rustc-hash         = "2"

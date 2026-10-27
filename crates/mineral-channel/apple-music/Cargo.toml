@@ -9,6 +9,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+symphonia = { workspace = true }
 mineral-model = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-playback = { workspace = true }
