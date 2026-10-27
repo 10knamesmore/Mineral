@@ -290,7 +290,8 @@ impl FormatReader for FlacReader<'_> {
             // lower bound is set to the byte offset of the first frame, while the upper bound is
             // set to the length of the stream.
             let mut start_byte_offset = self.first_frame_offset;
-            let mut end_byte_offset = self.reader.seek(SeekFrom::End(0))?;
+            let mut end_byte_offset =
+                self.reader.byte_len().ok_or(Error::SeekError(SeekErrorKind::Unseekable))?;
 
             // If there is an index, use it to refine the binary search range.
             if let Some(ref index) = self.index {

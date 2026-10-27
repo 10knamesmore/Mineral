@@ -14,3 +14,10 @@ Symphonia is provided under the MPL v2.0 license. Please refer to the LICENSE fi
 ## Contributing
 
 Symphonia is a free and open-source project that welcomes contributions! To get started, please read our [Contribution Guidelines](https://github.com/pdeljanov/Symphonia/blob/main/CONTRIBUTING.md).
+
+## Local changes
+
+Based on 0.6.1, with the MP4 fix from [upstream #340](https://github.com/pdeljanov/Symphonia/pull/340):
+`src/demuxer.rs` uses `byte_len()` instead of `seek(End(0))` during initialization,
+avoiding a whole-file download wait. The position save and restore are removed;
+unknown lengths return `Unseekable`.

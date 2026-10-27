@@ -159,9 +159,7 @@ impl<'s> IsoMp4Reader<'s> {
 
         // Get the total length of the stream, if possible.
         let total_len = if is_seekable {
-            let pos = mss.pos();
-            let len = mss.seek(SeekFrom::End(0))?;
-            mss.seek(SeekFrom::Start(pos))?;
+            let len = mss.byte_len().ok_or(Error::SeekError(SeekErrorKind::Unseekable))?;
             info!("stream is seekable with len={len} bytes.");
             Some(len)
         }
