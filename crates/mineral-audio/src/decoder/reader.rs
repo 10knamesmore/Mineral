@@ -2,26 +2,16 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use symphonia::core::io::MediaSource;
 
-use super::DecoderError;
-
 pub(super) struct EncodedReader<R> {
     reader: R,
 
-    byte_len: u64,
+    byte_len: Option<u64>,
 }
 
-impl<R: Read + Seek> EncodedReader<R> {
-    pub(super) fn new(mut reader: R) -> Result<Self, DecoderError> {
-        let position = reader
-            .stream_position()
-            .map_err(DecoderError::ReaderPosition)?;
-        let byte_len = reader
-            .seek(SeekFrom::End(0))
-            .map_err(DecoderError::ReaderLength)?;
-        reader
-            .seek(SeekFrom::Start(position))
-            .map_err(DecoderError::RestoreReader)?;
-        Ok(Self { reader, byte_len })
+impl<R> EncodedReader<R> {
+    /// A streaming reader's seek may wait for acquisition. Length inspection must not seek.
+    pub(super) fn new(reader: R, byte_len: Option<u64>) -> Self {
+        Self { reader, byte_len }
     }
 }
 
@@ -43,6 +33,6 @@ impl<R: Read + Seek + Send + Sync> MediaSource for EncodedReader<R> {
     }
 
     fn byte_len(&self) -> Option<u64> {
-        Some(self.byte_len)
+        self.byte_len
     }
 }

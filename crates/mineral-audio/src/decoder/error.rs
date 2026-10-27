@@ -8,14 +8,8 @@ use thiserror::Error;
 /// Failures while opening, decoding, or seeking encoded audio.
 #[derive(Debug, Error)]
 pub enum DecoderError {
-    #[error("inspect encoded reader position")]
-    ReaderPosition(#[source] io::Error),
-
     #[error("inspect encoded reader length")]
     ReaderLength(#[source] io::Error),
-
-    #[error("restore encoded reader position")]
-    RestoreReader(#[source] io::Error),
 
     #[error("probe encoded media")]
     Probe(#[source] SymphoniaError),

@@ -1,4 +1,3 @@
-use std::io::{Read, Seek};
 use std::num::{NonZeroU16, NonZeroU32};
 use std::time::Duration;
 
@@ -47,13 +46,6 @@ pub(crate) struct Decoder {
 }
 
 impl Decoder {
-    pub(crate) fn new<R>(reader: R) -> Result<Self, DecoderError>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        Self::from_input(AudioInput::Bytes(Box::new(reader)))
-    }
-
     pub(crate) fn from_input(input: AudioInput) -> Result<Self, DecoderError> {
         let source = packets::open(input)?;
         let track = source.track();

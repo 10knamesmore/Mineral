@@ -25,7 +25,13 @@ pub trait AudioPacketSource: Send + Sync {
 /// Both forms are decoded by the same audio engine.
 pub enum AudioInput {
     /// The audio engine probes and demultiplexes the container.
-    Bytes(Box<dyn MediaReader>),
+    Bytes {
+        /// Encoded container bytes.
+        reader: Box<dyn MediaReader>,
+
+        /// Length supplied by the source; None means unknown
+        byte_len: Option<u64>,
+    },
 
     /// The source owns segment selection and container demultiplexing.
     Packets(Box<dyn AudioPacketSource>),
