@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_model::{DirectMedia, SongId, SourceKind};
+use mineral_model::{BitRate, DirectMedia, SongId, SourceKind};
 use mineral_playback::{
     OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRequest, PreparedPlayback,
 };
@@ -20,6 +20,8 @@ struct AppleMusicPlayback {
     song_id: SongId,
 
     identity: PlaybackIdentity,
+
+    quality: BitRate,
 }
 
 #[async_trait]
@@ -39,6 +41,7 @@ impl PlaybackProvider for AppleMusicChannel {
                 api: self.api.clone(),
                 song_id: request.song_id().clone(),
                 identity,
+                quality: request.quality(),
             });
             Ok::<_, Error>(plan)
         };
@@ -78,7 +81,7 @@ impl PreparedPlayback for AppleMusicPlayback {
         tokio::select! {
             biased;
             () = cancellation.cancelled() => Err(mineral_playback::Error::Cancelled),
-            result = media::open(self.api, self.song_id, self.identity, options) => result.map_err(Into::into),
+            result = media::open(self.api, self.song_id, self.identity, self.quality, options) => result.map_err(Into::into),
         }
     }
 }

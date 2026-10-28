@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use super::binary::{BoxSlice, Reader, add, invalid, optional, to_usize};
 use super::error::{Error, Result, Unsupported};
+use super::initialization::InitializationVector;
 
 pub(super) struct SampleEncryption {
     pub iv: [u8; 16],
@@ -27,7 +28,7 @@ struct AuxiliaryType {
 pub(super) fn sample_encryption(
     fragment: &[u8],
     children: &[BoxSlice<'_>],
-    iv_size: u8,
+    initialization_vector: InitializationVector,
     run_counts: &[usize],
     moof_start: usize,
 ) -> Result<Vec<SampleEncryption>> {
@@ -38,7 +39,7 @@ pub(super) fn sample_encryption(
     let saiz = optional(children, *b"saiz")?;
     let saio = optional(children, *b"saio")?;
     let inline = senc
-        .map(|value| parse_senc(value, iv_size, sample_count))
+        .map(|value| parse_senc(value, initialization_vector, sample_count))
         .transpose()?;
     match (saiz, saio) {
         (None, None) => inline.ok_or(Error::MissingBox(*b"senc")),
@@ -63,8 +64,13 @@ pub(super) fn sample_encryption(
                     invalid(*b"saio", "auxiliary range outside supplied fragment")
                 })?;
                 let mut reader = Reader::new(bytes, *b"saiz");
-                let has_subsamples = bytes.len() > usize::from(iv_size);
-                let record = parse_record(&mut reader, iv_size, has_subsamples, range.start)?;
+                let has_subsamples = bytes.len() > initialization_vector.per_sample_size();
+                let record = parse_record(
+                    &mut reader,
+                    initialization_vector,
+                    has_subsamples,
+                    range.start,
+                )?;
                 reader.finish()?;
                 records.push(record);
             }
@@ -76,7 +82,7 @@ pub(super) fn sample_encryption(
 
 fn parse_senc(
     senc: BoxSlice<'_>,
-    iv_size: u8,
+    initialization_vector: InitializationVector,
     sample_count: usize,
 ) -> Result<Vec<SampleEncryption>> {
     let mut reader = Reader::new(senc.payload, *b"senc");
@@ -89,7 +95,12 @@ fn parse_senc(
     let mut records = Vec::with_capacity(sample_count);
     for _ in 0..sample_count {
         let start = add(senc.payload_start, senc.payload.len() - reader.remaining())?;
-        records.push(parse_record(&mut reader, iv_size, flags & 2 != 0, start)?);
+        records.push(parse_record(
+            &mut reader,
+            initialization_vector,
+            flags & 2 != 0,
+            start,
+        )?);
     }
     reader.finish()?;
     Ok(records)
@@ -97,16 +108,22 @@ fn parse_senc(
 
 fn parse_record(
     reader: &mut Reader<'_>,
-    iv_size: u8,
+    initialization_vector: InitializationVector,
     has_subsamples: bool,
     start: usize,
 ) -> Result<SampleEncryption> {
     let remaining = reader.remaining();
-    // Eight-byte IVs occupy the high half of the counter block; the low half stays zero.
-    let mut iv = [0; 16];
-    for (target, byte) in iv.iter_mut().zip(reader.take(usize::from(iv_size))?) {
-        *target = *byte;
-    }
+    let iv = match initialization_vector {
+        InitializationVector::Constant(iv) => iv,
+        InitializationVector::PerSample(size) => {
+            // Eight-byte IVs occupy the high half of the counter block.
+            let mut iv = [0; 16];
+            for (target, byte) in iv.iter_mut().zip(reader.take(usize::from(size))?) {
+                *target = *byte;
+            }
+            iv
+        }
+    };
     let mut subsamples = Vec::new();
     if has_subsamples {
         let count = reader.u16()?;
@@ -130,7 +147,7 @@ fn auxiliary_type(reader: &mut Reader<'_>, flags: u32) -> Result<Option<Auxiliar
     }
     let kind = reader.fourcc()?;
     let parameter = reader.u32()?;
-    if kind != *b"cenc" || parameter != 0 {
+    if ![*b"cenc", *b"cbcs"].contains(&kind) || parameter != 0 {
         return Err(Error::Unsupported(Unsupported::AuxiliaryType));
     }
     Ok(Some(AuxiliaryType { kind, parameter }))

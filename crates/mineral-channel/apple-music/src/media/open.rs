@@ -3,11 +3,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use mineral_model::{AudioFormat, DirectMedia, PlaybackMediaInfo, SongId, StreamLayout};
+use mineral_model::{AudioFormat, BitRate, DirectMedia, PlaybackMediaInfo, SongId, StreamLayout};
 use mineral_playback::{DirectPreparedPlayback, OpenOptions, OpenedMedia, ReadControl};
 use zeroize::Zeroizing;
 
-use super::cenc::AudioInitialization;
+use super::cenc::{AudioInitialization, Error as EncryptionError};
 use super::error::{Error, Result};
 use super::packets::AudioPackets;
 use super::store::MediaStore;
@@ -24,11 +24,12 @@ pub(crate) async fn open(
     api: Arc<Api>,
     song_id: SongId,
     identity: PlaybackIdentity,
+    quality: BitRate,
     options: OpenOptions,
 ) -> Result<OpenedMedia> {
     let started = Instant::now();
     api.session().await?;
-    let asset = transport::asset(&api, &identity).await?;
+    let asset = transport::asset(&api, &identity, quality).await?;
     mineral_log::debug!(target: "apple_music", stage = "asset", elapsed_ms = started.elapsed().as_millis(), "playback preparation");
     let info = PlaybackMediaInfo {
         song_id,
@@ -56,17 +57,17 @@ pub(crate) async fn open(
         let bytes = transport::download(&api.client, &manifest.initialization).await?;
         Ok::<_, Error>(AudioInitialization::parse(&bytes)?)
     };
-    let (initialization, keys) = tokio::try_join!(
+    let (initialization, key) = tokio::try_join!(
         initialization,
-        transport::content_keys(&api, &track_id, &manifest.key_uri),
+        transport::content_key(&api, &track_id, &manifest.key_uri),
     )?;
     mineral_log::debug!(target: "apple_music", stage = "metadata_and_license", elapsed_ms = started.elapsed().as_millis(), "playback preparation");
-    let key = keys
-        .iter()
-        .find(|key| key.id.as_slice() == initialization.key_id())
-        .ok_or(Error::InvalidMedia {
-            field: "matching content key",
-        })?;
+    if initialization
+        .key_id()
+        .is_some_and(|expected| key.id.as_slice() != expected)
+    {
+        return Err(EncryptionError::KeyIdMismatch.into());
+    }
     let key: [u8; 16] =
         key.bytes
             .as_slice()

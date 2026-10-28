@@ -42,6 +42,9 @@ pub(crate) enum Error {
     #[error("protobuf response is invalid")]
     Protocol(#[from] DecodeError),
 
+    #[error("Widevine initialization must identify one 16-byte content key")]
+    InitializationKeyId,
+
     #[error("missing license field: {0}")]
     Missing(&'static str),
 
@@ -274,6 +277,17 @@ pub(crate) fn key_initialization(key_id: &[u8]) -> Vec<u8> {
         key_ids: vec![key_id.to_vec()],
     }
     .encode_to_vec()
+}
+
+pub(crate) fn initialization_key_id(initialization: &[u8]) -> Result<[u8; 16]> {
+    let initialization = KeyInitialization::decode(initialization)?;
+    let [key_id] = initialization.key_ids.as_slice() else {
+        return Err(Error::InitializationKeyId);
+    };
+    key_id
+        .as_slice()
+        .try_into()
+        .map_err(|_wrong_length| Error::InitializationKeyId)
 }
 
 fn read_sized(reader: &mut Cursor<&[u8]>) -> Result<Vec<u8>> {

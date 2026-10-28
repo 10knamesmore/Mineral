@@ -17,6 +17,13 @@ Gamdl declares the MIT license reproduced below. Its repository does not
 document separate authorization to distribute the extracted device credentials.
 No Gamdl Python implementation or pywidevine dependency is included.
 
+### Enhanced HLS prefetch key
+
+The CBCS reader uses Gamdl's published Apple prefetch key and selects the
+prefetch or licensed key from each fragment's sample description. The reference
+is [`gamdl/downloader/ammuxer/src/media.rs`](https://github.com/glomatico/gamdl/blob/bc3bcd25ed61dcdb78c28ffb0ef32053b618c7e3/gamdl/downloader/ammuxer/src/media.rs).
+AES operations use RustCrypto.
+
 ### Gamdl — MIT
 
 MIT License

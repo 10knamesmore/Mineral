@@ -408,12 +408,9 @@ impl MediaStore {
         if self.cancellation.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let clear = self.initialization.decrypt_fragment_at(
-            bytes,
-            resource_offset,
-            &self.key,
-            self.initialization.key_id(),
-        )?;
+        let clear = self
+            .initialization
+            .decrypt_fragment_at(bytes, resource_offset, &self.key)?;
         if u64::try_from(clear.len())? != fragment.byte_len {
             return Err(Error::InvalidMedia {
                 field: "decrypted sample length",
