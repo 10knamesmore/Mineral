@@ -19,14 +19,49 @@ pub(crate) struct AudioInitialization {
 
     fragment_defaults: TrexBox,
 
-    pub(super) encryption: TrackEncryption,
+    encryption_descriptions: Vec<SampleDescriptionEncryption>,
+
+    content_key_id: Option<[u8; 16]>,
+}
+
+/// Apple uses this public key for the prefetch description, not the licensed audio.
+pub(super) const PREFETCH_KEY: [u8; 16] = [
+    0x32, 0xb8, 0xad, 0xe1, 0x76, 0x9e, 0x26, 0xb1, 0xff, 0xb8, 0x98, 0x63, 0x52, 0x79, 0x3f, 0xc6,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EncryptionScheme {
+    Cenc,
+
+    Cbcs,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum InitializationVector {
+    PerSample(u8),
+
+    Constant([u8; 16]),
+}
+
+impl InitializationVector {
+    pub fn per_sample_size(self) -> usize {
+        match self {
+            Self::PerSample(size) => usize::from(size),
+            Self::Constant(_) => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct TrackEncryption {
-    pub iv_size: u8,
+pub(super) struct SampleDescriptionEncryption {
+    pub scheme: EncryptionScheme,
+
+    pub initialization_vector: InitializationVector,
 
     pub key_id: [u8; 16],
+
+    /// Enhanced CBCS reserves the first description for the public prefetch key.
+    pub uses_prefetch_key: bool,
 }
 
 impl AudioInitialization {
@@ -53,12 +88,44 @@ impl AudioInitialization {
         for extension in &table.unknown_boxes {
             reject_encryption_extension(extension.box_type, &extension.payload)?;
         }
-        let encrypted_entry = match table.stsd_box.entries.as_slice() {
-            [SampleEntry::Unknown(entry)] if entry.box_type == BoxType::Normal(*b"enca") => entry,
-            [_] => return Err(Error::Unsupported(Unsupported::NonEncryptedAudioEntry)),
-            _ => return Err(Error::Unsupported(Unsupported::MultipleSampleDescriptions)),
-        };
-        let (clear_sample_entry, encryption) = parse_audio_entry(encrypted_entry)?;
+        let mut clear_entry: Option<Mp4aBox> = None;
+        let mut encryption_descriptions = Vec::new();
+        let mut content_key_id = None;
+        for (index, entry) in table.stsd_box.entries.iter().enumerate() {
+            let SampleEntry::Unknown(entry) = entry else {
+                return Err(Error::Unsupported(Unsupported::NonEncryptedAudioEntry));
+            };
+            if entry.box_type != BoxType::Normal(*b"enca") {
+                return Err(Error::Unsupported(Unsupported::NonEncryptedAudioEntry));
+            }
+            let (clear, protection) = parse_audio_entry(entry, index == 0)?;
+            if let Some(first) = &clear_entry {
+                if first.audio != clear.audio
+                    || first.esds_box.es.dec_config_descr.dec_specific_info
+                        != clear.esds_box.es.dec_config_descr.dec_specific_info
+                {
+                    return Err(Error::Unsupported(Unsupported::AudioConfigurationChange));
+                }
+            } else {
+                clear_entry = Some(clear);
+            }
+            if !protection.uses_prefetch_key {
+                if content_key_id.is_some_and(|key_id| key_id != protection.key_id) {
+                    return Err(Error::Unsupported(Unsupported::MultipleContentKeys));
+                }
+                content_key_id = Some(protection.key_id);
+            }
+            encryption_descriptions.push(protection);
+        }
+        let clear_sample_entry = SampleEntry::Mp4a(
+            clear_entry.ok_or_else(|| invalid(*b"stsd", "no audio sample descriptions"))?,
+        );
+        let content_key_id =
+            content_key_id.ok_or(Error::Unsupported(Unsupported::MissingContentDescription))?;
+        let content_key_id = encryption_descriptions
+            .iter()
+            .any(|description| description.scheme == EncryptionScheme::Cenc)
+            .then_some(content_key_id);
         let track_id = track.tkhd_box.track_id;
         let mvex = moov
             .mvex_box
@@ -72,15 +139,17 @@ impl AudioInitialization {
         if defaults.next().is_some() {
             return Err(Error::DuplicateBox(*b"trex"));
         }
-        if fragment_defaults.default_sample_description_index != 1 {
-            return Err(Error::Unsupported(Unsupported::SampleDescriptionChange));
-        }
+        description(
+            &encryption_descriptions,
+            fragment_defaults.default_sample_description_index,
+        )?;
         Ok(Self {
             track_id,
             timescale: track.mdia_box.mdhd_box.timescale,
             clear_sample_entry,
             fragment_defaults,
-            encryption,
+            encryption_descriptions,
+            content_key_id,
         })
     }
 
@@ -102,12 +171,39 @@ impl AudioInitialization {
         &self.fragment_defaults
     }
 
-    pub fn key_id(&self) -> &[u8; 16] {
-        &self.encryption.key_id
+    /// CENC supplies a Widevine KID in tenc. Apple's CBCS media identifies its
+    /// Widevine key through the HLS PSSH instead, so no container KID is exposed.
+    pub fn key_id(&self) -> Option<&[u8; 16]> {
+        self.content_key_id.as_ref()
+    }
+
+    pub(super) fn encryption(
+        &self,
+        description_index: u32,
+    ) -> Result<&SampleDescriptionEncryption> {
+        description(&self.encryption_descriptions, description_index)
     }
 }
 
-fn parse_audio_entry(entry: &UnknownBox) -> Result<(SampleEntry, TrackEncryption)> {
+fn description(
+    descriptions: &[SampleDescriptionEncryption],
+    index: u32,
+) -> Result<&SampleDescriptionEncryption> {
+    let offset = index
+        .checked_sub(1)
+        .and_then(|value| usize::try_from(value).ok());
+    offset
+        .and_then(|value| descriptions.get(value))
+        .ok_or(Error::SampleDescriptionIndex {
+            index,
+            count: descriptions.len(),
+        })
+}
+
+fn parse_audio_entry(
+    entry: &UnknownBox,
+    first_description: bool,
+) -> Result<(Mp4aBox, SampleDescriptionEncryption)> {
     let mut fields = Reader::new(&entry.payload, *b"enca");
     fields.take(8)?;
     if fields.u16()? != 0 {
@@ -143,9 +239,11 @@ fn parse_audio_entry(entry: &UnknownBox) -> Result<(SampleEntry, TrackEncryption
     let mut scheme = Reader::new(schm.payload, *b"schm");
     let (_, flags) = scheme.full_header(0, 1)?;
     let scheme_type = scheme.fourcc()?;
-    if scheme_type != *b"cenc" {
-        return Err(Error::Scheme(scheme_type));
-    }
+    let encryption_scheme = match &scheme_type {
+        b"cenc" => EncryptionScheme::Cenc,
+        b"cbcs" => EncryptionScheme::Cbcs,
+        _ => return Err(Error::Scheme(scheme_type)),
+    };
     if scheme.u32()? != 0x0001_0000 {
         return Err(invalid(*b"schm", "scheme_version"));
     }
@@ -164,7 +262,13 @@ fn parse_audio_entry(entry: &UnknownBox) -> Result<(SampleEntry, TrackEncryption
             return Err(Error::Unsupported(Unsupported::AuxiliaryLayout));
         }
     }
-    let encryption = parse_tenc(tenc.payload)?;
+    let (initialization_vector, key_id) = parse_tenc(tenc.payload, encryption_scheme)?;
+    let encryption = SampleDescriptionEncryption {
+        scheme: encryption_scheme,
+        initialization_vector,
+        key_id,
+        uses_prefetch_key: encryption_scheme == EncryptionScheme::Cbcs && first_description,
+    };
     let esds = required(&children, *b"esds")?;
     Reader::new(esds.payload, *b"esds").full_header(0, 0)?;
     let (esds_box, _) = EsdsBox::decode(esds.bytes)?;
@@ -187,16 +291,19 @@ fn parse_audio_entry(entry: &UnknownBox) -> Result<(SampleEntry, TrackEncryption
         }
     }
     Ok((
-        SampleEntry::Mp4a(Mp4aBox {
+        Mp4aBox {
             audio,
             esds_box,
             unknown_boxes,
-        }),
+        },
         encryption,
     ))
 }
 
-fn parse_tenc(payload: &[u8]) -> Result<TrackEncryption> {
+fn parse_tenc(
+    payload: &[u8],
+    scheme: EncryptionScheme,
+) -> Result<(InitializationVector, [u8; 16])> {
     let mut reader = Reader::new(payload, *b"tenc");
     let (version, _) = reader.full_header(1, 0)?;
     if reader.u8()? != 0 {
@@ -214,13 +321,22 @@ fn parse_tenc(payload: &[u8]) -> Result<TrackEncryption> {
         return Err(Error::Unsupported(Unsupported::UnprotectedTrack));
     }
     let iv_size = reader.u8()?;
-    match iv_size {
-        8 | 16 => {}
-        0 => return Err(Error::Unsupported(Unsupported::ConstantIv)),
-        value => return Err(Error::Unsupported(Unsupported::IvSize(value))),
-    }
     let mut key_id = [0; 16];
     key_id.copy_from_slice(reader.take(16)?);
+    let initialization_vector = match iv_size {
+        8 | 16 => InitializationVector::PerSample(iv_size),
+        0 if scheme == EncryptionScheme::Cbcs => {
+            let constant_size = reader.u8()?;
+            if constant_size != 16 {
+                return Err(Error::Unsupported(Unsupported::IvSize(constant_size)));
+            }
+            let mut iv = [0; 16];
+            iv.copy_from_slice(reader.take(16)?);
+            InitializationVector::Constant(iv)
+        }
+        0 => return Err(Error::Unsupported(Unsupported::ConstantIv)),
+        value => return Err(Error::Unsupported(Unsupported::IvSize(value))),
+    };
     reader.finish()?;
-    Ok(TrackEncryption { iv_size, key_id })
+    Ok((initialization_vector, key_id))
 }

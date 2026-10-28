@@ -5,22 +5,33 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use hls_m3u8::MediaPlaylist;
+use hls_m3u8::tags::VariantStream;
 use hls_m3u8::types::{ByteRange, KeyFormat};
+use hls_m3u8::{MasterPlaylist, MediaPlaylist};
+use mineral_model::BitRate;
 use reqwest::header::{CONTENT_TYPE, RANGE};
 use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
+use shiguredo_mp4::{BoxHeader, BoxType, Decode};
 use tokio::fs;
 use url::Url;
 use zeroize::Zeroizing;
 
 use super::PlaybackIdentity;
 use super::error::{Error, Result};
-use super::license::{ContentKey, DeviceIdentity, LicenseExchange, key_initialization};
+use super::license::{
+    ContentKey, DeviceIdentity, LicenseExchange, initialization_key_id, key_initialization,
+};
 use crate::api::Api;
 
 /// iTunes can reject authentication inside an HTTP 200 response.
 const SESSION_ENDED_FAILURE: &str = "2002";
+
+// Apple's opening samples use a fixed prefetch key; only the later key needs a license.
+const PREFETCH_WIDEVINE_URI: &str = concat!(
+    "data:text/plain;base64,AAAAOHBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABgSEAAAAAA",
+    "AAAAAczEvZTEgICBI88aJmwY=",
+);
 
 #[derive(Clone)]
 pub(super) struct Part {
@@ -55,8 +66,23 @@ pub(super) struct MediaSegment {
 pub(super) struct PlaybackAsset {
     pub url: Url,
 
-    /// Bitrate declared for the selected rendition, converted from metadata.bitRate.
+    /// Source-declared bits/s: web metadata.bitRate or HLS AVERAGE-BANDWIDTH.
     pub bitrate_bps: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct EnhancedAssetResponse {
+    results: EnhancedAssetResults,
+}
+
+#[derive(Deserialize)]
+struct EnhancedAssetResults {
+    assets: Vec<EnhancedAsset>,
+}
+
+#[derive(Deserialize)]
+struct EnhancedAsset {
+    url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -130,7 +156,18 @@ struct LicenseResponse {
     failure_type: Option<String>,
 }
 
-pub(super) async fn asset(api: &Api, identity: &PlaybackIdentity) -> Result<PlaybackAsset> {
+/// Catalog standard selects AAC 128; higher and the remaining preferences use web AAC 256.
+/// Unmatched library uploads retain their server-selected direct resource.
+pub(super) async fn asset(
+    api: &Api,
+    identity: &PlaybackIdentity,
+    quality: BitRate,
+) -> Result<PlaybackAsset> {
+    if quality == BitRate::Standard
+        && let PlaybackIdentity::Catalog(track_id) = identity
+    {
+        return standard_asset(api, track_id).await;
+    }
     let (salable_adam_id, universal_library_id) = match identity {
         PlaybackIdentity::Catalog(id) => (Some(id.as_str()), None),
         PlaybackIdentity::Library(id) => (None, Some(id.as_str())),
@@ -181,6 +218,62 @@ pub(super) async fn asset(api: &Api, identity: &PlaybackIdentity) -> Result<Play
     })
 }
 
+async fn standard_asset(api: &Api, track_id: &str) -> Result<PlaybackAsset> {
+    let response: EnhancedAssetResponse = api
+        .authenticated_json(
+            || {
+                api.client
+                    .get("https://amp-api.music.apple.com/v1/play/assets")
+                    .query(&[
+                        ("id", track_id),
+                        ("kind", "song"),
+                        ("includeLicenseUrls", "true"),
+                        ("hlsEncryption", "CBC"),
+                        ("hlsProfile", "enhancedHls"),
+                    ])
+            },
+            |_| false,
+        )
+        .await?;
+    let master_url = response
+        .results
+        .assets
+        .into_iter()
+        .find_map(|asset| asset.url)
+        .ok_or(Error::NoRendition)?;
+    let master_url = Url::parse(&master_url)?;
+    let response = cdn_response(
+        api.client
+            .get(master_url.clone())
+            .send()
+            .await
+            .map_err(Error::network)?,
+    )?;
+    let source = response.text().await.map_err(Error::network)?;
+    let playlist = MasterPlaylist::try_from(source.as_str()).map_err(|_invalid_playlist| {
+        Error::InvalidMedia {
+            field: "HLS master playlist",
+        }
+    })?;
+    let (uri, bandwidth) = playlist
+        .variant_streams
+        .iter()
+        .find_map(|variant| match variant {
+            VariantStream::ExtXStreamInf {
+                uri,
+                audio: Some(group),
+                stream_data,
+                ..
+            } if group == "audio-stereo-128" => Some((uri, stream_data.average_bandwidth())),
+            _ => None,
+        })
+        .ok_or(Error::NoRendition)?;
+    Ok(PlaybackAsset {
+        url: master_url.join(uri)?,
+        bitrate_bps: bandwidth.map(u32::try_from).transpose()?,
+    })
+}
+
 pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
     let response = cdn_response(
         client
@@ -220,15 +313,16 @@ pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
     let map = first.map.as_ref().ok_or(Error::InvalidMedia {
         field: "initialization map",
     })?;
-    let key_uri = first
-        .keys
-        .iter()
+    let key_uri = playlist
+        .segments
+        .values()
+        .flat_map(|segment| &segment.keys)
         .filter_map(|key| key.as_ref())
         .find(|key| {
             matches!(
                 key.format,
                 Some(KeyFormat::Widevine) | None | Some(KeyFormat::Identity)
-            )
+            ) && key.uri() != PREFETCH_WIDEVINE_URI
         })
         .ok_or(Error::InvalidMedia {
             field: "license key URI",
@@ -262,7 +356,7 @@ pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
     })
 }
 
-pub(super) async fn content_keys(api: &Api, track_id: &str, uri: &str) -> Result<Vec<ContentKey>> {
+pub(super) async fn content_key(api: &Api, track_id: &str, uri: &str) -> Result<ContentKey> {
     let started = Instant::now();
     let device = match api.config.device_file() {
         Some(path) => {
@@ -277,10 +371,8 @@ pub(super) async fn content_keys(api: &Api, track_id: &str, uri: &str) -> Result
             .next()
             .ok_or(Error::InvalidMedia { field: "key URI" })?,
     )?;
-    let initialization = match <[u8; 16]>::try_from(data.as_slice()) {
-        Ok(key_id) => key_initialization(&key_id),
-        Err(_) => data,
-    };
+    let initialization = license_initialization(&data)?;
+    let key_id = initialization_key_id(&initialization)?;
     let exchange = LicenseExchange::streaming(device, initialization)?;
     let body = LicenseRequest {
         challenge: STANDARD.encode(exchange.challenge()),
@@ -312,7 +404,67 @@ pub(super) async fn content_keys(api: &Api, track_id: &str, uri: &str) -> Result
     })?;
     let keys = exchange.finish(&STANDARD.decode(encoded)?)?;
     mineral_log::debug!(target: "apple_music", elapsed_ms = started.elapsed().as_millis(), "license exchange completed");
-    Ok(keys)
+    keys.into_iter()
+        .find(|key| key.id.as_slice() == key_id)
+        .ok_or(Error::InvalidMedia {
+            field: "content key matching HLS license metadata",
+        })
+}
+
+/// Web keys carry a raw KID; enhanced playlists carry a v0 Widevine PSSH box.
+/// The license challenge embeds the PSSH's protobuf payload, without the MP4 box header.
+fn license_initialization(data: &[u8]) -> Result<Vec<u8>> {
+    if let Ok(key_id) = <&[u8; 16]>::try_from(data) {
+        return Ok(key_initialization(key_id));
+    }
+    let (header, header_size) = BoxHeader::decode(data)?;
+    if header.box_type != BoxType::Normal(*b"pssh")
+        || header.box_size.get() != u64::try_from(data.len())?
+    {
+        return Err(Error::InvalidMedia {
+            field: "Widevine PSSH box",
+        });
+    }
+    let payload = data.get(header_size..).ok_or(Error::InvalidMedia {
+        field: "Widevine PSSH header",
+    })?;
+    let (version_and_flags, payload) =
+        payload
+            .split_first_chunk::<4>()
+            .ok_or(Error::InvalidMedia {
+                field: "Widevine PSSH version",
+            })?;
+    if version_and_flags != &[0; 4] {
+        return Err(Error::Unsupported {
+            layout: "non-v0 Widevine PSSH",
+        });
+    }
+    let (system_id, payload) = payload
+        .split_first_chunk::<16>()
+        .ok_or(Error::InvalidMedia {
+            field: "Widevine PSSH system ID",
+        })?;
+    if system_id
+        != &[
+            0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d,
+            0x21, 0xed,
+        ]
+    {
+        return Err(Error::InvalidMedia {
+            field: "Widevine PSSH system ID",
+        });
+    }
+    let (length, initialization) = payload
+        .split_first_chunk::<4>()
+        .ok_or(Error::InvalidMedia {
+            field: "Widevine PSSH data length",
+        })?;
+    if usize::try_from(u32::from_be_bytes(*length))? != initialization.len() {
+        return Err(Error::InvalidMedia {
+            field: "Widevine PSSH data length",
+        });
+    }
+    Ok(initialization.to_vec())
 }
 
 pub(super) async fn download(client: &Client, part: &Part) -> Result<Vec<u8>> {

@@ -1,4 +1,4 @@
-//! Single-track ISO CENC AAC sample extraction with RustCrypto AES-CTR.
+//! Single-track CENC/CBCS AAC sample extraction with RustCrypto AES-CTR/AES-CBC.
 //! Content keys are supplied by the caller.
 
 pub(crate) use self::error::Error;

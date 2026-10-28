@@ -48,6 +48,15 @@ pub(crate) enum Error {
     #[error("content key KID differs from tenc KID")]
     KeyIdMismatch,
 
+    #[error("sample description index {index} is outside the {count} initialization descriptions")]
+    SampleDescriptionIndex {
+        /// One-based description index from tfhd or trex.
+        index: u32,
+
+        /// Number of stsd entries in the initialization.
+        count: usize,
+    },
+
     #[error("{box_type:?} sample count {actual} differs from trun count {expected}")]
     SampleCount {
         box_type: [u8; 4],
@@ -83,6 +92,9 @@ pub(crate) enum Error {
 
     #[error("AES-CTR counter exhausted")]
     CounterExhausted,
+
+    #[error("CBCS protected data is not aligned to AES blocks")]
+    CbcBlockAlignment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +103,11 @@ pub(crate) enum Unsupported {
 
     NonAudioTrack,
 
-    MultipleSampleDescriptions,
+    AudioConfigurationChange,
+
+    MultipleContentKeys,
+
+    MissingContentDescription,
 
     NonEncryptedAudioEntry,
 
@@ -126,8 +142,6 @@ pub(crate) enum Unsupported {
     AuxiliaryLayout,
 
     AuxiliaryType,
-
-    SampleDescriptionChange,
 
     NonFragmentedInitialization,
 }

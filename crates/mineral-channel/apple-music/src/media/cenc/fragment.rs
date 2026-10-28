@@ -1,6 +1,9 @@
 use std::ops::Range;
 
 use aes::Aes128;
+use cbc::Decryptor;
+use cbc::cipher::BlockDecryptMut;
+use cbc::cipher::block_padding::NoPadding;
 use ctr::Ctr128BE;
 use ctr::cipher::{KeyIvInit, StreamCipher};
 use shiguredo_mp4::boxes::{MoofBox, TrafBox};
@@ -12,7 +15,7 @@ use super::binary::{
     to_usize,
 };
 use super::error::{Error, Result, Unsupported};
-use super::initialization::AudioInitialization;
+use super::initialization::{AudioInitialization, EncryptionScheme, PREFETCH_KEY};
 
 #[derive(Debug, Clone)]
 struct SampleRange {
@@ -25,8 +28,8 @@ struct SampleRange {
 
 impl AudioInitialization {
     /// Decrypt a complete media segment containing exactly one moof/traf.
-    /// `key_id` is the raw 16-byte CENC KID, in on-wire order, not a GUID byte swap.
-    /// AES-CTR is unauthenticated: a matching KID cannot establish that a key is correct.
+    /// The caller selects `content_key` using the HLS license metadata.
+    /// Neither AES-CTR nor AES-CBC authenticates the supplied key.
     ///
     /// `fragment_file_offset` is the resource byte offset of the supplied slice.
     /// It is used only to resolve an explicit absolute `tfhd.base_data_offset`.
@@ -37,11 +40,7 @@ impl AudioInitialization {
         encrypted_fragment: &[u8],
         fragment_file_offset: u64,
         content_key: &[u8; 16],
-        key_id: &[u8; 16],
     ) -> Result<Vec<u8>> {
-        if key_id != self.key_id() {
-            return Err(Error::KeyIdMismatch);
-        }
         let top = boxes(encrypted_fragment, 0)?;
         if top
             .iter()
@@ -64,13 +63,15 @@ impl AudioInitialization {
         if header.track_id != self.track_id() {
             return Err(invalid(*b"tfhd", "track_id differs from initialization"));
         }
-        if header
+        let description_index = header
             .sample_description_index
-            .unwrap_or(self.fragment_defaults().default_sample_description_index)
-            != 1
-        {
-            return Err(Error::Unsupported(Unsupported::SampleDescriptionChange));
-        }
+            .unwrap_or(self.fragment_defaults().default_sample_description_index);
+        let encryption = self.encryption(description_index)?;
+        let sample_key = if encryption.uses_prefetch_key {
+            &PREFETCH_KEY
+        } else {
+            content_key
+        };
         if header.duration_is_empty || track.trun_boxes.iter().all(|run| run.samples.is_empty()) {
             return Err(Error::Unsupported(Unsupported::EmptyFragment));
         }
@@ -95,7 +96,7 @@ impl AudioInitialization {
         let records = sample_encryption(
             encrypted_fragment,
             &children,
-            self.encryption.iv_size,
+            encryption.initialization_vector,
             &run_counts,
             moof_bytes.start,
         )?;
@@ -109,7 +110,7 @@ impl AudioInitialization {
             let clear = bytes
                 .get_mut(sample.clear_range.clone())
                 .ok_or_else(|| invalid(*b"trun", "sample clear range outside the output"))?;
-            decrypt_sample(clear, record, content_key, sample_index)?;
+            decrypt_sample(clear, record, sample_key, encryption.scheme, sample_index)?;
         }
         Ok(bytes)
     }
@@ -240,37 +241,78 @@ fn decrypt_sample(
     sample: &mut [u8],
     encryption: &SampleEncryption,
     key: &[u8; 16],
+    scheme: EncryptionScheme,
     sample_index: usize,
 ) -> Result<()> {
-    let mut cipher = Ctr128BE::<Aes128>::new(key.into(), (&encryption.iv).into());
+    let regions = protected_regions(sample, encryption, scheme, sample_index)?;
+    match scheme {
+        EncryptionScheme::Cenc => {
+            let mut cipher = Ctr128BE::<Aes128>::new(key.into(), (&encryption.iv).into());
+            for region in regions {
+                // Clear bytes do not consume keystream; CTR continues across protected ranges.
+                cipher
+                    .try_apply_keystream(region)
+                    .map_err(|_counter_exhausted| Error::CounterExhausted)?;
+            }
+        }
+        EncryptionScheme::Cbcs => {
+            // Unpatterned Apple AAC concatenates protected ranges before CBC decryption.
+            // Only complete blocks are encrypted; the final partial block stays clear.
+            let mut protected: Vec<u8> = regions
+                .iter()
+                .flat_map(|region| region.iter().copied())
+                .collect();
+            let aligned_length = protected.len() / 16 * 16;
+            let (aligned, _) = protected.split_at_mut(aligned_length);
+            Decryptor::<Aes128>::new(key.into(), (&encryption.iv).into())
+                .decrypt_padded_mut::<NoPadding>(aligned)
+                .map_err(|_unaligned| Error::CbcBlockAlignment)?;
+            let mut remaining = protected.as_slice();
+            for region in regions {
+                let (clear, rest) = remaining.split_at(region.len());
+                region.copy_from_slice(clear);
+                remaining = rest;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn protected_regions<'sample>(
+    sample: &'sample mut [u8],
+    encryption: &SampleEncryption,
+    scheme: EncryptionScheme,
+    sample_index: usize,
+) -> Result<Vec<&'sample mut [u8]>> {
     if encryption.subsamples.is_empty() {
-        cipher
-            .try_apply_keystream(sample)
-            .map_err(|_counter_exhausted| Error::CounterExhausted)?;
-        return Ok(());
+        return Ok(vec![sample]);
     }
     let sample_length = sample.len();
+    let mut regions = Vec::with_capacity(encryption.subsamples.len());
+    let mut remaining = sample;
     let mut cursor = 0;
     for subsample in &encryption.subsamples {
         let start = add(cursor, subsample.clear_bytes)?;
         let end = add(start, subsample.encrypted_bytes)?;
-        let protected = sample.get_mut(start..end).ok_or(Error::SubsampleCoverage {
-            sample: sample_index,
-            covered: end,
-            size: sample_length,
-        })?;
-        // Clear bytes do not consume keystream. Keep CTR state across protected ranges.
-        cipher
-            .try_apply_keystream(protected)
-            .map_err(|_counter_exhausted| Error::CounterExhausted)?;
+        if end > sample_length {
+            return Err(Error::SubsampleCoverage {
+                sample: sample_index,
+                covered: end,
+                size: sample_length,
+            });
+        }
+        let (_, after_clear) = remaining.split_at_mut(subsample.clear_bytes);
+        let (protected, rest) = after_clear.split_at_mut(subsample.encrypted_bytes);
+        regions.push(protected);
+        remaining = rest;
         cursor = end;
     }
-    if cursor != sample_length {
+    if scheme == EncryptionScheme::Cenc && cursor != sample_length {
         return Err(Error::SubsampleCoverage {
             sample: sample_index,
             covered: cursor,
             size: sample_length,
         });
     }
-    Ok(())
+    Ok(regions)
 }
