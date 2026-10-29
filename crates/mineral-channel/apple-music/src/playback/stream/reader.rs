@@ -1,5 +1,6 @@
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+//! Provides lazy Read/Seek access to a complete MP4 assembled in memory.
+
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use mineral_playback::ReadControl;
@@ -10,12 +11,12 @@ use super::export;
 use super::segments::SegmentStore;
 
 /// Complete encoded-file access, deliberately separate from progressive audio packets.
-/// The first read or seek waits for the shared export; the reader keeps the playback
+/// The first read or seek waits for shared in-memory assembly; the reader keeps the playback
 /// root alive even while no packet consumer is reading.
 pub(crate) struct CompleteFileReader {
     store: Arc<SegmentStore>,
 
-    file: Option<File>,
+    cursor: Option<Cursor<Arc<[u8]>>>,
 
     read_control: Option<ReadControl>,
 
@@ -30,13 +31,13 @@ impl CompleteFileReader {
     ) -> Self {
         Self {
             store,
-            file: None,
+            cursor: None,
             read_control,
             _lifetime: lifetime,
         }
     }
 
-    fn file(&mut self) -> io::Result<&mut File> {
+    fn cursor(&mut self) -> io::Result<&mut Cursor<Arc<[u8]>>> {
         let request = self
             .read_control
             .as_ref()
@@ -51,11 +52,11 @@ impl CompleteFileReader {
         if request.is_cancelled() {
             return Err(io::Error::new(io::ErrorKind::Interrupted, Error::Cancelled));
         }
-        if self.file.is_none() {
-            let path = self
+        if self.cursor.is_none() {
+            let bytes = self
                 .store
                 .runtime
-                .block_on(export::complete_file(&self.store, request.clone()))
+                .block_on(export::complete_bytes(&self.store, request.clone()))
                 .map_err(|error| {
                     let kind = if self.store.cancellation.is_cancelled() {
                         io::ErrorKind::ConnectionAborted
@@ -66,9 +67,9 @@ impl CompleteFileReader {
                     };
                     io::Error::new(kind, error)
                 })?;
-            self.file = Some(File::open(path)?);
+            self.cursor = Some(Cursor::new(bytes));
         }
-        self.file.as_mut().ok_or_else(|| {
+        self.cursor.as_mut().ok_or_else(|| {
             io::Error::other(Error::InvalidMedia {
                 field: "complete export file",
             })
@@ -81,12 +82,12 @@ impl Read for CompleteFileReader {
         if output.is_empty() {
             return Ok(0);
         }
-        self.file()?.read(output)
+        self.cursor()?.read(output)
     }
 }
 
 impl Seek for CompleteFileReader {
     fn seek(&mut self, target: SeekFrom) -> io::Result<u64> {
-        self.file()?.seek(target)
+        self.cursor()?.seek(target)
     }
 }

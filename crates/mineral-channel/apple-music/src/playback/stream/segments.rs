@@ -1,8 +1,8 @@
 //! Deduplicates header and clear-segment preparation under one playback cancellation root.
 
+use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::ops::Range;
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -11,7 +11,6 @@ use futures_util::{FutureExt, StreamExt, stream};
 use mineral_playback::{BufferedPrefix, TransferState};
 use parking_lot::Mutex;
 use reqwest::Client;
-use tempfile::{NamedTempFile, TempDir};
 use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -37,29 +36,29 @@ struct Segment {
     prepared: OnceLock<SegmentPreparation>,
 }
 
-/// A fully decrypted, remuxed and atomically published segment file.
+/// A fully decrypted segment MP4 shared by packet readers and complete-file export.
 pub(super) struct PreparedSegment {
-    pub path: PathBuf,
+    pub bytes: Arc<[u8]>,
 
     /// Exact decode interval in initialization timescale ticks.
     pub timeline: Range<u64>,
 
     pub fragment: Arc<AudioFragment>,
 
-    /// Start of clear AAC bytes in the regular MP4 segment file.
+    /// Start of clear AAC bytes in the in-memory MP4, before its sample-table metadata.
     pub payload_offset: u64,
 }
 
 struct Progress {
     timeline: Timeline,
 
-    /// Only complete, decrypted and atomically published segments are playable.
+    /// Only completely decrypted and remuxed segments are playable.
     prepared: Vec<bool>,
 }
 
-/// Owns the temporary files, content key and all shared preparation for one open track.
-/// Workers may retain this store, but only readers, packets and capture retain DropGuards.
-/// The last consumer cancels workers; files remain until all store references are released.
+/// Owns the in-memory segments, content key and preparation tasks for one open track.
+/// Only packet and complete-file readers retain DropGuards; capture does not keep downloads alive.
+/// Dropping the last reader cancels unfinished work, which releases its shared buffers on exit.
 pub(crate) struct SegmentStore {
     pub cancellation: CancellationToken,
 
@@ -71,10 +70,8 @@ pub(crate) struct SegmentStore {
 
     progress: Mutex<Progress>,
 
-    /// All complete-file readers and capture share one successful export or stored error.
-    pub(super) export: OnceCell<std::result::Result<PathBuf, Arc<Error>>>,
-
-    pub(super) directory: TempDir,
+    /// Materialized only for encoded-file reads; capture writes directly from the segments.
+    pub(super) encoded_file: OnceCell<std::result::Result<Arc<[u8]>, Arc<Error>>>,
 
     pub(super) initialization: AudioInitialization,
 
@@ -90,7 +87,7 @@ pub(crate) struct SegmentStore {
 }
 
 impl SegmentStore {
-    pub(crate) async fn new(
+    pub(crate) fn new(
         segments: Vec<MediaSegment>,
         initialization: AudioInitialization,
         key: Zeroizing<[u8; 16]>,
@@ -99,7 +96,6 @@ impl SegmentStore {
         header_prefetch: NonZeroUsize,
         concurrency: NonZeroUsize,
     ) -> Result<Arc<Self>> {
-        let directory = tokio::task::spawn_blocking(tempfile::tempdir).await??;
         let timeline = Timeline::new(
             segments.iter().map(|segment| segment.duration),
             initialization.timescale().get(),
@@ -123,8 +119,7 @@ impl SegmentStore {
             transfer: TransferState::new(None),
             cancellation,
             runtime: Handle::current(),
-            export: OnceCell::new(),
-            directory,
+            encoded_file: OnceCell::new(),
             initialization,
             key,
             client,
@@ -138,6 +133,18 @@ impl SegmentStore {
 
     pub(super) fn segment_count(&self) -> usize {
         self.segments.len()
+    }
+
+    /// Wait for every segment before a complete-file consumer starts writing.
+    pub(super) async fn complete_segments(
+        self: &Arc<Self>,
+        request: CancellationToken,
+    ) -> Result<Vec<Arc<PreparedSegment>>> {
+        let mut prepared = Vec::with_capacity(self.segment_count());
+        for index in 0..self.segment_count() {
+            prepared.push(self.segment(index, request.clone()).await?);
+        }
+        Ok(prepared)
     }
 
     pub(super) fn exact_duration_ticks(&self) -> Option<u64> {
@@ -326,13 +333,13 @@ impl SegmentStore {
         let resource_offset = segment.source.resource_offset()?;
         let store = self.clone();
         tokio::task::spawn_blocking(move || {
-            store.write_segment(index, &bytes, resource_offset, fragment, timeline)
+            store.prepare_segment_buffer(index, &bytes, resource_offset, fragment, timeline)
         })
         .await?
     }
 
-    /// Decryption, remuxing and file publication stay off the async I/O workers.
-    fn write_segment(
+    /// Decrypts and remuxes in memory, off the async I/O workers.
+    fn prepare_segment_buffer(
         &self,
         index: usize,
         bytes: &[u8],
@@ -351,15 +358,15 @@ impl SegmentStore {
                 field: "decrypted sample length",
             });
         }
-        let mut temporary = NamedTempFile::new_in(self.directory.path())?;
-        let mut muxer = Mp4Writer::new(temporary.as_file_mut(), &self.initialization)?;
+        let mut output = Cursor::new(Vec::new());
+        let mut muxer = Mp4Writer::new(&mut output, &self.initialization)?;
         let payload_offset = muxer.position();
-        muxer.append(temporary.as_file_mut(), &fragment, &mut clear.as_slice())?;
-        muxer.finish(temporary.as_file_mut())?;
-        let path = self.directory.path().join(format!("segment-{index}.mp4"));
-        temporary
-            .persist(&path)
-            .map_err(|error| Error::Io(error.error))?;
+        muxer.append(&mut output, &fragment, &mut clear.as_slice())?;
+        muxer.finish(&mut output)?;
+        let bytes = Arc::from(output.into_inner());
+        if self.cancellation.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         self.transfer.add_downloaded(fragment.byte_len);
         let mut progress = self.progress.lock();
         *progress
@@ -370,7 +377,7 @@ impl SegmentStore {
             })? = true;
         self.publish_progress(&progress);
         Ok(PreparedSegment {
-            path,
+            bytes,
             timeline,
             fragment,
             payload_offset,

@@ -1,5 +1,5 @@
-//! One segment store serves progressive AAC packets and complete-file consumers.
-//! Consumers retain cancellation drop guards; acquisition workers retain only the store.
+//! In-memory segments serve progressive AAC packets and complete-file consumers.
+//! Readers own cancellation guards; capture and acquisition stop when those readers are dropped.
 
 pub(super) use capture::capture;
 pub(super) use packets::AudioPackets;
