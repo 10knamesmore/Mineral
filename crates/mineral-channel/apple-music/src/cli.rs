@@ -8,8 +8,7 @@ use clap::{Args, Subcommand};
 use indicatif::{ProgressBar, ProgressFinish};
 use inquire::{InquireError, Password, PasswordDisplayMode};
 
-use crate::api::Api;
-use crate::credential::{StoredAppleMusicAuth, from_token, save_login};
+use crate::account::{AccountClient, StoredAppleMusicAuth, from_token, save_login};
 use crate::{AppleMusicConfig, Error, Result};
 
 /// The website in the input help uses an OSC 8 hyperlink.
@@ -124,8 +123,8 @@ async fn validate_with_spinner(
 /// Returns credentials only after both local format checks and Apple account validation succeed.
 async fn validate_token(config: &AppleMusicConfig, token: &str) -> Result<StoredAppleMusicAuth> {
     let auth = from_token(token)?;
-    Api::new(config, auth.clone())?
-        .session()
+    AccountClient::new(config, auth.clone())?
+        .account()
         .await
         .map_err(|error| match error {
             Error::AuthRequired => Error::LoginRejected,
