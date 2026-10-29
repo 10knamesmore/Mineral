@@ -1,10 +1,9 @@
-//! Reads personal-library playlist headers and ordered membership.
+//! Lists personal-library playlists and reads library or catalog playlist membership.
 //! Each detail request rebuilds its cumulative prefix; no partial playlist cache is retained.
 
 use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
 use mineral_model::{CollectionIndex, Playlist, PlaylistEntry, PlaylistId};
 
-use super::wire::ResourcePage;
 use super::{MetadataClient, mapping};
 use crate::{Error, Result};
 
@@ -17,14 +16,7 @@ impl MetadataClient {
         loop {
             let page = self.page(&path).await?;
             for resource in page.data {
-                let tracks = resource
-                    .relationships
-                    .tracks
-                    .as_ref()
-                    .ok_or(Error::InvalidData {
-                        field: "playlist tracks relationship",
-                    })?;
-                playlists.push(mapping::playlist(&resource, track_count(tracks)?)?);
+                playlists.push(mapping::playlist(&resource)?);
             }
             let Some(next) = page.next else {
                 break;
@@ -42,10 +34,8 @@ impl MetadataClient {
         id: &PlaylistId,
         load: PlaylistLoad,
     ) -> Result<PlaylistDetail> {
-        if !id.as_str().starts_with("p.") {
-            return Err(Error::LibraryPlaylistRequired);
-        }
         let mut resource = self.resource("playlists", id.as_str()).await?;
+        let mut playlist = mapping::playlist(&resource)?;
         let mut page = resource
             .relationships
             .tracks
@@ -53,7 +43,6 @@ impl MetadataClient {
             .ok_or(Error::InvalidData {
                 field: "playlist tracks relationship",
             })?;
-        let mut playlist = mapping::playlist(&resource, track_count(&page)?)?;
         let mut offset = 0_u64;
         loop {
             for (position, resource) in page.data.iter().enumerate() {
@@ -100,15 +89,6 @@ impl MetadataClient {
             page = self.page(&path).await?;
         }
     }
-}
-
-fn track_count(page: &ResourcePage) -> Result<u64> {
-    page.meta
-        .as_ref()
-        .and_then(|meta| meta.total)
-        .ok_or(Error::InvalidData {
-            field: "playlist track total",
-        })
 }
 
 /// Apple's offset identifies the next page; mapped song counts cannot supply it.
