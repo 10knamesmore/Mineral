@@ -21,7 +21,7 @@ use super::super::cenc::AudioInitialization;
 use super::super::error::{Error, Result};
 use super::super::hls::MediaSegment;
 use super::super::mp4::{self, AudioFragment, Mp4Writer};
-use super::timeline::Timeline;
+use super::timeline::{DecodeOrigin, Timeline};
 
 /// One root-owned worker shared by background acquisition, seeks and complete-file export.
 /// Dropping a waiting request does not drop the worker or release its preparation slot.
@@ -40,7 +40,7 @@ struct Segment {
 pub(super) struct PreparedSegment {
     pub bytes: Arc<[u8]>,
 
-    /// Exact decode interval in initialization timescale ticks.
+    /// Exact interval from playback tick zero, using the initialization timescale.
     pub timeline: Range<u64>,
 
     pub fragment: Arc<AudioFragment>,
@@ -276,11 +276,14 @@ impl SegmentStore {
         }
     }
 
-    /// Missing tfdt requires only preceding headers up to a known exact origin.
+    /// Anchor explicit tfdt values to the first fragment, even when headers arrive out of order.
+    /// Missing tfdt inherits the preceding playback interval, already relative to that origin.
     async fn timeline(&self, index: usize, fragment: &AudioFragment) -> Result<Range<u64>> {
+        let first = self.header(0).await?;
+        let origin = DecodeOrigin::new(first.decode_start);
         let mut unresolved = Vec::new();
         let mut current = index;
-        let mut start = fragment.decode_start;
+        let mut start = origin.playback_start(fragment.decode_start)?;
         while start.is_none() {
             if current == 0 {
                 start = Some(0);
@@ -293,7 +296,7 @@ impl SegmentStore {
                 break;
             }
             let preceding = self.header(current).await?;
-            start = preceding.decode_start;
+            start = origin.playback_start(preceding.decode_start)?;
             unresolved.push((current, preceding));
         }
         let mut start = start.ok_or(Error::InvalidMedia {
