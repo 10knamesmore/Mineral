@@ -77,8 +77,8 @@ pub(super) async fn open(
                 field: "AES-128 content key",
             })?;
     let cancellation = options.cancellation().child_token();
-    // Only consumers retain this guard. Background tasks cannot keep a dropped
-    // playback/export session alive; open failures cancel their work as well.
+    // Only packet and encoded-file readers retain this guard. Capture and background
+    // acquisition stop with the playback/download instance instead of keeping it alive.
     let lifetime = Arc::new(cancellation.clone().drop_guard());
     let store = SegmentStore::new(
         manifest.segments,
@@ -88,8 +88,7 @@ pub(super) async fn open(
         cancellation.clone(),
         settings.fragment_header_prefetch_bytes,
         settings.media_concurrency,
-    )
-    .await?;
+    )?;
     store.startup(settings.startup_buffer).await?;
     store.acquire();
     mineral_log::info!(target: "apple_music", song_id = %info.song_id.qualified(), elapsed_ms = started.elapsed().as_millis(), "contiguous startup audio ready");
@@ -111,7 +110,7 @@ pub(super) async fn open(
     .with_read_control(control)
     .with_audio_packets(Box::new(packets));
     Ok(match options.capture_target() {
-        Some(target) => media.with_capture(stream::capture(store, target, lifetime)),
+        Some(target) => media.with_capture(stream::capture(store, target)),
         None => media,
     })
 }

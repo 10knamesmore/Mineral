@@ -1,5 +1,6 @@
-use std::fs::{self, File};
-use std::io;
+//! Reads progressive AAC packets from shared in-memory segments.
+
+use std::io::{self, Cursor};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use super::segments::{PreparedSegment, SegmentStore};
 
 /// 单个压缩 AAC 样本；时间戳属于整首歌的时间轴，而非分片局部时间轴。
 struct AudioSample {
-    /// 样本在已准备分片文件中的字节范围。
+    /// 样本在已准备分片内存数据中的字节范围。
     bytes: Range<usize>,
 
     /// Decode Timestamp：解码时间戳，已包含分片在整首歌中的起始偏移。
@@ -37,7 +38,7 @@ struct AudioSample {
 struct SegmentPackets {
     index: usize,
 
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 
     samples: Vec<AudioSample>,
 
@@ -46,7 +47,7 @@ struct SegmentPackets {
 
 impl SegmentPackets {
     fn open(index: usize, prepared: &PreparedSegment) -> Result<Self> {
-        let bytes = fs::read(&prepared.path)?;
+        let bytes = prepared.bytes.clone();
         let mut demuxer = Mp4FileDemuxer::new();
         demuxer.handle_input(Input {
             position: 0,
@@ -100,7 +101,7 @@ impl SegmentPackets {
     }
 }
 
-/// Progressive AAC packets from published segment files, with song-wide timestamps.
+/// Progressive AAC packets from shared segment buffers, with song-wide timestamps.
 /// This consumer keeps the cancellation root alive and replaces only its local segment on seek.
 pub(crate) struct AudioPackets {
     store: Arc<SegmentStore>,
@@ -125,8 +126,10 @@ impl AudioPackets {
             .runtime
             .block_on(store.segment(0, control.request_cancellation()))?;
         let current = SegmentPackets::open(0, &prepared)?;
-        let stream =
-            MediaSourceStream::new(Box::new(File::open(&prepared.path)?), Default::default());
+        let stream = MediaSourceStream::new(
+            Box::new(Cursor::new(prepared.bytes.clone())),
+            Default::default(),
+        );
         let format = get_probe().probe(
             &Hint::new(),
             stream,

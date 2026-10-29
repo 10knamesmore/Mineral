@@ -1,49 +1,66 @@
-//! Assembles one complete regular MP4 from the same published segments used by playback.
-//! Complete-file readers share the export result held by the segment store.
+//! Assembles complete MP4 output from shared memory segments.
+//! Capture assembles from existing segment buffers; encoded-file readers materialize bytes on demand.
 
-use std::fs::File;
-use std::io::{Seek, SeekFrom};
-use std::path::PathBuf;
+use std::io::{Cursor, Seek, Write};
 use std::sync::Arc;
 
-use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
 
 use super::super::error::{Error, Result};
 use super::super::mp4::Mp4Writer;
-use super::segments::SegmentStore;
+use super::segments::{PreparedSegment, SegmentStore};
 
 /// The cell belongs to the store, so every complete-file consumer shares its result.
 /// Initialization runs in the waiting future: cancelling it before completion leaves
 /// the cell uninitialized for the next consumer. Root cancellation also stops segment workers.
-pub(super) async fn complete_file(
+pub(super) async fn complete_bytes(
     store: &Arc<SegmentStore>,
     request: CancellationToken,
-) -> Result<PathBuf> {
+) -> Result<Arc<[u8]>> {
     tokio::select! {
         biased;
         () = request.cancelled() => Err(Error::Cancelled),
         () = store.cancellation.cancelled() => Err(Error::Cancelled),
-        result = store.export.get_or_init(|| async {
-            build_export(store).await.map_err(Arc::new)
+        result = store.encoded_file.get_or_init(|| async {
+            build_bytes(store).await.map_err(Arc::new)
         }) => result.clone().map_err(Error::Preparation),
     }
 }
 
-async fn build_export(store: &Arc<SegmentStore>) -> Result<PathBuf> {
-    let mut temporary = NamedTempFile::new_in(store.directory.path())?;
-    let mut muxer = Mp4Writer::new(temporary.as_file_mut(), &store.initialization)?;
-    for index in 0..store.segment_count() {
-        let prepared = store.segment(index, store.cancellation.clone()).await?;
-        let mut input = File::open(&prepared.path)?;
-        input.seek(SeekFrom::Start(prepared.payload_offset))?;
-        muxer.append(temporary.as_file_mut(), &prepared.fragment, &mut input)?;
+async fn build_bytes(store: &Arc<SegmentStore>) -> Result<Arc<[u8]>> {
+    let prepared = store.complete_segments(store.cancellation.clone()).await?;
+    let store = store.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut output = Cursor::new(Vec::new());
+        write_mp4(&store, &prepared, &mut output)?;
+        Ok(Arc::from(output.into_inner()))
+    })
+    .await?
+}
+
+/// Writes already prepared segments without building a second whole-track audio buffer.
+/// Call on a blocking thread; cancellation is checked between segment writes.
+pub(super) fn write_mp4(
+    store: &SegmentStore,
+    prepared: &[Arc<PreparedSegment>],
+    output: &mut (impl Write + Seek),
+) -> Result<u64> {
+    if store.cancellation.is_cancelled() {
+        return Err(Error::Cancelled);
     }
-    let byte_len = muxer.finish(temporary.as_file_mut())?;
-    let path = store.directory.path().join("complete.mp4");
-    temporary
-        .persist(&path)
-        .map_err(|error| Error::Io(error.error))?;
+    let mut muxer = Mp4Writer::new(output, &store.initialization)?;
+    for segment in prepared {
+        if store.cancellation.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let mut input = Cursor::new(&*segment.bytes);
+        input.set_position(segment.payload_offset);
+        muxer.append(output, &segment.fragment, &mut input)?;
+    }
+    let byte_len = muxer.finish(output)?;
+    if store.cancellation.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
     store.transfer.set_downloaded(byte_len);
-    Ok(path)
+    Ok(byte_len)
 }

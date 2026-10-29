@@ -1,5 +1,5 @@
 //! Resolves song identities, acquires Apple playback assets and exposes clear AAC
-//! packets alongside a shared, lazily assembled complete MP4 file.
+//! packets from memory, with atomic capture and lazy encoded-file reads.
 
 pub(crate) use resolve::prepare;
 
