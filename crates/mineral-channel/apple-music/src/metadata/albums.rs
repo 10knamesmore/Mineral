@@ -8,9 +8,11 @@ use mineral_channel_core::store::{AlbumCacheEntry, NamespaceStore};
 use mineral_model::{Album, AlbumId, AlbumRef, AlbumTrack, CollectionIndex};
 use rustc_hash::FxHasher;
 
+use super::data::{AlbumResource, ResourceKind, ResourceScope, TrackResource};
+use super::request::{PageKind, Request, SongRelationships, resource_id};
 use super::{MetadataClient, mapping};
-use crate::Result;
 use crate::config::AlbumCacheConfig;
+use crate::{Error, Result};
 
 /// Album-detail cache policy for one channel; entries live in its optional namespace store.
 /// A cache hit returns the saved snapshot without extending its expiration.
@@ -75,14 +77,41 @@ impl MetadataClient {
 }
 
 async fn fetch_album(metadata: &MetadataClient, id: &AlbumId) -> Result<Album> {
-    let mut resource = metadata.resource("albums", id.as_str()).await?;
+    let address = resource_id(ResourceKind::Album, id.as_str())?;
+    let mut resource: AlbumResource = metadata.resource(&address).await?;
     let mut album = mapping::album(&resource)?;
-    let tracks = metadata.album_tracks(&mut resource).await?;
+    let page = resource.tracks.take().ok_or(Error::InvalidData {
+        field: "album tracks relationship",
+    })?;
+    let mut tracks = page.data;
+    let mut next = page.next;
+    while let Some(continuation) = next {
+        let page = metadata
+            .page(Request::Next {
+                continuation: &continuation,
+                kind: PageKind::AlbumTracks(address.scope()),
+                limit: None,
+            })
+            .await?;
+        tracks.extend(page.data);
+        next = page.next;
+    }
+    if address.scope() == ResourceScope::Catalog {
+        metadata
+            .hydrate_songs(
+                tracks.iter_mut().filter_map(|track| match track {
+                    TrackResource::Song(song) => Some(song),
+                    TrackResource::Unavailable(_) => None,
+                }),
+                SongRelationships::Artists,
+            )
+            .await?;
+    }
     for (resource, index) in tracks.iter().zip(0_u64..) {
-        if !matches!(resource.kind.as_str(), "songs" | "library-songs") {
+        let TrackResource::Song(resource) = resource else {
             continue;
-        }
-        let mut song = mapping::song(resource)?;
+        };
+        let mut song = mapping::song(resource);
         // Album navigation retains this collection, including a saved track subset.
         song.album = Some(AlbumRef {
             id: album.id.clone(),

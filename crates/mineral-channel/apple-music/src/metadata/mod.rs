@@ -4,10 +4,12 @@
 mod albums;
 mod artists;
 mod client;
+mod data;
 mod library;
 mod lyrics;
 mod mapping;
 mod playlists;
+mod request;
 mod resources;
 mod search;
 mod songs;

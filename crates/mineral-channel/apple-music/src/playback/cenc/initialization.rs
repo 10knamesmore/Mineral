@@ -42,8 +42,24 @@ pub(super) enum EncryptionScheme {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(super) enum PerSampleIvSize {
+    EightBytes,
+
+    SixteenBytes,
+}
+
+impl PerSampleIvSize {
+    pub fn bytes(self) -> usize {
+        match self {
+            Self::EightBytes => 8,
+            Self::SixteenBytes => 16,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(super) enum InitializationVector {
-    PerSample(u8),
+    PerSample(PerSampleIvSize),
 
     Constant([u8; 16]),
 }
@@ -51,10 +67,20 @@ pub(super) enum InitializationVector {
 impl InitializationVector {
     pub fn per_sample_size(self) -> usize {
         match self {
-            Self::PerSample(size) => usize::from(size),
+            Self::PerSample(size) => size.bytes(),
             Self::Constant(_) => 0,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum KeySource {
+    /// Enhanced CBCS reserves the first description for the public prefetch key.
+    Prefetch,
+
+    Licensed {
+        key_id: [u8; 16],
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -63,10 +89,7 @@ pub(super) struct SampleDescriptionEncryption {
 
     pub initialization_vector: InitializationVector,
 
-    pub key_id: [u8; 16],
-
-    /// Enhanced CBCS reserves the first description for the public prefetch key.
-    pub uses_prefetch_key: bool,
+    pub key_source: KeySource,
 }
 
 impl AudioInitialization {
@@ -114,11 +137,11 @@ impl AudioInitialization {
             } else {
                 clear_entry = Some(clear);
             }
-            if !protection.uses_prefetch_key {
-                if content_key_id.is_some_and(|key_id| key_id != protection.key_id) {
+            if let KeySource::Licensed { key_id } = protection.key_source {
+                if content_key_id.is_some_and(|previous| previous != key_id) {
                     return Err(Error::Unsupported(Unsupported::MultipleContentKeys));
                 }
-                content_key_id = Some(protection.key_id);
+                content_key_id = Some(key_id);
             }
             encryption_descriptions.push(protection);
         }
@@ -271,8 +294,11 @@ fn parse_audio_entry(
     let encryption = SampleDescriptionEncryption {
         scheme: encryption_scheme,
         initialization_vector,
-        key_id,
-        uses_prefetch_key: encryption_scheme == EncryptionScheme::Cbcs && first_description,
+        key_source: if encryption_scheme == EncryptionScheme::Cbcs && first_description {
+            KeySource::Prefetch
+        } else {
+            KeySource::Licensed { key_id }
+        },
     };
     let esds = required(&children, *b"esds")?;
     Reader::new(esds.payload, *b"esds").full_header(0, 0)?;
@@ -329,7 +355,8 @@ fn parse_tenc(
     let mut key_id = [0; 16];
     key_id.copy_from_slice(reader.take(16)?);
     let initialization_vector = match iv_size {
-        8 | 16 => InitializationVector::PerSample(iv_size),
+        8 => InitializationVector::PerSample(PerSampleIvSize::EightBytes),
+        16 => InitializationVector::PerSample(PerSampleIvSize::SixteenBytes),
         0 if scheme == EncryptionScheme::Cbcs => {
             let constant_size = reader.u8()?;
             if constant_size != 16 {

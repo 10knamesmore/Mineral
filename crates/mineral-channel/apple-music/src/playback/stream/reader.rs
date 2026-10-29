@@ -18,7 +18,7 @@ pub(crate) struct CompleteFileReader {
 
     cursor: Option<Cursor<Arc<[u8]>>>,
 
-    read_control: Option<ReadControl>,
+    read_control: ReadControl,
 
     _lifetime: Arc<DropGuard>,
 }
@@ -26,7 +26,7 @@ pub(crate) struct CompleteFileReader {
 impl CompleteFileReader {
     pub(crate) fn new(
         store: Arc<SegmentStore>,
-        read_control: Option<ReadControl>,
+        read_control: ReadControl,
         lifetime: Arc<DropGuard>,
     ) -> Self {
         Self {
@@ -38,11 +38,7 @@ impl CompleteFileReader {
     }
 
     fn cursor(&mut self) -> io::Result<&mut Cursor<Arc<[u8]>>> {
-        let request = self
-            .read_control
-            .as_ref()
-            .map(ReadControl::request_cancellation)
-            .unwrap_or_else(|| self.store.cancellation.clone());
+        let request = self.read_control.request_cancellation();
         if self.store.cancellation.is_cancelled() {
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
@@ -52,7 +48,9 @@ impl CompleteFileReader {
         if request.is_cancelled() {
             return Err(io::Error::new(io::ErrorKind::Interrupted, Error::Cancelled));
         }
-        if self.cursor.is_none() {
+        if let Some(ref mut cursor) = self.cursor {
+            Ok(cursor)
+        } else {
             let bytes = self
                 .store
                 .runtime
@@ -67,13 +65,8 @@ impl CompleteFileReader {
                     };
                     io::Error::new(kind, error)
                 })?;
-            self.cursor = Some(Cursor::new(bytes));
+            Ok(self.cursor.insert(Cursor::new(bytes)))
         }
-        self.cursor.as_mut().ok_or_else(|| {
-            io::Error::other(Error::InvalidMedia {
-                field: "complete export file",
-            })
-        })
     }
 }
 

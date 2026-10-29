@@ -10,11 +10,31 @@ use super::hls;
 use crate::account::{AccountClient, SESSION_ENDED_FAILURE};
 use crate::metadata::SongIdentity;
 
-pub(super) struct PlaybackAsset {
-    pub url: Url,
+pub(super) enum PlaybackAsset {
+    CatalogHls {
+        track_id: String,
 
+        url: Url,
+
+        bitrate_bps: Option<u32>,
+    },
+
+    LibraryUpload {
+        url: Url,
+
+        bitrate_bps: Option<u32>,
+    },
+}
+
+impl PlaybackAsset {
     /// Source-declared bits/s: web metadata.bitRate or HLS AVERAGE-BANDWIDTH.
-    pub bitrate_bps: Option<u32>,
+    pub fn bitrate_bps(&self) -> Option<u32> {
+        match self {
+            Self::CatalogHls { bitrate_bps, .. } | Self::LibraryUpload { bitrate_bps, .. } => {
+                *bitrate_bps
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -131,9 +151,14 @@ pub(super) async fn select(
         .and_then(|metadata| metadata.bitrate_kbps)
         .map(|kbps| kbps.checked_mul(1000).ok_or(Error::Overflow))
         .transpose()?;
-    Ok(PlaybackAsset {
-        url: Url::parse(&asset.url)?,
-        bitrate_bps,
+    let url = Url::parse(&asset.url)?;
+    Ok(match identity {
+        SongIdentity::Catalog(track_id) => PlaybackAsset::CatalogHls {
+            track_id: track_id.clone(),
+            url,
+            bitrate_bps,
+        },
+        SongIdentity::Library(_) => PlaybackAsset::LibraryUpload { url, bitrate_bps },
     })
 }
 
@@ -163,5 +188,9 @@ async fn standard_asset(account: &AccountClient, track_id: &str) -> Result<Playb
         .ok_or(Error::NoRendition)?;
     let master_url = Url::parse(&master_url)?;
     let (url, bitrate_bps) = hls::standard_rendition(account.http(), &master_url).await?;
-    Ok(PlaybackAsset { url, bitrate_bps })
+    Ok(PlaybackAsset::CatalogHls {
+        track_id: track_id.to_owned(),
+        url,
+        bitrate_bps,
+    })
 }

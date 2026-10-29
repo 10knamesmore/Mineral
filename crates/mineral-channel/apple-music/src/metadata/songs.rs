@@ -2,8 +2,10 @@
 
 use mineral_model::{Song, SongId};
 
+use super::data::{ResourceId, ResourceKind, SongResource};
+use super::request::resource_id;
 use super::{MetadataClient, mapping};
-use crate::{Error, Result};
+use crate::Result;
 
 /// The Apple identity accepted by playback asset requests.
 pub(crate) enum SongIdentity {
@@ -19,8 +21,9 @@ impl MetadataClient {
     pub(crate) async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>> {
         let mut songs = Vec::with_capacity(ids.len());
         for id in ids {
-            let resource = self.resource("songs", id.as_str()).await?;
-            let mut song = mapping::song(&resource)?;
+            let address = resource_id(ResourceKind::Song, id.as_str())?;
+            let resource = self.resource(&address).await?;
+            let mut song = mapping::song(&resource);
             song.id = id.clone();
             songs.push(song);
         }
@@ -33,14 +36,11 @@ impl MetadataClient {
         if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
             return Ok(SongIdentity::Catalog(value.to_owned()));
         }
-        let resource = self.resource("songs", value).await?;
-        let song = mapping::song_resource(&resource);
-        match song.kind.as_str() {
-            "songs" => Ok(SongIdentity::Catalog(song.id.clone())),
-            "library-songs" => Ok(SongIdentity::Library(song.id.clone())),
-            _ => Err(Error::InvalidData {
-                field: "playback song identity",
-            }),
-        }
+        let address = resource_id(ResourceKind::Song, value)?;
+        let resource: SongResource = self.resource(&address).await?;
+        Ok(match &resource.recording().id {
+            ResourceId::Catalog(id) => SongIdentity::Catalog(id.clone()),
+            ResourceId::Library(id) => SongIdentity::Library(id.clone()),
+        })
     }
 }

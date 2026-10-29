@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use super::binary::{BoxSlice, Reader, add, invalid, optional, to_usize};
 use super::error::{Error, Result, Unsupported};
-use super::initialization::InitializationVector;
+use super::initialization::{EncryptionScheme, InitializationVector};
 
 pub(super) struct SampleEncryption {
     pub iv: [u8; 16],
@@ -18,13 +18,6 @@ pub(super) struct Subsample {
     pub clear_bytes: usize,
 
     pub encrypted_bytes: usize,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct AuxiliaryType {
-    kind: [u8; 4],
-
-    parameter: u32,
 }
 
 pub(super) fn sample_encryption(
@@ -120,7 +113,7 @@ fn parse_record(
         InitializationVector::PerSample(size) => {
             // Eight-byte IVs occupy the high half of the counter block.
             let mut iv = [0; 16];
-            for (target, byte) in iv.iter_mut().zip(reader.take(usize::from(size))?) {
+            for (target, byte) in iv.iter_mut().zip(reader.take(size.bytes())?) {
                 *target = *byte;
             }
             iv
@@ -143,19 +136,23 @@ fn parse_record(
     })
 }
 
-fn auxiliary_type(reader: &mut Reader<'_>, flags: u32) -> Result<Option<AuxiliaryType>> {
+fn auxiliary_type(reader: &mut Reader<'_>, flags: u32) -> Result<Option<EncryptionScheme>> {
     if flags & 1 == 0 {
         return Ok(None);
     }
     let kind = reader.fourcc()?;
     let parameter = reader.u32()?;
-    if ![*b"cenc", *b"cbcs"].contains(&kind) || parameter != 0 {
+    if parameter != 0 {
         return Err(Error::Unsupported(Unsupported::AuxiliaryType));
     }
-    Ok(Some(AuxiliaryType { kind, parameter }))
+    match &kind {
+        b"cenc" => Ok(Some(EncryptionScheme::Cenc)),
+        b"cbcs" => Ok(Some(EncryptionScheme::Cbcs)),
+        _ => Err(Error::Unsupported(Unsupported::AuxiliaryType)),
+    }
 }
 
-fn parse_saiz(payload: &[u8], sample_count: usize) -> Result<(Option<AuxiliaryType>, Vec<u8>)> {
+fn parse_saiz(payload: &[u8], sample_count: usize) -> Result<(Option<EncryptionScheme>, Vec<u8>)> {
     let mut reader = Reader::new(payload, *b"saiz");
     let (_, flags) = reader.full_header(0, 1)?;
     let info_type = auxiliary_type(&mut reader, flags)?;
@@ -171,7 +168,7 @@ fn parse_saiz(payload: &[u8], sample_count: usize) -> Result<(Option<AuxiliaryTy
     Ok((info_type, sizes))
 }
 
-fn parse_saio(payload: &[u8], run_count: usize) -> Result<(Option<AuxiliaryType>, Vec<u64>)> {
+fn parse_saio(payload: &[u8], run_count: usize) -> Result<(Option<EncryptionScheme>, Vec<u64>)> {
     let mut reader = Reader::new(payload, *b"saio");
     let (version, flags) = reader.full_header(1, 1)?;
     let info_type = auxiliary_type(&mut reader, flags)?;

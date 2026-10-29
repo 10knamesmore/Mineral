@@ -71,8 +71,14 @@ pub(crate) enum Error {
     #[error("content key decryption failed")]
     ContentKey,
 
+    #[error("AES-128 content key must contain 16 bytes")]
+    ContentKeyLength,
+
     #[error("license contains no content keys")]
     NoContentKeys,
+
+    #[error("license contains no content key matching its initialization")]
+    NoMatchingContentKey,
 
     #[error("system clock precedes Unix epoch")]
     Clock(#[from] SystemTimeError),
@@ -126,12 +132,49 @@ impl DeviceIdentity {
     }
 }
 
-/// A license's content key and its KID; secret bytes are zeroed when released.
-/// The playback opener selects the matching KID and validates the AES-128 key length.
+/// A license's AES-128 key and KID, validated while decoding the response.
+/// Secret bytes are zeroed when released.
 pub(crate) struct ContentKey {
-    pub id: Vec<u8>,
+    pub id: [u8; 16],
 
-    pub bytes: Zeroizing<Vec<u8>>,
+    pub bytes: Zeroizing<[u8; 16]>,
+}
+
+/// Challenge initialization protobuf identifying exactly one 16-byte content key.
+/// The original payload is retained because the signed challenge must send it unchanged.
+pub(crate) struct LicenseInitialization {
+    payload: Vec<u8>,
+
+    key_id: [u8; 16],
+}
+
+impl LicenseInitialization {
+    pub fn from_key_id(key_id: [u8; 16]) -> Self {
+        Self {
+            payload: KeyInitialization {
+                algorithm: Some(1),
+                key_ids: vec![key_id.to_vec()],
+            }
+            .encode_to_vec(),
+            key_id,
+        }
+    }
+
+    pub fn parse(payload: Vec<u8>) -> Result<Self> {
+        let initialization = KeyInitialization::decode(payload.as_slice())?;
+        let [key_id] = initialization.key_ids.as_slice() else {
+            return Err(Error::InitializationKeyId);
+        };
+        let key_id = key_id
+            .as_slice()
+            .try_into()
+            .map_err(|_wrong_length| Error::InitializationKeyId)?;
+        Ok(Self { payload, key_id })
+    }
+
+    pub fn key_id(&self) -> &[u8; 16] {
+        &self.key_id
+    }
 }
 
 /// Retains the signed request bytes and device key until its license response arrives.
@@ -143,10 +186,15 @@ pub(crate) struct LicenseExchange {
     request_payload: Vec<u8>,
 
     challenge: Vec<u8>,
+
+    key_id: [u8; 16],
 }
 
 impl LicenseExchange {
-    pub fn streaming(device: Arc<DeviceIdentity>, initialization: Vec<u8>) -> Result<Self> {
+    pub fn streaming(
+        device: Arc<DeviceIdentity>,
+        initialization: &LicenseInitialization,
+    ) -> Result<Self> {
         let requested_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let mut random = OsRng;
         let mut request_id = [0; 16];
@@ -160,7 +208,7 @@ impl LicenseExchange {
             client_identity: Some(device.client_identity.clone()),
             content: Some(Content {
                 cenc: Some(CencRequest {
-                    initialization: vec![initialization],
+                    initialization: vec![initialization.payload.clone()],
                     license_type: Some(1),
                     request_id: Some(request_id),
                 }),
@@ -188,6 +236,7 @@ impl LicenseExchange {
             device,
             request_payload,
             challenge,
+            key_id: *initialization.key_id(),
         })
     }
 
@@ -195,7 +244,8 @@ impl LicenseExchange {
         &self.challenge
     }
 
-    pub fn finish(self, response: &[u8]) -> Result<Vec<ContentKey>> {
+    /// Decrypts all content entries and returns the first key matching the challenge.
+    pub fn finish(self, response: &[u8]) -> Result<ContentKey> {
         let envelope = Envelope::decode(response)?;
         if envelope.message_type != Some(2) {
             return Err(Error::MessageType);
@@ -222,15 +272,16 @@ impl LicenseExchange {
             128,
             1,
         ));
-        let mut authentication_key = Zeroizing::new(Vec::with_capacity(32));
-        authentication_key.extend_from_slice(&derive_key(
+        let mut authentication_key = Zeroizing::new([0; 32]);
+        let (first, second) = authentication_key.split_at_mut(16);
+        first.copy_from_slice(&derive_key(
             session_key,
             b"AUTHENTICATION",
             &self.request_payload,
             512,
             1,
         ));
-        authentication_key.extend_from_slice(&derive_key(
+        second.copy_from_slice(&derive_key(
             session_key,
             b"AUTHENTICATION",
             &self.request_payload,
@@ -241,7 +292,7 @@ impl LicenseExchange {
         let signature = envelope
             .signature
             .ok_or(Error::Missing("license authentication"))?;
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&authentication_key)
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&*authentication_key)
             .map_err(|_length| Error::Authentication)?;
         if let Some(prefix) = envelope.authenticated_prefix {
             mac.update(&prefix);
@@ -250,11 +301,16 @@ impl LicenseExchange {
         mac.verify_slice(&signature)
             .map_err(|_signature| Error::Authentication)?;
         let license = License::decode(message.as_slice())?;
-        let mut keys = Vec::new();
-        for key in license.keys {
-            if key.purpose != Some(2) {
-                continue;
-            }
+        let mut content_keys = license
+            .keys
+            .into_iter()
+            .filter(|key| key.purpose == Some(2))
+            .peekable();
+        if content_keys.peek().is_none() {
+            return Err(Error::NoContentKeys);
+        }
+        let mut matching_bytes = None;
+        for key in content_keys {
             let id = key.id.ok_or(Error::Missing("content key identity"))?;
             let iv = key.iv.ok_or(Error::Missing("content key IV"))?;
             let iv: &[u8; 16] = iv
@@ -264,38 +320,25 @@ impl LicenseExchange {
             let encrypted = key
                 .encrypted_key
                 .ok_or(Error::Missing("encrypted content key"))?;
-            let bytes = Decryptor::<Aes128>::new((&*encryption_key).into(), iv.into())
-                .decrypt_padded_vec_mut::<Pkcs7>(&encrypted)
-                .map_err(|_padding| Error::ContentKey)?;
-            keys.push(ContentKey {
-                id,
-                bytes: Zeroizing::new(bytes),
-            });
+            let bytes = Zeroizing::new(
+                Decryptor::<Aes128>::new((&*encryption_key).into(), iv.into())
+                    .decrypt_padded_vec_mut::<Pkcs7>(&encrypted)
+                    .map_err(|_padding| Error::ContentKey)?,
+            );
+            if matching_bytes.is_none() && id.as_slice() == self.key_id {
+                matching_bytes = Some(bytes);
+            }
         }
-        if keys.is_empty() {
-            return Err(Error::NoContentKeys);
-        }
-        Ok(keys)
+        let bytes = matching_bytes.ok_or(Error::NoMatchingContentKey)?;
+        let bytes = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_length| Error::ContentKeyLength)?;
+        Ok(ContentKey {
+            id: self.key_id,
+            bytes: Zeroizing::new(bytes),
+        })
     }
-}
-
-pub(crate) fn key_initialization(key_id: &[u8]) -> Vec<u8> {
-    KeyInitialization {
-        algorithm: Some(1),
-        key_ids: vec![key_id.to_vec()],
-    }
-    .encode_to_vec()
-}
-
-pub(crate) fn initialization_key_id(initialization: &[u8]) -> Result<[u8; 16]> {
-    let initialization = KeyInitialization::decode(initialization)?;
-    let [key_id] = initialization.key_ids.as_slice() else {
-        return Err(Error::InitializationKeyId);
-    };
-    key_id
-        .as_slice()
-        .try_into()
-        .map_err(|_wrong_length| Error::InitializationKeyId)
 }
 
 fn read_sized(reader: &mut Cursor<&[u8]>) -> Result<Vec<u8>> {

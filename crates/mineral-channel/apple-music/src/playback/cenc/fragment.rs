@@ -17,7 +17,7 @@ use super::binary::{
     to_usize,
 };
 use super::error::{Error, Result, Unsupported};
-use super::initialization::{AudioInitialization, EncryptionScheme, PREFETCH_KEY};
+use super::initialization::{AudioInitialization, EncryptionScheme, KeySource, PREFETCH_KEY};
 
 #[derive(Debug, Clone)]
 struct SampleRange {
@@ -69,10 +69,9 @@ impl AudioInitialization {
             .sample_description_index
             .unwrap_or(self.fragment_defaults().default_sample_description_index);
         let encryption = self.encryption(description_index)?;
-        let sample_key = if encryption.uses_prefetch_key {
-            &PREFETCH_KEY
-        } else {
-            content_key
+        let sample_key = match encryption.key_source {
+            KeySource::Prefetch => &PREFETCH_KEY,
+            KeySource::Licensed { .. } => content_key,
         };
         if header.duration_is_empty || track.trun_boxes.iter().all(|run| run.samples.is_empty()) {
             return Err(Error::Unsupported(Unsupported::EmptyFragment));
