@@ -1,4 +1,4 @@
-//! Read-only catalog search, metadata and personal library collections.
+//! Constructs a channel and adapts metadata and playback operations to Mineral's traits.
 
 use std::sync::Arc;
 
@@ -10,19 +10,21 @@ use mineral_channel_core::{
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Lyrics, SearchKind, Song, SongId, SourceKind,
 };
+use mineral_playback::{PlaybackProvider, PlaybackRequest, PreparedPlayback};
+use tokio_util::sync::CancellationToken;
 
-use crate::album::AlbumLoader;
-use crate::api::Api;
-use crate::artist;
-use crate::lyrics;
-use crate::mapping;
+use crate::account::AccountClient;
+use crate::metadata::MetadataClient;
+use crate::playback;
 use crate::{AppleMusicConfig, Result, StoredAppleMusicAuth};
 
 /// An authenticated, read-only source sharing its account context with playback.
 pub struct AppleMusicChannel {
-    pub(crate) api: Arc<Api>,
+    account: Arc<AccountClient>,
 
-    albums: AlbumLoader,
+    metadata: MetadataClient,
+
+    config: AppleMusicConfig,
 }
 
 impl AppleMusicChannel {
@@ -32,10 +34,11 @@ impl AppleMusicChannel {
         auth: StoredAppleMusicAuth,
         persist: Option<Arc<dyn NamespaceStore>>,
     ) -> Result<Self> {
-        let api = Api::new(config, auth)?;
+        let account = AccountClient::new(config, auth)?;
         Ok(Self {
-            albums: AlbumLoader::new(config.album_cache(), persist),
-            api,
+            metadata: MetadataClient::new(account.clone(), config, persist),
+            account,
+            config: config.clone(),
         })
     }
 }
@@ -66,15 +69,7 @@ impl MusicChannel for AppleMusicChannel {
         query: &str,
         page: Page,
     ) -> mineral_channel_core::Result<PageResult<Song>> {
-        let result = self.api.search(query, "songs", page).await?;
-        Ok(PageResult {
-            items: result
-                .items
-                .iter()
-                .map(mapping::song)
-                .collect::<Result<_>>()?,
-            has_more: result.has_more,
-        })
+        Ok(self.metadata.search_songs(query, page).await?)
     }
 
     async fn search_albums(
@@ -82,15 +77,7 @@ impl MusicChannel for AppleMusicChannel {
         query: &str,
         page: Page,
     ) -> mineral_channel_core::Result<PageResult<Album>> {
-        let result = self.api.search(query, "albums", page).await?;
-        Ok(PageResult {
-            items: result
-                .items
-                .iter()
-                .map(mapping::album)
-                .collect::<Result<_>>()?,
-            has_more: result.has_more,
-        })
+        Ok(self.metadata.search_albums(query, page).await?)
     }
 
     async fn search_artists(
@@ -98,58 +85,27 @@ impl MusicChannel for AppleMusicChannel {
         query: &str,
         page: Page,
     ) -> mineral_channel_core::Result<PageResult<Artist>> {
-        let result = self.api.search(query, "artists", page).await?;
-        Ok(PageResult {
-            items: result
-                .items
-                .iter()
-                .map(mapping::artist)
-                .collect::<Result<_>>()?,
-            has_more: result.has_more,
-        })
+        Ok(self.metadata.search_artists(query, page).await?)
     }
 
     async fn songs_detail(&self, ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {
-        let mut songs = Vec::with_capacity(ids.len());
-        for id in ids {
-            let resource = self.api.resource("songs", id.as_str()).await?;
-            let mut song = mapping::song(&resource)?;
-            song.id = id.clone();
-            songs.push(song);
-        }
-        Ok(songs)
+        Ok(self.metadata.songs_detail(ids).await?)
     }
 
     async fn lyrics(&self, id: &SongId) -> mineral_channel_core::Result<Lyrics> {
-        Ok(lyrics::load(&self.api, id.as_str()).await?)
+        Ok(self.metadata.lyrics(id).await?)
     }
 
     async fn my_albums(&self) -> mineral_channel_core::Result<Vec<Album>> {
-        let mut path = "/v1/me/library/albums".to_owned();
-        let mut albums = Vec::new();
-        loop {
-            let page = self.api.page(&path).await?;
-            albums.extend(
-                page.data
-                    .iter()
-                    .map(mapping::album)
-                    .collect::<Result<Vec<_>>>()?,
-            );
-            let Some(next) = page.next else {
-                break;
-            };
-            path = next;
-        }
-        mineral_log::info!(target: "apple_music", albums = albums.len(), "saved albums loaded");
-        Ok(albums)
+        Ok(self.metadata.my_albums().await?)
     }
 
     async fn album_detail(&self, id: &AlbumId) -> mineral_channel_core::Result<Album> {
-        Ok(self.albums.load(&self.api, id).await?)
+        Ok(self.metadata.album_detail(id).await?)
     }
 
     async fn artist_detail(&self, id: &ArtistId) -> mineral_channel_core::Result<Artist> {
-        Ok(artist::detail(&self.api, id).await?)
+        Ok(self.metadata.artist_detail(id).await?)
     }
 
     async fn artist_albums(
@@ -157,6 +113,28 @@ impl MusicChannel for AppleMusicChannel {
         id: &ArtistId,
         page: Page,
     ) -> mineral_channel_core::Result<PageResult<Album>> {
-        Ok(artist::albums(&self.api, id, page).await?)
+        Ok(self.metadata.artist_albums(id, page).await?)
+    }
+}
+
+#[async_trait]
+impl PlaybackProvider for AppleMusicChannel {
+    fn source(&self) -> SourceKind {
+        SourceKind::APPLE_MUSIC
+    }
+
+    async fn resolve(
+        &self,
+        request: PlaybackRequest,
+        cancellation: CancellationToken,
+    ) -> mineral_playback::Result<Box<dyn PreparedPlayback>> {
+        playback::prepare(
+            &self.metadata,
+            self.account.clone(),
+            &self.config,
+            request,
+            cancellation,
+        )
+        .await
     }
 }

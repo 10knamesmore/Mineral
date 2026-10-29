@@ -1,23 +1,19 @@
-//! Apple Music catalog, personal library and account authentication.
+//! Apple Music accounts, catalog/library metadata and progressive audio playback.
+//!
+//! `channel` adapts the public channel/playback traits. `account` owns authentication,
+//! `metadata` maps Apple resources into shared models, and `playback` prepares media.
 
-mod album;
-mod api;
-mod artist;
+mod account;
 mod channel;
 pub mod cli;
 mod config;
-mod credential;
 mod error;
-mod lyrics;
-mod mapping;
-mod media;
+mod metadata;
 mod playback;
-mod session;
-mod wire;
 
+pub use account::{StoredAppleMusicAuth, load_stored};
 pub use channel::AppleMusicChannel;
 pub use config::{AlbumCacheConfig, AppleMusicConfig};
-pub use credential::{StoredAppleMusicAuth, load_stored};
 pub use error::Error;
 
 /// Result of an Apple Music source operation.
