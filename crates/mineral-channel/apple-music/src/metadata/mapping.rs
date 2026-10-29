@@ -118,16 +118,28 @@ pub(super) fn album(resource: &Resource) -> Result<Album> {
     Ok(album)
 }
 
-/// Keep the personal-library identity even when Apple also exposes a catalog playlist.
-/// Track totals come from the tracks relationship; list entries do not contain loaded songs.
-pub(super) fn playlist(resource: &Resource, track_count: u64) -> Result<Playlist> {
-    if resource.kind != "library-playlists" {
-        return Err(Error::InvalidData {
-            field: "library playlist resource",
-        });
-    }
+/// Keep each resource's own identity; library and catalog playlists remain separate.
+/// Catalog totals are extended attributes; library totals come from the tracks relationship.
+pub(super) fn playlist(resource: &Resource) -> Result<Playlist> {
     let attributes = resource.attributes.as_ref().ok_or(Error::InvalidData {
         field: "playlist attributes",
+    })?;
+    let track_count = match resource.kind.as_str() {
+        "playlists" => attributes.track_count,
+        "library-playlists" => resource
+            .relationships
+            .tracks
+            .as_ref()
+            .and_then(|tracks| tracks.meta.as_ref())
+            .and_then(|meta| meta.total),
+        _ => {
+            return Err(Error::InvalidData {
+                field: "playlist resource",
+            });
+        }
+    }
+    .ok_or(Error::InvalidData {
+        field: "playlist track total",
     })?;
     let mut playlist = Playlist::builder()
         .id(PlaylistId::new(SourceKind::APPLE_MUSIC, &resource.id))

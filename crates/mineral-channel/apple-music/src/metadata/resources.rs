@@ -206,6 +206,16 @@ impl MetadataClient {
         let library_playlist_detail = path
             .strip_prefix("/v1/me/library/playlists/")
             .is_some_and(|id| !id.contains('/'));
+        let catalog_playlist_list =
+            path.starts_with("/v1/catalog/") && path.ends_with("/playlists");
+        let catalog_playlist_detail = path.starts_with("/v1/catalog/")
+            && path
+                .rsplit_once('/')
+                .is_some_and(|(parent, _)| parent.ends_with("/playlists"));
+        let playlist_search = path.ends_with("/search")
+            && url.query_pairs().any(|(name, value)| {
+                name == "types" && value.split(',').any(|kind| kind == "playlists")
+            });
         let collection = path
             .rsplit('/')
             .next()
@@ -213,7 +223,7 @@ impl MetadataClient {
         let catalog_tracks = path.starts_with("/v1/catalog/") && path.ends_with("/tracks");
         let include = if library_album_detail {
             Some("catalog,tracks")
-        } else if library_playlist_list || library_playlist_detail {
+        } else if library_playlist_list || library_playlist_detail || catalog_playlist_detail {
             Some("tracks")
         } else if path.starts_with("/v1/me/library/") {
             Some("catalog")
@@ -231,9 +241,18 @@ impl MetadataClient {
         if library_playlist_list {
             // A single relationship item supplies meta.total without loading each playlist.
             defaults.push(("limit[tracks]", "1"));
-        } else if library_playlist_detail {
+        } else if library_playlist_detail || catalog_playlist_detail {
             defaults.push(("limit[tracks]", "100"));
+        }
+        if library_playlist_detail {
             defaults.push(("include[library-songs]", "catalog"));
+        }
+        if catalog_playlist_list || catalog_playlist_detail || playlist_search {
+            // Catalog playlist counts are omitted unless explicitly extended.
+            defaults.push(("extend[playlists]", "trackCount"));
+        }
+        if catalog_playlist_detail {
+            defaults.push(("include[songs]", "artists,albums"));
         }
         if path.starts_with("/v1/me/library/") {
             // Album navigation supplies the owning album; artist links need only names.

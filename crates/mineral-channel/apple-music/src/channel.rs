@@ -57,6 +57,7 @@ impl MusicChannel for AppleMusicChannel {
                 SearchKind::Song,
                 SearchKind::Album,
                 SearchKind::Artist,
+                SearchKind::Playlist,
             ])
             .playlist_edit(false)
             .artist_sections(ArtistSections::new(vec![
@@ -88,6 +89,14 @@ impl MusicChannel for AppleMusicChannel {
         page: Page,
     ) -> mineral_channel_core::Result<PageResult<Artist>> {
         Ok(self.metadata.search_artists(query, page).await?)
+    }
+
+    async fn search_playlists(
+        &self,
+        query: &str,
+        page: Page,
+    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
+        Ok(self.metadata.search_playlists(query, page).await?)
     }
 
     async fn songs_detail(&self, ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {
