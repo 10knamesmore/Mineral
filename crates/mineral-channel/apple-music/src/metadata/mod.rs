@@ -7,6 +7,7 @@ mod client;
 mod library;
 mod lyrics;
 mod mapping;
+mod playlists;
 mod resources;
 mod search;
 mod songs;

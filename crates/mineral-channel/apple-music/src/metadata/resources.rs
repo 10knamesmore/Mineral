@@ -146,7 +146,7 @@ impl MetadataClient {
         Ok(tracks)
     }
 
-    /// Library IDs address library endpoints, retaining personal album track subsets.
+    /// Library IDs address library endpoints, retaining personal collection membership.
     pub(super) async fn resource_path(&self, collection: &str, id: &str) -> Result<String> {
         if !id
             .bytes()
@@ -161,6 +161,7 @@ impl MetadataClient {
             "songs" => id.starts_with("i."),
             "albums" => id.starts_with("l."),
             "artists" => id.starts_with("r."),
+            "playlists" => id.starts_with("p."),
             _ => false,
         };
         let path = if library {
@@ -201,13 +202,19 @@ impl MetadataClient {
                 .is_some_and(|(_, relationship)| relationship == "tracks")
         });
         let library_album_request = library_album_detail || library_album_tracks;
+        let library_playlist_list = path == "/v1/me/library/playlists";
+        let library_playlist_detail = path
+            .strip_prefix("/v1/me/library/playlists/")
+            .is_some_and(|id| !id.contains('/'));
         let collection = path
             .rsplit('/')
             .next()
-            .is_some_and(|last| matches!(last, "songs" | "albums" | "tracks"));
+            .is_some_and(|last| matches!(last, "songs" | "albums" | "tracks" | "playlists"));
         let catalog_tracks = path.starts_with("/v1/catalog/") && path.ends_with("/tracks");
         let include = if library_album_detail {
             Some("catalog,tracks")
+        } else if library_playlist_list || library_playlist_detail {
+            Some("tracks")
         } else if path.starts_with("/v1/me/library/") {
             Some("catalog")
         } else if catalog_tracks {
@@ -221,6 +228,13 @@ impl MetadataClient {
         };
         let mut query = url.query_pairs_mut();
         let mut defaults = Vec::new();
+        if library_playlist_list {
+            // A single relationship item supplies meta.total without loading each playlist.
+            defaults.push(("limit[tracks]", "1"));
+        } else if library_playlist_detail {
+            defaults.push(("limit[tracks]", "100"));
+            defaults.push(("include[library-songs]", "catalog"));
+        }
         if path.starts_with("/v1/me/library/") {
             // Album navigation supplies the owning album; artist links need only names.
             if library_album_request {

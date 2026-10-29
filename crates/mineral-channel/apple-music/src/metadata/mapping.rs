@@ -4,7 +4,8 @@ use chrono::NaiveDate;
 use html2text::config::with_decorator;
 use html2text::render::TrivialDecorator;
 use mineral_model::{
-    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, MediaUrl, Song, SongId, SourceKind,
+    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, MediaUrl, Playlist, PlaylistId, Song,
+    SongId, SourceKind,
 };
 
 use super::wire::{Attributes, Resource};
@@ -115,6 +116,29 @@ pub(super) fn album(resource: &Resource) -> Result<Album> {
         album.publish_time_ms = Some(midnight.and_utc().timestamp_millis());
     }
     Ok(album)
+}
+
+/// Keep the personal-library identity even when Apple also exposes a catalog playlist.
+/// Track totals come from the tracks relationship; list entries do not contain loaded songs.
+pub(super) fn playlist(resource: &Resource, track_count: u64) -> Result<Playlist> {
+    if resource.kind != "library-playlists" {
+        return Err(Error::InvalidData {
+            field: "library playlist resource",
+        });
+    }
+    let attributes = resource.attributes.as_ref().ok_or(Error::InvalidData {
+        field: "playlist attributes",
+    })?;
+    let mut playlist = Playlist::builder()
+        .id(PlaylistId::new(SourceKind::APPLE_MUSIC, &resource.id))
+        .name(attributes.name.clone())
+        .cover_url(cover(attributes)?)
+        .track_count(track_count)
+        .build();
+    if let Some(description) = &attributes.description {
+        playlist.description.clone_from(&description.standard);
+    }
+    Ok(playlist)
 }
 
 pub(super) fn artist(resource: &Resource) -> Result<Artist> {

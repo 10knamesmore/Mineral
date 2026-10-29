@@ -15,6 +15,14 @@ pub(super) struct ResourcePage {
     pub data: Vec<Resource>,
 
     pub next: Option<String>,
+
+    pub meta: Option<PageMeta>,
+}
+
+/// Counts describe the entire collection or relationship, not just this response page.
+#[derive(Clone, Deserialize)]
+pub(super) struct PageMeta {
+    pub total: Option<u64>,
 }
 
 /// Catalog and library identities remain distinct until explicitly mapped.
@@ -69,6 +77,14 @@ pub(super) struct Attributes {
     pub record_label: Option<String>,
 
     pub editorial_notes: Option<EditorialNotes>,
+
+    pub description: Option<Description>,
+}
+
+/// Full library-playlist description; an absent description is distinct from its empty text.
+#[derive(Clone, Deserialize)]
+pub(super) struct Description {
+    pub standard: String,
 }
 
 #[derive(Clone, Deserialize)]
