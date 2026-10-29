@@ -166,14 +166,14 @@ impl PlayerCore {
         let (outcome, prefetch_dropped) = {
             let mut st = self.inner.state.lock();
             let outcome = edit(&mut st);
-            let dropped =
-                matches!(outcome, QueueEditOutcome::Applied) && st.revalidate_prefetch_after_edit();
+            let dropped = matches!(outcome, QueueEditOutcome::Applied { .. })
+                && st.revalidate_prefetch_after_edit();
             (outcome, dropped)
         };
         if prefetch_dropped {
             self.inner.audio.clear_next();
         }
-        if matches!(outcome, QueueEditOutcome::Applied) {
+        if matches!(outcome, QueueEditOutcome::Applied { .. }) {
             self.spawn_save_session();
         }
         outcome

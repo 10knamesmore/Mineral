@@ -332,7 +332,7 @@ async fn queue_transform(
 fn queue_edit_report(path: &'static str, outcome: Outcome<QueueEditOutcome>) -> Report {
     match outcome {
         Outcome::Applied(edit) | Outcome::Accepted(edit) => match edit {
-            QueueEditOutcome::Applied => Report::new(path, "queue updated", State::Applied),
+            QueueEditOutcome::Applied { .. } => Report::new(path, "queue updated", State::Applied),
             QueueEditOutcome::NoOp => {
                 Report::new(path, String::new(), State::Skipped(SkipReason::NoChange))
             }

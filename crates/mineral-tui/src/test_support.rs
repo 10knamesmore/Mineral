@@ -462,7 +462,9 @@ impl Backend for TestClient {
         }
         self.completions
             .push(Completion::QueueEdit(Outcome::Applied(
-                QueueEditOutcome::Applied,
+                QueueEditOutcome::Applied {
+                    queue_version: Revision::default().next(),
+                },
             )));
     }
 

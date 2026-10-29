@@ -1,13 +1,64 @@
-//! queue 浮层发起的队列结构编辑:定位构造、请求发送、回执处理。
-//!
-//! 队列是后端权威态,这里**不本地预改**队列内容——新样子随后由订阅推送带来。
-//! 本地抢跑会在编辑被拒时留下一个服务端并不存在的画面。
-//! 回执(含过期定位)由完成事件异步回流,不在按键路径等待。
+//! 串行提交队列编辑；连续移动只保留最新待执行方向，等回执和权威队列同步后再定位。
 
-use mineral_protocol::{QueueAnchor, QueueOp, QueuePos};
+use std::collections::VecDeque;
+
+use mineral_client::operation::Outcome;
+use mineral_common::revision::Revision;
+use mineral_protocol::{QueueAnchor, QueueEditOutcome, QueueOp, QueuePos};
 
 use super::App;
 use crate::components::popup::OverlayAction;
+
+/// 所有本地队列编辑共用一个在途请求，移动方向不提前转换成旧队列上的定位。
+#[derive(Default)]
+pub(super) struct QueueEdits {
+    pending: Option<PendingQueueEdit>,
+
+    queued_operations: VecDeque<QueueOp>,
+
+    reorder: Option<QueueReorder>,
+}
+
+struct PendingQueueEdit {
+    /// 回执到达后保存提交版本；同步达到该版本前不发送下一笔。
+    queue_version: Option<Revision>,
+
+    /// 仅连续移动跟随光标；用户导航后清除，不改变已经提交的请求。
+    destination: Option<usize>,
+}
+
+/// 连续移动以已确认版本中的下标跟随条目，不按歌曲身份查找重复项。
+struct QueueReorder {
+    anchor: QueueAnchor,
+
+    queue_version: Option<Revision>,
+
+    /// 在途请求之外最多保留一步，新输入覆盖它，避免松手后继续执行积压移动。
+    next_direction: Option<ReorderDirection>,
+}
+
+#[derive(Clone, Copy)]
+enum ReorderDirection {
+    Up,
+
+    Down,
+}
+
+impl ReorderDirection {
+    fn position(self) -> QueuePos {
+        match self {
+            Self::Up => QueuePos::Up,
+            Self::Down => QueuePos::Down,
+        }
+    }
+
+    fn destination(self, index: usize, len: usize) -> Option<usize> {
+        match self {
+            Self::Up => index.checked_sub(1),
+            Self::Down => index.checked_add(1).filter(|&next| next < len),
+        }
+    }
+}
 
 impl App {
     /// 处理 queue 浮层产出的编辑类动作。
@@ -22,8 +73,12 @@ impl App {
             OverlayAction::ToggleLoveQueueIndex(idx) => self.toggle_love_queue_index(idx),
             OverlayAction::DownloadQueueIndex(idx) => self.download_queue_index(idx),
             OverlayAction::ReorderQueueIndex { idx, down } => {
-                let to = if down { QueuePos::Down } else { QueuePos::Up };
-                self.send_queue_edit(idx, |at| QueueOp::Move { at, to });
+                let direction = if down {
+                    ReorderDirection::Down
+                } else {
+                    ReorderDirection::Up
+                };
+                self.request_queue_reorder(idx, direction);
             }
             _ => {}
         }
@@ -49,32 +104,119 @@ impl App {
             .download(mineral_protocol::DownloadTarget::Song(Box::new(song)));
     }
 
-    /// 用队列第 `idx` 项的身份构造定位,交给 `build` 拼出操作后送 server。
-    ///
-    /// 定位带身份是防多 client 错位:另一个 client 刚改过队列时,同一个下标已经是别的歌,
-    /// server 据身份判出过期并拒绝,而不是删掉用户没打算删的那首。
-    ///
-    /// # Params:
-    ///   - `idx`: 目标条目下标
-    ///   - `build`: 拿定位拼出具体操作
-    pub(crate) fn send_queue_edit(
-        &mut self,
-        idx: usize,
-        build: impl FnOnce(QueueAnchor) -> QueueOp,
-    ) {
-        let Some(song) = self.state.models.player.queue.get(idx) else {
-            return;
-        };
-        let anchor = QueueAnchor::new(idx, song.id.clone());
-        self.apply_queue_edit(build(anchor));
+    fn request_queue_reorder(&mut self, idx: usize, direction: ReorderDirection) {
+        if self.queue_edits.reorder.is_none() {
+            let player = &self.state.models.player;
+            let Some(song) = player.queue.get(idx) else {
+                return;
+            };
+            self.queue_edits.reorder = Some(QueueReorder {
+                anchor: QueueAnchor::new(idx, song.id.clone()),
+                queue_version: player.versions.queue,
+                next_direction: None,
+            });
+        }
+        if let Some(reorder) = &mut self.queue_edits.reorder {
+            reorder.next_direction = Some(direction);
+        }
+        self.advance_queue_edits();
     }
 
-    /// 送一次队列编辑(回执由完成事件处理,不在按键路径等)。
-    ///
-    /// # Params:
-    ///   - `op`: 待执行的操作
+    /// 菜单编辑与快捷键移动共用串行提交，保留菜单创建时的定位供服务端校验。
     pub(crate) fn apply_queue_edit(&mut self, op: QueueOp) {
-        // 不自动重试:重试会在用户看不见的情况下作用到另一首歌上。
+        self.cancel_queue_reorder();
+        self.queue_edits.queued_operations.push_back(op);
+        self.advance_queue_edits();
+    }
+
+    /// 用户接管选择或离开浮层后，取消未提交的移动及旧请求的光标跟随。
+    pub(super) fn cancel_queue_reorder(&mut self) {
+        self.queue_edits.reorder = None;
+        if let Some(pending) = &mut self.queue_edits.pending {
+            pending.destination = None;
+        }
+    }
+
+    pub(super) fn complete_queue_edit(&mut self, outcome: &Outcome<QueueEditOutcome>) {
+        match outcome {
+            Outcome::Applied(QueueEditOutcome::Applied { queue_version }) => {
+                if let Some(pending) = &mut self.queue_edits.pending {
+                    pending.queue_version = Some(*queue_version);
+                }
+            }
+            Outcome::Applied(QueueEditOutcome::NoOp) => {
+                self.queue_edits.pending = None;
+                self.cancel_queue_reorder();
+            }
+            _ => {
+                // 失败、过期或执行结果未知时终止这段编辑，不重试旧定位。
+                self.queue_edits = QueueEdits::default();
+            }
+        }
+        self.advance_queue_edits();
+    }
+
+    /// 回执与快照可先后任意到达；只在 App 已应用提交版本后继续执行。
+    pub(super) fn advance_queue_edits(&mut self) {
+        if let Some(pending) = &self.queue_edits.pending {
+            let Some(committed) = pending.queue_version else {
+                return;
+            };
+            let observed = self.state.models.player.versions.queue;
+            if observed < Some(committed) {
+                return;
+            }
+            if observed == Some(committed) {
+                if let Some(destination) = pending.destination
+                    && let Some(reorder) = &mut self.queue_edits.reorder
+                {
+                    reorder.anchor.index = destination;
+                    reorder.queue_version = observed;
+                    self.overlays.follow_queue_reorder(destination);
+                    self.queue_cursor_memo = Some(destination);
+                }
+            } else {
+                // 已跳过本次提交版本，旧目标下标不再代表同一条目。
+                self.cancel_queue_reorder();
+            }
+            self.queue_edits.pending = None;
+        }
+
+        if let Some(op) = self.queue_edits.queued_operations.pop_front() {
+            self.submit_queue_edit(op, None);
+            return;
+        }
+        self.submit_next_queue_reorder();
+    }
+
+    fn submit_next_queue_reorder(&mut self) {
+        let Some(reorder) = &mut self.queue_edits.reorder else {
+            return;
+        };
+        let player = &self.state.models.player;
+        if reorder.queue_version != player.versions.queue {
+            self.cancel_queue_reorder();
+            return;
+        }
+        if let Some(direction) = reorder.next_direction.take()
+            && let Some(destination) =
+                direction.destination(reorder.anchor.index, player.queue.len())
+        {
+            let op = QueueOp::Move {
+                at: reorder.anchor.clone(),
+                to: direction.position(),
+            };
+            self.submit_queue_edit(op, Some(destination));
+            return;
+        }
+        self.queue_edits.reorder = None;
+    }
+
+    fn submit_queue_edit(&mut self, op: QueueOp, destination: Option<usize>) {
+        self.queue_edits.pending = Some(PendingQueueEdit {
+            queue_version: None,
+            destination,
+        });
         self.client.queue_edit(op);
     }
 }

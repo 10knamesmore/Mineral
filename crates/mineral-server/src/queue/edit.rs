@@ -101,7 +101,9 @@ fn commit(st: &mut State, order: &[usize]) -> QueueEditOutcome {
     sync_original(st);
     st.queue_undo = Some(before);
     st.bump_queue();
-    QueueEditOutcome::Applied
+    QueueEditOutcome::Applied {
+        queue_version: st.queue_version,
+    }
 }
 
 /// 重排后游标的落点。
@@ -164,7 +166,9 @@ fn undo(st: &mut State) -> QueueEditOutcome {
     st.original_queue = before.original_queue;
     st.cursor = before.cursor;
     st.bump_queue();
-    QueueEditOutcome::Applied
+    QueueEditOutcome::Applied {
+        queue_version: st.queue_version,
+    }
 }
 
 /// 按给定的 id 序列整表重排队列(脚本变换 / `mineral.queue.set` 的落地口)。
@@ -235,7 +239,9 @@ mod tests {
         let at = anchor(&st, 0); // 删 a
         assert_eq!(
             apply(&mut st, &QueueOp::Remove(at)),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["b", "c", "d"]);
         assert_eq!(st.cursor, PlayCursor::InQueue(1), "c 前移到下标 1");
@@ -248,7 +254,9 @@ mod tests {
         let at = anchor(&st, 1);
         assert_eq!(
             apply(&mut st, &QueueOp::Remove(at)),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["a", "c", "d"]);
         assert_eq!(
@@ -265,7 +273,9 @@ mod tests {
         let at = anchor(&st, 3);
         assert_eq!(
             apply(&mut st, &QueueOp::Remove(at)),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["a", "b", "c"]);
         assert_eq!(st.cursor, PlayCursor::Detached { resume_at: 3 });
@@ -296,7 +306,9 @@ mod tests {
                     to: QueuePos::Up
                 }
             ),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["a", "c", "b", "d"]);
         assert_eq!(st.cursor, PlayCursor::InQueue(1), "游标跟着 c 上移");
@@ -310,7 +322,9 @@ mod tests {
                     to: QueuePos::Down
                 }
             ),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["a", "b", "c", "d"]);
         assert_eq!(st.cursor, PlayCursor::InQueue(2));
@@ -358,7 +372,9 @@ mod tests {
                     to: QueuePos::Top
                 }
             ),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["c", "a", "b", "d"]);
         assert_eq!(st.cursor, PlayCursor::InQueue(1), "当前曲 a 被 c 挤后一位");
@@ -372,7 +388,9 @@ mod tests {
                     to: QueuePos::Bottom
                 }
             ),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["a", "b", "d", "c"]);
     }
@@ -390,7 +408,9 @@ mod tests {
                     to: QueuePos::AfterCurrent
                 }
             ),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["a", "d", "b", "c"], "长度不变,只是换位");
         assert_eq!(st.cursor, PlayCursor::InQueue(0));
@@ -410,7 +430,9 @@ mod tests {
                     to: QueuePos::AfterCurrent
                 }
             ),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         // a 紧随 c,不是落到队尾(旧 bug 会得 [b,c,d,a],中间空一格)。
         assert_eq!(ids(&st), vec!["b", "c", "a", "d"], "a 紧挨当前曲 c 之后");
@@ -428,7 +450,9 @@ mod tests {
         let at = anchor(&st, 2); // c
         assert_eq!(
             apply(&mut st, &QueueOp::ClearAbove(at)),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["c", "d"]);
         assert_eq!(
@@ -445,7 +469,9 @@ mod tests {
         let at = anchor(&st, 1); // b
         assert_eq!(
             apply(&mut st, &QueueOp::ClearBelow(at)),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(ids(&st), vec!["a", "b"]);
         assert_eq!(st.cursor, PlayCursor::InQueue(0));
@@ -470,11 +496,18 @@ mod tests {
         let at = anchor(&st, 1);
         assert_eq!(
             apply(&mut st, &QueueOp::Remove(at)),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(st.cursor, PlayCursor::Detached { resume_at: 1 });
 
-        assert_eq!(apply(&mut st, &QueueOp::Undo), QueueEditOutcome::Applied);
+        assert_eq!(
+            apply(&mut st, &QueueOp::Undo),
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
+        );
         assert_eq!(ids(&st), vec!["a", "b", "c", "d"]);
         assert_eq!(st.cursor, PlayCursor::InQueue(1), "游标从悬空变回附着");
 
@@ -510,7 +543,9 @@ mod tests {
         let at = anchor(&st, 3); // 洗牌视图里的 b
         assert_eq!(
             apply(&mut st, &QueueOp::Remove(at)),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(
             st.original_queue
@@ -540,7 +575,9 @@ mod tests {
                     to: QueuePos::Top
                 }
             ),
-            QueueEditOutcome::Applied
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
         );
         assert_eq!(
             st.original_queue
@@ -556,7 +593,12 @@ mod tests {
     fn apply_order_accepts_permutation_and_subset() {
         let mut st = state(1); // 当前 b
         let order = vec![song("d").id, song("b").id];
-        assert_eq!(apply_order(&mut st, &order), QueueEditOutcome::Applied);
+        assert_eq!(
+            apply_order(&mut st, &order),
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
+        );
         assert_eq!(ids(&st), vec!["d", "b"]);
         assert_eq!(st.cursor, PlayCursor::InQueue(1), "当前曲跟到新位置");
     }
@@ -566,7 +608,12 @@ mod tests {
     fn apply_order_allows_duplicates_beyond_original_count() {
         let mut st = state(0);
         let order = vec![song("a").id, song("a").id, song("a").id];
-        assert_eq!(apply_order(&mut st, &order), QueueEditOutcome::Applied);
+        assert_eq!(
+            apply_order(&mut st, &order),
+            QueueEditOutcome::Applied {
+                queue_version: st.queue_version,
+            }
+        );
         assert_eq!(ids(&st), vec!["a", "a", "a"]);
     }
 

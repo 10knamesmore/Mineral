@@ -485,7 +485,7 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
             let before = player.with_state(|st| st.queue.len());
             if matches!(
                 player.queue_reorder(&ids),
-                mineral_protocol::QueueEditOutcome::Applied
+                mineral_protocol::QueueEditOutcome::Applied { .. }
             ) {
                 let after = player.with_state(|st| st.queue.len());
                 player.record_behavior(
