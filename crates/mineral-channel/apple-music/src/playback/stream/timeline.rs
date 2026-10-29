@@ -6,8 +6,34 @@ use std::time::Duration;
 
 use super::super::error::{Error, Result};
 
+/// The first fragment's media-clock origin. Without tfdt, its decode time is zero.
+/// Every explicit tfdt is translated to playback ticks before intervals are recorded.
+pub(super) struct DecodeOrigin {
+    media_ticks: u64,
+}
+
+impl DecodeOrigin {
+    pub(super) fn new(first_decode_start: Option<u64>) -> Self {
+        Self {
+            media_ticks: first_decode_start.unwrap_or(0),
+        }
+    }
+
+    pub(super) fn playback_start(&self, decode_start: Option<u64>) -> Result<Option<u64>> {
+        decode_start
+            .map(|start| {
+                start
+                    .checked_sub(self.media_ticks)
+                    .ok_or(Error::Unsupported {
+                        layout: "fragment decode time before track origin",
+                    })
+            })
+            .transpose()
+    }
+}
+
 /// HLS estimates choose seek candidates; learned sample intervals must form one
-/// contiguous decode timeline starting at tick zero.
+/// contiguous playback timeline starting at tick zero, relative to DecodeOrigin.
 pub(super) struct Timeline {
     /// Track ticks per second, taken from the audio initialization.
     pub timescale: u32,
@@ -16,7 +42,7 @@ pub(super) struct Timeline {
 
     estimated_starts: Vec<Duration>,
 
-    /// Exact intervals learned from prepared fragments or lazily fetched headers.
+    /// Exact playback intervals learned from prepared fragments or lazily fetched headers.
     intervals: Vec<Option<Range<u64>>>,
 }
 
