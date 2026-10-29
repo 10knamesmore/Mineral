@@ -17,6 +17,10 @@ pub enum Error {
     #[error("Apple Music library artist has no catalog counterpart")]
     NoCatalogArtist,
 
+    /// Playlist reads support personal-library IDs, not catalog playlist IDs.
+    #[error("Apple Music playlist reads require a personal-library playlist")]
+    LibraryPlaylistRequired,
+
     /// Artist editorial notes could not be converted to plain text.
     #[error("invalid Apple Music artist editorial notes")]
     EditorialNotes(#[from] html2text::Error),
@@ -138,7 +142,7 @@ impl Error {
 impl From<Error> for mineral_channel_core::Error {
     fn from(error: Error) -> Self {
         match error {
-            Error::NoCatalogArtist => Self::NotSupported,
+            Error::NoCatalogArtist | Error::LibraryPlaylistRequired => Self::NotSupported,
             Error::EditorialNotes(source) => Self::Parse {
                 source: Box::new(source),
             },

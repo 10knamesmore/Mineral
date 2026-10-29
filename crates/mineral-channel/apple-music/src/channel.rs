@@ -5,10 +5,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, MusicChannel, Page, PageResult,
+    ArtistSectionKind, ArtistSections, ChannelCaps, MusicChannel, Page, PageResult, PlaylistDetail,
+    PlaylistLoad,
 };
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, Lyrics, SearchKind, Song, SongId, SourceKind,
+    Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
+    SourceKind,
 };
 use mineral_playback::{PlaybackProvider, PlaybackRequest, PreparedPlayback};
 use tokio_util::sync::CancellationToken;
@@ -98,6 +100,18 @@ impl MusicChannel for AppleMusicChannel {
 
     async fn my_albums(&self) -> mineral_channel_core::Result<Vec<Album>> {
         Ok(self.metadata.my_albums().await?)
+    }
+
+    async fn my_playlists(&self) -> mineral_channel_core::Result<Vec<Playlist>> {
+        Ok(self.metadata.my_playlists().await?)
+    }
+
+    async fn playlist_detail(
+        &self,
+        id: &PlaylistId,
+        load: PlaylistLoad,
+    ) -> mineral_channel_core::Result<PlaylistDetail> {
+        Ok(self.metadata.playlist_detail(id, load).await?)
     }
 
     async fn album_detail(&self, id: &AlbumId) -> mineral_channel_core::Result<Album> {
