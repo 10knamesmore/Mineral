@@ -9,6 +9,7 @@ use mineral_model::{
     AlbumId, ArtistId, Envelope, Playlist, PlaylistId, Song, SongId, SourceKind, StoreValue,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use url::Url;
 
 impl From<Error> for StoreError {
     fn from(error: Error) -> Self {
@@ -89,10 +90,11 @@ impl ChannelStore for NamespaceStore {
         &self,
         id: &PlaylistId,
         name: Option<&str>,
+        web_url: Option<&Url>,
         track_update_time: Option<i64>,
         entries: &[CachedPlaylistEntry],
     ) -> StoreResult<()> {
-        Self::put_playlist_cache(self, id, name, track_update_time, entries)
+        Self::put_playlist_cache(self, id, name, web_url, track_update_time, entries)
             .await
             .map_err(Into::into)
     }

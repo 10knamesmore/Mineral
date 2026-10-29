@@ -1,6 +1,7 @@
 use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
+use url::Url;
 
 use crate::{
     ids::SongId,
@@ -43,6 +44,10 @@ pub struct Song {
     /// 本地源若有内嵌封面可以给 `Local(...)` 指向缓存出来的文件。
     #[builder(default)]
     pub cover_url: Option<MediaUrl>,
+
+    /// 此歌曲的网页分享地址；没有可分享页面时为 None。
+    #[builder(default)]
+    pub web_url: Option<Url>,
 
     /// 来源提供的原始位置；本地来源使用文件路径，其他来源可不提供。
     /// 下载与播放缓存副本由 playback 层管理，不改变歌曲的来源身份。

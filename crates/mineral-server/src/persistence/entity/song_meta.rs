@@ -39,6 +39,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub cover_url: Option<String>,
 
+    /// 歌曲的来源网页地址。
+    #[sea_orm(column_type = "Text")]
+    pub web_url: Option<String>,
+
     /// 别名或译名。
     #[sea_orm(column_type = "Text")]
     pub alias: Option<String>,

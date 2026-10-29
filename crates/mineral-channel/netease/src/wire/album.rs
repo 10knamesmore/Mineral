@@ -56,7 +56,7 @@ mod tests {
             .data
             .into_iter()
             .map(saved_album_to_model)
-            .collect::<Vec<_>>();
+            .collect::<crate::Result<Vec<_>>>()?;
         assert_eq!(albums.first().and_then(|album| album.track_count), None);
         assert_eq!(albums.get(1).and_then(|album| album.track_count), Some(0));
         assert_eq!(

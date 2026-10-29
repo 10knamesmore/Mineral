@@ -1,4 +1,5 @@
 //! 将音乐模型投影为 Lua 表，供 daemon 音乐回调和 TUI 本地复制模板共用。
+//! 歌曲、歌单、专辑和艺人的 `url` 读取实体的 `web_url`，缺失时为 nil。
 
 use mineral_model::Song;
 use mlua::Lua;
@@ -26,15 +27,7 @@ pub(crate) fn song_table(lua: &Lua, song: &Song) -> mlua::Result<mlua::Table> {
         song.source_url.as_ref().map(ToString::to_string),
     )?;
     table.set("source", song.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            song.source().name(),
-            /*kind*/ "song",
-            song.id.value(),
-        ),
-    )?;
+    table.set("url", song.web_url.as_ref().map(ToString::to_string))?;
     Ok(table)
 }
 
@@ -64,15 +57,7 @@ pub(crate) fn playlist_table(
         playlist.cover_url.as_ref().map(ToString::to_string),
     )?;
     table.set("source", playlist.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            playlist.source().name(),
-            /*kind*/ "playlist",
-            playlist.id.value(),
-        ),
-    )?;
+    table.set("url", playlist.web_url.as_ref().map(ToString::to_string))?;
     let songs = lua.create_table()?;
     for (i, entry) in playlist.entries.iter().enumerate() {
         songs.raw_set(i + 1, song_table(lua, &entry.song)?)?;
@@ -97,15 +82,7 @@ pub(crate) fn album_table(lua: &Lua, album: &mineral_model::Album) -> mlua::Resu
         album.cover_url.as_ref().map(ToString::to_string),
     )?;
     table.set("source", album.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            album.source().name(),
-            /*kind*/ "album",
-            album.id.value(),
-        ),
-    )?;
+    table.set("url", album.web_url.as_ref().map(ToString::to_string))?;
     let songs = lua.create_table()?;
     for (i, track) in album.tracks.iter().enumerate() {
         songs.raw_set(i + 1, song_table(lua, &track.song)?)?;
@@ -128,31 +105,13 @@ pub(crate) fn artist_table(lua: &Lua, artist: &mineral_model::Artist) -> mlua::R
         artist.avatar_url.as_ref().map(ToString::to_string),
     )?;
     table.set("source", artist.source().name())?;
-    table.set(
-        "url",
-        web_url(
-            lua,
-            artist.source().name(),
-            /*kind*/ "artist",
-            artist.id.value(),
-        ),
-    )?;
+    table.set("url", artist.web_url.as_ref().map(ToString::to_string))?;
     let songs = lua.create_table()?;
     for (i, song) in artist.songs.iter().enumerate() {
         songs.raw_set(i + 1, song_table(lua, song)?)?;
     }
     table.set("songs", songs)?;
     Ok(table)
-}
-
-/// 按 source seed 拼网页分享链接；未配置时返回 `None`。
-fn web_url(lua: &Lua, source: &str, kind: &str, raw_id: &str) -> Option<String> {
-    let table: mlua::Table = lua
-        .named_registry_value(crate::host::WEB_URL_TEMPLATES)
-        .ok()?;
-    let entry: mlua::Table = table.get(source).ok()?;
-    let template: String = entry.get(kind).ok()?;
-    Some(mineral_channel_core::render_web_url(&template, raw_id))
 }
 
 /// Projects direct media into the Lua `library.song_url` callback shape.

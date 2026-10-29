@@ -3,6 +3,7 @@
 use mineral_channel_core::store::AlbumCacheEntry;
 use mineral_model::MediaUrl;
 use sea_orm::{DbErr, EntityTrait, Set, TransactionTrait};
+use url::Url;
 
 use crate::persistence::db::NamespaceStore;
 use crate::persistence::entity::album_cache::{albums, artists, track_artists, tracks};
@@ -36,6 +37,7 @@ impl NamespaceStore {
             publish_time_ms: Set(album.publish_time_ms),
             track_count: Set(album.track_count.map(i64::try_from).transpose()?),
             cover_url: Set(album.cover_url.as_ref().map(MediaUrl::to_string)),
+            web_url: Set(album.web_url.as_ref().map(Url::to_string)),
             expired_at: Set(entry.expired_at),
         };
         let album_artists = album
@@ -68,6 +70,7 @@ impl NamespaceStore {
                 song_album_name: Set(song.album.as_ref().map(|a| a.name.clone())),
                 duration_ms: Set(song.duration_ms.map(i64::try_from).transpose()?),
                 cover_url: Set(song.cover_url.as_ref().map(MediaUrl::to_string)),
+                web_url: Set(song.web_url.as_ref().map(Url::to_string)),
                 source_url: Set(song.source_url.as_ref().map(MediaUrl::to_string)),
                 unavailable: Set(song.unavailable),
             });

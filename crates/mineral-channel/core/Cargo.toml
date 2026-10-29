@@ -17,6 +17,7 @@ rustc-hash     = { workspace = true }
 serde          = { workspace = true }
 typed-builder  = { workspace = true }
 derive-getters = { workspace = true }
+url            = { workspace = true }
 
 [dev-dependencies]
 color-eyre = { workspace = true }

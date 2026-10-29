@@ -22,7 +22,7 @@ use rustc_hash::FxHashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{ApiCodeError, Error as NeteaseError};
+use crate::error::{ApiCodeError, Error as NeteaseError, Result as NeteaseResult};
 
 use crate::album::AlbumLoader;
 use crate::api;
@@ -166,9 +166,11 @@ fn map_err(error: NeteaseError) -> Error {
         NeteaseError::Network { .. } => Error::Network {
             source: Box::new(error),
         },
-        NeteaseError::Parse { .. } | NeteaseError::Serialize(_) => Error::Parse {
-            source: Box::new(error),
-        },
+        NeteaseError::Parse { .. } | NeteaseError::Serialize(_) | NeteaseError::WebUrl(_) => {
+            Error::Parse {
+                source: Box::new(error),
+            }
+        }
         NeteaseError::InvalidData { field } => Error::InvalidData { field },
         NeteaseError::Storage(_)
         | NeteaseError::Path(_)
@@ -209,10 +211,6 @@ impl MusicChannel for NeteaseChannel {
                 ArtistSectionKind::TopSongs,
                 ArtistSectionKind::Albums,
             ]))
-            .song_web_url(Some("https://music.163.com/song?id={id}".to_owned()))
-            .playlist_web_url(Some("https://music.163.com/playlist?id={id}".to_owned()))
-            .album_web_url(Some("https://music.163.com/album?id={id}".to_owned()))
-            .artist_web_url(Some("https://music.163.com/artist?id={id}".to_owned()))
             .build()
     }
 
@@ -225,7 +223,8 @@ impl MusicChannel for NeteaseChannel {
             .songs
             .into_iter()
             .map(convert::album_song_to_model)
-            .collect::<Vec<Song>>()
+            .collect::<NeteaseResult<Vec<Song>>>()
+            .map_err(map_err)?
             .into())
     }
 
@@ -238,7 +237,8 @@ impl MusicChannel for NeteaseChannel {
             .albums
             .into_iter()
             .map(|a| convert::album_dto_to_model(a, Vec::new()))
-            .collect::<Vec<Album>>()
+            .collect::<NeteaseResult<Vec<Album>>>()
+            .map_err(map_err)?
             .into())
     }
 
@@ -250,7 +250,8 @@ impl MusicChannel for NeteaseChannel {
             .playlists
             .into_iter()
             .map(convert::search_playlist_to_model)
-            .collect::<Vec<Playlist>>()
+            .collect::<NeteaseResult<Vec<Playlist>>>()
+            .map_err(map_err)?
             .into())
     }
 
@@ -262,7 +263,8 @@ impl MusicChannel for NeteaseChannel {
             .artists
             .into_iter()
             .map(convert::search_artist_to_model)
-            .collect::<Vec<Artist>>()
+            .collect::<NeteaseResult<Vec<Artist>>>()
+            .map_err(map_err)?
             .into())
     }
 
@@ -285,14 +287,14 @@ impl MusicChannel for NeteaseChannel {
             );
             None
         });
-        Ok(convert::artist_detail_to_model(detail, fans))
+        convert::artist_detail_to_model(detail, fans).map_err(map_err)
     }
 
     async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<PageResult<Album>> {
         let dto = api::artist::albums(&self.transport, id, page.offset, page.limit)
             .await
             .map_err(map_err)?;
-        Ok(convert::artist_albums_to_model(dto))
+        convert::artist_albums_to_model(dto).map_err(map_err)
     }
 
     async fn create_playlist(&self, name: &str) -> Result<Playlist> {
@@ -300,7 +302,7 @@ impl MusicChannel for NeteaseChannel {
             .await
             .map_err(map_err)?;
         // 建单响应只带新歌单元信息,无曲目。
-        Ok(convert::playlist_info_to_model(&dto.playlist, Vec::new()))
+        convert::playlist_info_to_model(&dto.playlist, Vec::new()).map_err(map_err)
     }
 
     async fn delete_playlist(&self, id: &PlaylistId) -> Result<()> {
@@ -337,7 +339,10 @@ impl MusicChannel for NeteaseChannel {
         let dtos = api::song::songs_detail(&self.transport, ids)
             .await
             .map_err(map_err)?;
-        Ok(dtos.into_iter().map(convert::album_song_to_model).collect())
+        dtos.into_iter()
+            .map(convert::album_song_to_model)
+            .collect::<NeteaseResult<Vec<_>>>()
+            .map_err(map_err)
     }
 
     async fn album_detail(&self, id: &AlbumId) -> Result<Album> {
@@ -375,11 +380,11 @@ impl MusicChannel for NeteaseChannel {
             .await
             .map_err(map_err)?;
         // 列表项只有元信息,无曲目(曲目按需走 playlist_detail)。
-        Ok(dto
-            .playlist
+        dto.playlist
             .iter()
             .map(|info| convert::playlist_info_to_model(info, Vec::new()))
-            .collect())
+            .collect::<NeteaseResult<Vec<_>>>()
+            .map_err(map_err)
     }
 
     async fn my_playlists(&self) -> Result<Vec<Playlist>> {
@@ -403,7 +408,13 @@ impl MusicChannel for NeteaseChannel {
             let count = page.data.len();
             mineral_log::debug!(target: "netease", offset, count, more = page.has_more,
                 "saved album page fetched");
-            albums.extend(page.data.into_iter().map(convert::saved_album_to_model));
+            albums.extend(
+                page.data
+                    .into_iter()
+                    .map(convert::saved_album_to_model)
+                    .collect::<NeteaseResult<Vec<_>>>()
+                    .map_err(map_err)?,
+            );
             if !page.has_more {
                 break;
             }

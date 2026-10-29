@@ -88,9 +88,11 @@ fn map_err(error: BilibiliError) -> Error {
         | BilibiliError::SigningKeys { .. } => Error::Network {
             source: Box::new(error),
         },
-        BilibiliError::Parse { .. } | BilibiliError::Serialize(_) => Error::Parse {
-            source: Box::new(error),
-        },
+        BilibiliError::Parse { .. } | BilibiliError::Serialize(_) | BilibiliError::WebUrl(_) => {
+            Error::Parse {
+                source: Box::new(error),
+            }
+        }
         BilibiliError::InvalidData { field } => Error::InvalidData { field },
         BilibiliError::Path(_)
         | BilibiliError::File { .. }
@@ -149,18 +151,12 @@ impl MusicChannel for BilibiliChannel {
     fn caps(&self) -> ChannelCaps {
         // 全库搜视频(BV → Album)+ 用户(→ Artist);写操作永不支持(只读源)。B站一个视频
         // 就是一张专辑,分 P 是曲目,搜索直接产 Album、不投影成 P1 单曲(避免「显示全 BV 总长、
-        // 实播单 P」的时长错位)。song 模板用位置占位拆 `bvid:page` 复合裸 id(`?p=1` 对单 P
-        // 视频冗余但合法,不特判);收藏夹的稳定分享 URL 需要 mid 参与,裸 fid 拼不出,歌单模板留空。
+        // 实播单 P」的时长错位)。
         ChannelCaps::builder()
             .searchable(vec![SearchKind::Album, SearchKind::Artist])
             .playlist_edit(false)
             // UP 主详情:只有投稿专辑区,无「热门曲」区(B站无整源热门单曲概念,见 artist_detail)。
             .artist_sections(ArtistSections::new(vec![ArtistSectionKind::Albums]))
-            // album = 整个视频(裸 id 即 bvid,无分 P 段),用 `{id}` 整段;artist = UP 主空间页,
-            // 裸 id 即 mid。
-            .song_web_url(Some("https://www.bilibili.com/video/{0}?p={1}".to_owned()))
-            .album_web_url(Some("https://www.bilibili.com/video/{id}".to_owned()))
-            .artist_web_url(Some("https://space.bilibili.com/{id}".to_owned()))
             .build()
     }
 
@@ -192,7 +188,7 @@ impl MusicChannel for BilibiliChannel {
             let info = api::view::video_info(&self.transport, &bvid)
                 .await
                 .map_err(map_err)?;
-            for track in convert::view_to_album(info).tracks {
+            for track in convert::view_to_album(info).map_err(map_err)?.tracks {
                 let song = track.song;
                 if wanted.contains(song.id.as_str()) {
                     out.push(song);
@@ -206,7 +202,7 @@ impl MusicChannel for BilibiliChannel {
         let info = api::view::video_info(&self.transport, id.as_str())
             .await
             .map_err(map_err)?;
-        Ok(convert::view_to_album(info))
+        convert::view_to_album(info).map_err(map_err)
     }
 
     async fn artist_detail(&self, id: &ArtistId) -> Result<Artist> {
@@ -215,7 +211,7 @@ impl MusicChannel for BilibiliChannel {
         let card = api::space::card(&self.transport, id.as_str())
             .await
             .map_err(map_err)?;
-        Ok(convert::card_to_artist(id.clone(), card))
+        convert::card_to_artist(id.clone(), card).map_err(map_err)
     }
 
     async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<PageResult<Album>> {
@@ -229,7 +225,7 @@ impl MusicChannel for BilibiliChannel {
         )
         .await
         .map_err(map_err)?;
-        Ok(convert::arc_videos_to_albums(result, page))
+        convert::arc_videos_to_albums(result, page).map_err(map_err)
     }
 
     async fn playlist_detail(
@@ -245,7 +241,7 @@ impl MusicChannel for BilibiliChannel {
             .map_err(map_err)?;
         let mut songs = Vec::<Song>::new();
         for media in list.medias.unwrap_or_default() {
-            let Some(plan) = convert::plan_fav_entry(media) else {
+            let Some(plan) = convert::plan_fav_entry(media).map_err(map_err)? else {
                 continue;
             };
             match plan {
@@ -254,6 +250,7 @@ impl MusicChannel for BilibiliChannel {
                     match api::view::video_info(&self.transport, &bvid).await {
                         Ok(info) => songs.extend(
                             convert::view_to_album(info)
+                                .map_err(map_err)?
                                 .tracks
                                 .into_iter()
                                 .map(|track| track.song),

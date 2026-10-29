@@ -346,7 +346,7 @@ async fn library_playlists_query_parks_until_complete() -> color_eyre::Result<()
         liked_ids: None,
         playlists: Some(vec![named_playlist("p1", "日常")]),
     })];
-    let (runtime, pumps) = parts.spawn_runtime(watchdog, &channels);
+    let (runtime, pumps) = parts.spawn_runtime(watchdog);
     let _runtime = runtime.ok_or_else(|| color_eyre::eyre::eyre!("应有脚本线程"))?;
     let (hub_tx, _hub_rx) = tokio::sync::broadcast::channel(/*capacity*/ 8);
     let core = core_with_events(

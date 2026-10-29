@@ -50,6 +50,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub cover_url: Option<String>,
 
+    /// 歌曲的来源网页地址。
+    #[sea_orm(column_type = "Text")]
+    pub web_url: Option<String>,
+
     /// 来源提供的位置。
     #[sea_orm(column_type = "Text")]
     pub source_url: Option<String>,

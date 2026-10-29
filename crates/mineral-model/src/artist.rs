@@ -1,6 +1,7 @@
 use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
+use url::Url;
 
 use crate::{ids::ArtistId, song::Song, source::SourceKind, url::MediaUrl};
 
@@ -36,6 +37,10 @@ pub struct Artist {
     /// 头像 URL。
     #[builder(default)]
     pub avatar_url: Option<MediaUrl>,
+
+    /// 此艺人的网页分享地址；没有可分享页面时为 None。
+    #[builder(default)]
+    pub web_url: Option<Url>,
 
     /// 代表 / 热门曲目。
     #[builder(default)]

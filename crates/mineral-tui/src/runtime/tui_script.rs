@@ -329,9 +329,6 @@ impl App {
             .runtime
             .as_ref()
             .ok_or(ReloadError::NoRuntime)?;
-        runtime
-            .seed_web_url_templates(self.source_web_urls())
-            .map_err(ReloadError::Script)?;
         let (text, commands) = runtime
             .render_copy_template(index, ctx)
             .map_err(ReloadError::Script)?;
@@ -349,22 +346,6 @@ impl App {
         self.commit_tui_ui_commands(commands);
         mineral_log::info!(target: "tui.script", index, "local copy template rendered");
         Ok(text)
-    }
-
-    /// Translate known daemon capabilities into local Lua model projection URLs.
-    fn source_web_urls(&self) -> Vec<mineral_script::SourceWebUrls> {
-        self.state
-            .models
-            .caps
-            .iter()
-            .map(|(source, caps)| mineral_script::SourceWebUrls {
-                source: source.name().to_owned(),
-                song: caps.song_web_url().clone(),
-                playlist: caps.playlist_web_url().clone(),
-                album: caps.album_web_url().clone(),
-                artist: caps.artist_web_url().clone(),
-            })
-            .collect()
     }
 
     /// Apply UI effects only after Lua execution and local config validation succeed.

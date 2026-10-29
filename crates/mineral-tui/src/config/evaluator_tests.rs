@@ -6,7 +6,7 @@ use mineral_test::song;
 
 use super::evaluator::{Error, evaluate_tui};
 use mineral_script::TuiCommand;
-use mineral_script::{ConfigOverrideOp, CopyTemplateCtx, SourceWebUrls, WatchdogConfig};
+use mineral_script::{ConfigOverrideOp, CopyTemplateCtx, WatchdogConfig};
 
 /// 将 API 边界测试放入真实 TUI 配置的 tui.lua 的 setup。
 fn setup_source(body: &str) -> String {
@@ -404,7 +404,7 @@ fn copy_watchdog_interrupts_and_discards_effects() -> color_eyre::Result<()> {
 }
 
 #[test]
-fn local_copy_projects_all_entities_and_seeded_web_urls() -> color_eyre::Result<()> {
+fn local_copy_projects_all_entities_and_web_urls() -> color_eyre::Result<()> {
     let loaded = evaluate_tui(
         r#"
         return { copy = { templates = {
@@ -436,31 +436,28 @@ fn local_copy_projects_all_entities_and_seeded_web_urls() -> color_eyre::Result<
         "tui.lua",
         lax_watchdog(),
     )?;
-    loaded.runtime.seed_web_url_templates([SourceWebUrls {
-        source: "netease".to_owned(),
-        song: Some("https://x.example/song/{id}".to_owned()),
-        playlist: Some("https://x.example/playlist/{id}".to_owned()),
-        album: Some("https://x.example/album/{id}".to_owned()),
-        artist: None,
-    }])?;
+    let mut song = song("1");
+    song.web_url = Some("https://x.example/song/1".parse()?);
     let playlist = mineral_model::Playlist::builder()
         .id(PlaylistId::new(SourceKind::NETEASE, "p1"))
         .name("list".to_owned())
+        .web_url(Some("https://x.example/playlist/p1".parse()?))
         .track_count(1)
-        .entries(mineral_model::PlaylistEntry::enumerate(vec![song("1")]))
+        .entries(mineral_model::PlaylistEntry::enumerate(vec![song.clone()]))
         .build();
     let album = mineral_model::Album::builder()
         .id(AlbumId::new(SourceKind::NETEASE, "a1"))
         .name("album".to_owned())
-        .tracks(mineral_model::AlbumTrack::enumerate(vec![song("1")]))
+        .web_url(Some("https://x.example/album/a1".parse()?))
+        .tracks(mineral_model::AlbumTrack::enumerate(vec![song.clone()]))
         .build();
     let artist = mineral_model::Artist::builder()
         .id(ArtistId::new(SourceKind::NETEASE, "r1"))
         .name("artist".to_owned())
-        .songs(vec![song("1")])
+        .songs(vec![song.clone()])
         .build();
     for (index, ctx, expected) in [
-        (0, copy_song(), "netease:1"),
+        (0, CopyTemplateCtx::Song(Box::new(song)), "netease:1"),
         (
             1,
             CopyTemplateCtx::Playlist(Box::new(playlist)),

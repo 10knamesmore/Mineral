@@ -3,6 +3,7 @@
 use mineral_channel_core::PageResult;
 use mineral_model::{Album, Artist};
 
+use crate::Result;
 use crate::convert::{search_user_to_artist, search_video_to_album};
 use crate::transport::Transport;
 use crate::wire::de::from_value;
@@ -29,7 +30,7 @@ pub async fn search_albums(
     keyword: &str,
     page: u32,
     page_size: u32,
-) -> crate::Result<PageResult<Album>> {
+) -> Result<PageResult<Album>> {
     let data = transport
         .get_signed(
             SEARCH_URL,
@@ -46,8 +47,8 @@ pub async fn search_albums(
     let items = result
         .result
         .into_iter()
-        .filter_map(search_video_to_album)
-        .collect::<Vec<Album>>();
+        .filter_map(|item| search_video_to_album(item).transpose())
+        .collect::<Result<Vec<Album>>>()?;
     Ok(PageResult {
         items,
         has_more: result.num_pages.map(|total| page < total),
@@ -71,7 +72,7 @@ pub async fn search_artists(
     keyword: &str,
     page: u32,
     page_size: u32,
-) -> crate::Result<PageResult<Artist>> {
+) -> Result<PageResult<Artist>> {
     let data = transport
         .get_signed(
             SEARCH_URL,
@@ -87,8 +88,8 @@ pub async fn search_artists(
     let items = result
         .result
         .into_iter()
-        .filter_map(search_user_to_artist)
-        .collect::<Vec<Artist>>();
+        .filter_map(|item| search_user_to_artist(item).transpose())
+        .collect::<Result<Vec<Artist>>>()?;
     Ok(PageResult {
         items,
         has_more: result.num_pages.map(|total| page < total),

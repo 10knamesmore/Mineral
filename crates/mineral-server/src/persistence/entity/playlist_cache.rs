@@ -23,6 +23,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub name: Option<String>,
 
+    /// 歌单的来源网页地址。
+    #[sea_orm(column_type = "Text")]
+    pub web_url: Option<String>,
+
     /// 取回时间，Unix 毫秒。
     #[sea_orm(column_type = "Integer")]
     pub fetched_at: i64,

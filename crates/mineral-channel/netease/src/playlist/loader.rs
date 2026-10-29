@@ -3,11 +3,13 @@
 use futures_util::{StreamExt, stream};
 use mineral_channel_core::store::{CachedPlaylistEntry, NamespaceStore};
 use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
-use mineral_model::{Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{PlaylistId, Song, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::Result;
 use crate::config::PlaylistFetchConfig;
-use crate::{api, convert, transport::Transport};
+use crate::convert::{self, WebPage};
+use crate::{api, transport::Transport};
 use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 
@@ -38,7 +40,7 @@ impl PlaylistLoader {
         persist: Option<&dyn NamespaceStore>,
         id: &PlaylistId,
         intent: PlaylistLoad,
-    ) -> crate::Result<PlaylistDetail> {
+    ) -> Result<PlaylistDetail> {
         let lock = {
             let mut active = self.active.lock().await;
             active.retain(|_, entry| entry.strong_count() > 0);
@@ -62,29 +64,23 @@ async fn fetch(
     config: &PlaylistFetchConfig,
     id: &PlaylistId,
     intent: PlaylistLoad,
-) -> crate::Result<PlaylistDetail> {
+) -> Result<PlaylistDetail> {
     let meta = match api::playlist::detail(transport, id, 0).await {
         Ok(result) => result.playlist,
         Err(error) => {
             if intent == PlaylistLoad::Preview
                 && let Some(store) = persist
-                && let Some(entries) = cache::try_load_stale(store, id).await
+                && let Some(mut playlist) = cache::try_load_stale(store, id).await
             {
                 mineral_log::warn!(target: "netease", playlist = %id, error = mineral_log::chain(&error),
                     "歌单预览使用旧缓存，完整性未确认");
+                playlist.entries = playlist
+                    .entries
+                    .into_iter()
+                    .take_while(|entry| entry.index.get() < config.batch_size().get() as u64)
+                    .collect();
                 return Ok(PlaylistDetail {
-                    playlist: Playlist::builder()
-                        .id(id.clone())
-                        .name(String::new())
-                        .entries(
-                            entries
-                                .into_iter()
-                                .take_while(|entry| {
-                                    entry.index.get() < config.batch_size().get() as u64
-                                })
-                                .collect(),
-                        )
-                        .build(),
+                    playlist,
                     complete: false,
                     next_offset: None,
                 });
@@ -131,11 +127,13 @@ async fn fetch(
             song_id: song_id.clone(),
         })
         .collect::<Vec<_>>();
+    let web_url = WebPage::Playlist(meta.id).into_url()?;
     if let Some(scope) = persist
         && let Err(error) = scope
             .put_playlist_cache(
                 id,
                 Some(&meta.name),
+                Some(&web_url),
                 Some(meta.track_update_time),
                 &relations,
             )
@@ -166,7 +164,7 @@ async fn fetch(
         let fetched = tracks
             .into_iter()
             .map(convert::album_song_to_model)
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         mineral_log::debug!(target: "netease", playlist = %id, batch, requested, returned = fetched.len(), "歌单歌曲详情批次完成");
         if fetched.len() != requested {
             mineral_log::warn!(target: "netease", playlist = %id, batch, requested, returned = fetched.len(),
@@ -188,7 +186,7 @@ async fn fetch(
     mineral_log::info!(target: "netease", playlist = %id, ?intent, total = ids.len(), loaded = entries.len(), complete,
         "歌单曲目加载完成");
     Ok(PlaylistDetail {
-        playlist: convert::playlist_info_to_model(&meta, entries),
+        playlist: convert::playlist_info_to_model(&meta, entries)?,
         complete,
         next_offset: (!complete).then_some(checked as u64),
     })

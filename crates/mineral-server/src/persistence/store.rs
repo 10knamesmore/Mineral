@@ -801,6 +801,7 @@ mod tests {
         s.put_playlist_cache(
             &pid,
             Some("歌单"),
+            None,
             Some(1),
             &[CachedPlaylistEntry {
                 index: CollectionIndex::new(0),

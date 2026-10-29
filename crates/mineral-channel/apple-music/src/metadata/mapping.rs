@@ -38,6 +38,7 @@ fn song_metadata(
         .album(album.cloned())
         .duration_ms(attributes.duration_ms)
         .cover_url(attributes.cover.clone())
+        .web_url(attributes.web_url.clone())
         .unavailable(!attributes.playable)
         .build()
 }
@@ -70,6 +71,7 @@ pub(super) fn album(resource: &AlbumResource) -> Result<Album> {
         .company(attributes.record_label.clone())
         .track_count(attributes.track_count)
         .cover_url(attributes.cover.clone())
+        .web_url(attributes.web_url.clone())
         .publish_time_ms(attributes.publish_time_ms)
         .build())
 }
@@ -88,6 +90,7 @@ pub(super) fn playlist(resource: &PlaylistResource) -> Result<Playlist> {
         ))
         .name(attributes.name.clone())
         .cover_url(attributes.cover.clone())
+        .web_url(attributes.web_url.clone())
         .track_count(track_count)
         .build();
     if let Some(description) = &attributes.description {
@@ -104,6 +107,7 @@ pub(super) fn artist(resource: &ArtistResource) -> Result<Artist> {
         .id(ArtistId::new(SourceKind::APPLE_MUSIC, resource.id.as_str()))
         .name(attributes.name.clone())
         .avatar_url(attributes.cover.clone())
+        .web_url(attributes.web_url.clone())
         .build();
     if let Some(description) = &attributes.description {
         artist.description.clone_from(description);

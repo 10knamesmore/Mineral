@@ -7,6 +7,7 @@ use mineral_model::{
     SourceKind, StoreValue,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use url::Url;
 
 /// A failed operation through a storage interface.
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +49,9 @@ pub struct CachedPlaylistEntry {
 pub struct PlaylistCacheEntry {
     /// 歌单名(可空)。
     pub name: Option<String>,
+
+    /// 抓取时的网页分享地址。
+    pub web_url: Option<Url>,
 
     /// 抓取时刻 unix ms。
     pub fetched_at: i64,
@@ -125,6 +129,7 @@ pub trait NamespaceStore: Send + Sync {
         &self,
         id: &PlaylistId,
         name: Option<&str>,
+        web_url: Option<&Url>,
         track_update_time: Option<i64>,
         entries: &[CachedPlaylistEntry],
     ) -> StoreResult<()>;

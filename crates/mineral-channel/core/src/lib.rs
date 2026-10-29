@@ -9,7 +9,7 @@ pub mod caps;
 pub mod error;
 /// 列表分页参数与单页结果。
 pub mod page;
-pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps, render_web_url};
+pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps};
 pub use error::{Error, Result};
 pub use page::{Page, PageResult};
 mod playlist;

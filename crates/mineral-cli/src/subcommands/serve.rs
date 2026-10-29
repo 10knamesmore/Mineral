@@ -79,7 +79,7 @@ pub async fn run(
         .build();
     // 投递句柄是热重载间接层:daemon 恒持有(初始无脚本也可经重载升级为有)。
     let script_sender = script.sender().clone();
-    let (script_runtime, pumps) = script.spawn_runtime(watchdog, sources.channels());
+    let (script_runtime, pumps) = script.spawn_runtime(watchdog);
     let (stats, stats_actor) = spawn_recorder(&config).await;
     // 留一份句柄给停机路径记 app_lifecycle stop + 发 Shutdown(server 会 move 走原句柄)。
     let stats_stop = stats.clone();

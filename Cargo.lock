@@ -3289,6 +3289,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "typed-builder",
+ "url",
 ]
 
 [[package]]
@@ -3604,7 +3605,6 @@ version = "0.5.10"
 dependencies = [
  "color-eyre",
  "derive-getters",
- "mineral-channel-core",
  "mineral-config",
  "mineral-log",
  "mineral-model",

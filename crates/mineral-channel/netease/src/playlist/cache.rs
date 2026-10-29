@@ -4,7 +4,7 @@
 //! 预览的轻请求失败时可以重建旧关系；完整请求不能用旧缓存冒充成功。
 
 use mineral_channel_core::store::{CachedPlaylistEntry, NamespaceStore};
-use mineral_model::{CollectionIndex, PlaylistEntry, PlaylistId, SongId, SourceKind};
+use mineral_model::{CollectionIndex, Playlist, PlaylistEntry, PlaylistId, SongId, SourceKind};
 
 /// 版本比对决策:本地缓存能否直接复用(复用已有 metadata)。纯函数,便于单测。
 ///
@@ -80,11 +80,8 @@ pub async fn try_rebuild_if_current(
 ///   - `id`: 歌单 id
 ///
 /// # Return:
-///   有缓存且能重建出至少一条 relation 返回 `Some(Vec<PlaylistEntry>)`,否则 `None`。
-pub async fn try_load_stale(
-    persist: &dyn NamespaceStore,
-    id: &PlaylistId,
-) -> Option<Vec<PlaylistEntry>> {
+///   有缓存且能重建出至少一条 relation 返回歌单头部及曲目，否则 `None`。
+pub async fn try_load_stale(persist: &dyn NamespaceStore, id: &PlaylistId) -> Option<Playlist> {
     let entry = match persist.get_playlist_cache(id).await {
         Ok(Some(e)) => e,
         Ok(None) => return None,
@@ -97,7 +94,14 @@ pub async fn try_load_stale(
     if entries.is_empty() {
         None
     } else {
-        Some(entries)
+        Some(
+            Playlist::builder()
+                .id(id.clone())
+                .name(entry.name.unwrap_or_default())
+                .web_url(entry.web_url)
+                .entries(entries)
+                .build(),
+        )
     }
 }
 
@@ -170,7 +174,7 @@ mod tests {
             .collect::<Vec<_>>();
         persist
             .scope(SourceKind::NETEASE)
-            .put_playlist_cache(id, name, version, &relations)
+            .put_playlist_cache(id, name, None, version, &relations)
             .await
     }
 
@@ -200,7 +204,7 @@ mod tests {
             .await
             .ok_or_else(|| color_eyre::eyre::eyre!("已写入歌单应能重建"))?;
         assert_eq!(
-            rebuilt,
+            rebuilt.entries,
             entries
                 .into_iter()
                 .filter(|entry| entry.song.source() == SourceKind::NETEASE)
@@ -316,6 +320,7 @@ mod tests {
             return Err(color_eyre::eyre::eyre!("有缓存应能降级重建"));
         };
         let got = rebuilt
+            .entries
             .iter()
             .map(|entry| entry.song.id.value().to_owned())
             .collect::<Vec<String>>();
@@ -336,6 +341,7 @@ mod tests {
             .put_playlist_cache(
                 &id,
                 Some("我的歌单"),
+                None,
                 Some(700),
                 &[
                     CachedPlaylistEntry {
@@ -358,6 +364,7 @@ mod tests {
         };
         assert_eq!(
             rebuilt
+                .entries
                 .iter()
                 .map(|entry| entry.index.get())
                 .collect::<Vec<u64>>(),

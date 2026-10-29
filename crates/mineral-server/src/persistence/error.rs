@@ -1,5 +1,7 @@
 //! Failures at this storage boundary.
 
+use url::ParseError;
+
 /// A failed storage operation.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -84,6 +86,14 @@ pub enum Error {
         /// Failed conversion.
         #[from]
         source: std::num::TryFromIntError,
+    },
+
+    /// A stored entity webpage address is not a valid URL.
+    #[error("invalid stored entity web URL")]
+    InvalidWebUrl {
+        /// URL parsing failure.
+        #[from]
+        source: ParseError,
     },
 
     /// A key reserved for a first-class field was used in the open KV store.

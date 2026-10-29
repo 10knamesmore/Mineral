@@ -1,6 +1,6 @@
 ---
 source: crates/mineral-channel/netease/src/convert.rs
-description: 歌手详情映射成统一 Artist(Beyond + 1 热门曲)
+description: artist 详情映射成统一 Artist(Beyond + 1 热门曲)
 expression: model
 ---
 Artist {
@@ -40,6 +40,25 @@ Artist {
             },
         ),
     ),
+    web_url: Some(
+        Url {
+            scheme: "https",
+            cannot_be_a_base: false,
+            username: "",
+            password: None,
+            host: Some(
+                Domain(
+                    "music.163.com",
+                ),
+            ),
+            port: None,
+            path: "/artist",
+            query: Some(
+                "id=11127",
+            ),
+            fragment: None,
+        },
+    ),
     songs: [
         Song {
             id: SongId {
@@ -76,6 +95,25 @@ Artist {
                 323000,
             ),
             cover_url: None,
+            web_url: Some(
+                Url {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "music.163.com",
+                        ),
+                    ),
+                    port: None,
+                    path: "/song",
+                    query: Some(
+                        "id=1",
+                    ),
+                    fragment: None,
+                },
+            ),
             source_url: None,
             unavailable: false,
         },

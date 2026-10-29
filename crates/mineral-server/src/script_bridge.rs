@@ -13,7 +13,7 @@ use mineral_protocol::{DownloadTarget, Event};
 use mineral_script::mlua::Lua;
 use mineral_script::{
     PlaylistBrief, QueryId, ResolveValue, ScriptCmd, ScriptHost, ScriptRuntime, ScriptSender,
-    SourceWebUrls, WatchdogConfig,
+    WatchdogConfig,
 };
 use num_traits::ToPrimitive;
 use tokio::sync::broadcast;
@@ -105,32 +105,12 @@ impl ScriptParts {
     ///
     /// # Params:
     ///   - `watchdog`: 回调看门狗参数(配置 `script` 段派生)
-    ///   - `channels`: 已注册音乐源(收集各源网页链接模板,seed 进 VM 供
-    ///     Song/Playlist 投影拼 `url`;热重载的新 VM 复用同一份)
     ///
     /// # Return:
     ///   `(runtime, rest)`:runtime 为 `None` 表示无脚本;rest 是泵 + 热重载接线件。
     #[must_use]
-    pub fn spawn_runtime(
-        self,
-        watchdog: WatchdogConfig,
-        channels: &[Arc<dyn mineral_channel_core::MusicChannel>],
-    ) -> (Option<ScriptRuntime>, ScriptPumps) {
-        let web_urls = channels
-            .iter()
-            .map(|ch| {
-                let caps = ch.caps();
-                SourceWebUrls {
-                    source: ch.source().name().to_owned(),
-                    song: caps.song_web_url().clone(),
-                    playlist: caps.playlist_web_url().clone(),
-                    album: caps.album_web_url().clone(),
-                    artist: caps.artist_web_url().clone(),
-                }
-            })
-            .collect::<Vec<SourceWebUrls>>();
+    pub fn spawn_runtime(self, watchdog: WatchdogConfig) -> (Option<ScriptRuntime>, ScriptPumps) {
         let runtime = self.vm.and_then(|lua| {
-            seed_web_urls(&lua, &web_urls);
             match ScriptRuntime::spawn(lua, self.host.clone(), watchdog, &self.sender) {
                 Ok(runtime) => Some(runtime),
                 Err(e) => {
@@ -151,20 +131,8 @@ impl ScriptParts {
                 cmd_tx: self.cmd_tx,
                 push_tx: self.push_tx,
                 watchdog,
-                web_urls,
             },
         )
-    }
-}
-
-/// 把各源网页链接模板 seed 进 VM;失败只降级(`url` 为 nil),不阻断脚本启动。
-pub(crate) fn seed_web_urls(lua: &Lua, web_urls: &[SourceWebUrls]) {
-    if let Err(e) = mineral_script::seed_web_url_templates(lua, web_urls.iter().cloned()) {
-        mineral_log::warn!(
-            target: "script",
-            error = mineral_log::chain(&e),
-            "网页链接模板 seed 失败,实体 url 字段降级为 nil"
-        );
     }
 }
 
@@ -184,9 +152,6 @@ pub struct ScriptPumps {
 
     /// 看门狗参数(热重载起新线程复用)。
     watchdog: WatchdogConfig,
-
-    /// 各源网页链接模板(热重载的新 VM 重新 seed 用;caps 启动后不变)。
-    web_urls: Vec<SourceWebUrls>,
 }
 
 /// `ScriptPumps::start` 拆出的热重载接线件(交给
@@ -200,9 +165,6 @@ pub struct ScriptReloadParts {
 
     /// 看门狗参数(重载起新线程用)。
     pub(crate) watchdog: WatchdogConfig,
-
-    /// 各源网页链接模板(重载的新 VM 重新 seed 用)。
-    pub(crate) web_urls: Vec<SourceWebUrls>,
 
     /// 配置底树落点:重载成功后把新合成树交给配置宿主(重算有效树 +
     /// 推送订阅 client)。
@@ -235,7 +197,6 @@ impl ScriptPumps {
             cmd_tx,
             push_tx,
             watchdog,
-            web_urls,
         } = self;
         // player 随后被泵任务 move 走,先留一份埋点句柄给重载器。
         let stats = player.inner.stats.clone();
@@ -280,7 +241,6 @@ impl ScriptPumps {
             cmd_tx,
             push_tx,
             watchdog,
-            web_urls,
             apply_config_base,
             stats,
         }

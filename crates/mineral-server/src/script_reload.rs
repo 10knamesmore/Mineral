@@ -139,7 +139,6 @@ fn reload_once(
         report_reload_failure(parts, runtime.is_some(), detail);
         return;
     };
-    crate::script_bridge::seed_web_urls(&lua, &parts.web_urls);
     match ScriptRuntime::spawn(lua, host, parts.watchdog, sender) {
         Ok(new_runtime) => {
             // spawn 已原子挂接新 sender；Drop 旧 runtime 只停止它自己的线程。
@@ -302,7 +301,6 @@ mod tests {
                     cmd_tx,
                     push_tx,
                     watchdog: lax_watchdog(),
-                    web_urls: Vec::new(),
                     apply_config_base: Arc::new(move |tree| *config_base.lock() = tree),
                     stats,
                 },
