@@ -103,7 +103,7 @@ pub use copy::CopyTemplateCtx;
 pub use hooks::{
     BeforeDownloadCtx, BeforeStreamCtx, HookDecision, HookKind, HookMode, RewriteSpec,
 };
-pub use host::{ScriptHost, SourceWebUrls, install_daemon_api, seed_web_url_templates};
+pub use host::{ScriptHost, install_daemon_api};
 pub use lua_stub::TYPES_META;
 pub use message::{
     ConfigOverrideOp, CurateOutcome, CuratedEntry, PlaylistBrief, QueryId, ResolveValue, ScriptCmd,

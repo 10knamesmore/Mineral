@@ -1,6 +1,7 @@
 use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
+use url::Url;
 
 use crate::{collection::PlaylistEntry, ids::PlaylistId, source::SourceKind, url::MediaUrl};
 
@@ -37,6 +38,10 @@ pub struct Playlist {
     /// 封面 URL。
     #[builder(default)]
     pub cover_url: Option<MediaUrl>,
+
+    /// 此歌单的网页分享地址；私人或纯本地歌单可以没有公开页面。
+    #[builder(default)]
+    pub web_url: Option<Url>,
 
     /// 标称曲目数(可能与 `entries.len()` 不一致——分页或仅头部加载时)。
     #[builder(default)]

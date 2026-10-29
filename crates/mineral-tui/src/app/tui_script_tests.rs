@@ -384,7 +384,7 @@ fn tui_file_reload_is_transactional_and_deletion_clears_settings() -> color_eyre
     Ok(())
 }
 
-/// Local copy callbacks keep closure state, seeded URLs and transactional TUI effects.
+/// Local copy callbacks keep closure state, entity URLs and transactional TUI effects.
 #[test]
 fn local_copy_callbacks_validate_effects_before_committing() -> color_eyre::Result<()> {
     let dir = tempfile::tempdir()?;
@@ -422,33 +422,26 @@ fn local_copy_callbacks_validate_effects_before_committing() -> color_eyre::Resu
         1,
     )?;
     let mut app = app_with_library(1, 0)?;
-    let song = mineral_test::song("s1");
-    app.state.models.caps.insert(
-        song.source(),
-        mineral_channel_core::ChannelCaps::builder()
-            .searchable(Vec::new())
-            .playlist_edit(false)
-            .artist_sections(mineral_channel_core::ArtistSections::new(Vec::new()))
-            .song_web_url(Some("https://music.example/song/{id}".to_owned()))
-            .build(),
-    );
-    app.start_tui_script(path);
+    let mut song = mineral_test::song("s1");
     let url = format!("https://music.example/song/{}", song.id.value());
+    song.web_url = Some(url.parse()?);
+    let context = CopyTemplateCtx::Song(Box::new(song));
+    app.start_tui_script(path);
     assert_eq!(
-        app.render_local_copy_template(0, song_context())?,
+        app.render_local_copy_template(0, context.clone())?,
         format!("{url}:1")
     );
     assert_eq!(*app.state.cfg.behavior().volume_step(), 27);
     assert!(app.notifications.has_live_card("copy"));
     assert!(app.tui_script.title.is_some());
     assert_eq!(
-        app.render_local_copy_template(0, song_context())?,
+        app.render_local_copy_template(0, context.clone())?,
         format!("{url}:2")
     );
     assert_eq!(*app.state.cfg.behavior().volume_step(), 18);
     let cfg = Arc::clone(&app.state.cfg);
     let title = app.tui_script.title.clone();
-    assert!(app.render_local_copy_template(1, song_context()).is_err());
+    assert!(app.render_local_copy_template(1, context).is_err());
     assert!(Arc::ptr_eq(&cfg, &app.state.cfg));
     assert_eq!(app.tui_script.title, title);
     assert!(!app.notifications.has_live_card("copy-failed"));

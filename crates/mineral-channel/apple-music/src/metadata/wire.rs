@@ -6,6 +6,7 @@ use html2text::render::TrivialDecorator;
 use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, MediaUrl, SourceKind};
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
+use url::Url;
 
 use super::data::{
     AlbumAttributes, AlbumResource, ArtistAttributes, ArtistResource, PlaylistAttributes,
@@ -143,6 +144,8 @@ struct Relationships {
 struct Attributes {
     name: String,
 
+    url: Option<Url>,
+
     artwork: Option<Artwork>,
 
     duration_in_millis: Option<u64>,
@@ -228,6 +231,7 @@ fn song_attributes(attributes: Attributes) -> Result<SongAttributes> {
     Ok(SongAttributes {
         name: attributes.name,
         cover: cover(attributes.artwork)?,
+        web_url: attributes.url,
         duration_ms: attributes.duration_in_millis,
         playable: attributes.play_params.is_some(),
     })
@@ -255,30 +259,40 @@ impl MetadataResource for AlbumResource {
 
 impl DecodeResource for AlbumResource {
     fn decode(resource: Resource) -> Result<Self> {
-        let attributes = resource
-            .attributes
-            .map(|attributes| {
-                Ok::<_, Error>(AlbumAttributes {
-                    name: attributes.name,
-                    cover: cover(attributes.artwork)?,
-                    track_count: attributes.track_count,
-                    publish_time_ms: attributes.release_date.map(release_date).transpose()?,
-                    record_label: attributes.record_label,
-                })
-            })
-            .transpose()?;
+        let id = resource.kind.identity(Self::KIND, resource.id)?;
         let catalog = resource
             .relationships
             .catalog
             .into_iter()
             .flat_map(|page| page.data)
             .find(|resource| resource.kind == ResourceType::Albums);
+        let catalog_url = catalog
+            .as_ref()
+            .and_then(|resource| resource.attributes.as_ref())
+            .and_then(|attributes| attributes.url.clone());
+        let attributes = resource
+            .attributes
+            .map(|attributes| {
+                Ok::<_, Error>(AlbumAttributes {
+                    name: attributes.name,
+                    cover: cover(attributes.artwork)?,
+                    // A saved subset shares its catalog album, not personal library membership.
+                    web_url: match &id {
+                        ResourceId::Catalog(_) => attributes.url,
+                        ResourceId::Library(_) => catalog_url,
+                    },
+                    track_count: attributes.track_count,
+                    publish_time_ms: attributes.release_date.map(release_date).transpose()?,
+                    record_label: attributes.record_label,
+                })
+            })
+            .transpose()?;
         let artists = match catalog {
             Some(catalog) => catalog.relationships.artists,
             None => resource.relationships.artists,
         };
         Ok(Self {
-            id: resource.kind.identity(Self::KIND, resource.id)?,
+            id,
             attributes,
             artists: artist_references(artists),
             tracks: resource
@@ -325,6 +339,7 @@ impl DecodeResource for ArtistResource {
                 Ok::<_, Error>(ArtistAttributes {
                     name: attributes.name,
                     cover: cover(attributes.artwork)?,
+                    web_url: attributes.url,
                     description,
                 })
             })
@@ -370,6 +385,7 @@ impl DecodeResource for PlaylistResource {
                 Ok::<_, Error>(PlaylistAttributes {
                     name: attributes.name,
                     cover: cover(attributes.artwork)?,
+                    web_url: attributes.url,
                     description: attributes
                         .description
                         .map(|description| description.standard),

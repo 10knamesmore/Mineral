@@ -89,7 +89,13 @@ async fn channel_writes_reject_foreign_identities() -> color_eyre::Result<()> {
         );
         assert_foreign(
             &channel
-                .put_playlist_cache(&PlaylistId::new(SourceKind::LOCAL, "42"), None, None, &[])
+                .put_playlist_cache(
+                    &PlaylistId::new(SourceKind::LOCAL, "42"),
+                    None,
+                    None,
+                    None,
+                    &[],
+                )
                 .await,
         );
         assert!(channel.list_meta().await?.is_empty());

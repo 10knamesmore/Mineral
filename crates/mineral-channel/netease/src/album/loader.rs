@@ -63,7 +63,7 @@ impl AlbumLoader {
         let loaded_at = Utc::now();
         let lifetime = self.lifetime(id, loaded_at);
         let entry = AlbumCacheEntry {
-            album: convert::album_detail_to_model(dto),
+            album: convert::album_detail_to_model(dto)?,
             expired_at: loaded_at + lifetime,
         };
         if let Some(store) = persist

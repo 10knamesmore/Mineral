@@ -6,11 +6,12 @@ use sea_orm::sea_query::{self, Expr, Func, Iden, OnConflict};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
 };
+use url::Url;
 
 use crate::persistence::db::namespace::NamespaceStore;
 use crate::persistence::entity::{song_artists, song_meta};
 
-/// 每条 metadata 绑定八个字段，分批控制语句大小与参数数量。
+/// 每条 metadata 绑定九个字段，分批控制语句大小与参数数量。
 const BATCH_ROWS: usize = 100;
 
 impl NamespaceStore {
@@ -112,7 +113,7 @@ impl NamespaceStore {
     ///
     /// song_meta 是**富化程度不一的投影**的落点(同一首歌可能先由列表投影写入、后被 detail
     /// 投影刷新,反之亦然),统一一条合并规则:**「本次输入缺失该字段 = 无新信息 → 保留旧值」**。
-    /// 标量富化字段(alias / album / duration / cover)用 SQL NULL 表达「缺失」,走
+    /// 标量富化字段(alias / album / duration / cover / web_url)用 SQL NULL 表达「缺失」,走
     /// `COALESCE(excluded.x, song_meta.x)`;艺人列表用**空 Vec** 表达「缺失」,空则跳过重写、
     /// 保留已存行,非空才按 [`Song::artists`] 顺序整体重写(先删后插,`position` 即下标)。
     /// name 是 NOT NULL 列、每个投影必带,恒以新值为准。
@@ -201,6 +202,7 @@ async fn write_metadata(
                     },
                 )?),
                 cover_url: Set(song.cover_url.as_ref().map(MediaUrl::to_string)),
+                web_url: Set(song.web_url.as_ref().map(Url::to_string)),
             })
         })
         .collect::<crate::persistence::Result<Vec<_>>>()?;
@@ -213,6 +215,7 @@ async fn write_metadata(
         song_meta::Column::AlbumName,
         song_meta::Column::DurationMs,
         song_meta::Column::CoverUrl,
+        song_meta::Column::WebUrl,
     ] {
         merge.value(
             column,

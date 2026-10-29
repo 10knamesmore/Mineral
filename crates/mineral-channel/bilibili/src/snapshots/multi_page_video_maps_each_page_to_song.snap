@@ -49,6 +49,23 @@ Album {
             },
         ),
     ),
+    web_url: Some(
+        Url {
+            scheme: "https",
+            cannot_be_a_base: false,
+            username: "",
+            password: None,
+            host: Some(
+                Domain(
+                    "www.bilibili.com",
+                ),
+            ),
+            port: None,
+            path: "/video/BV1xx",
+            query: None,
+            fragment: None,
+        },
+    ),
     tracks: [
         AlbumTrack {
             index: CollectionIndex(
@@ -106,6 +123,25 @@ Album {
                             fragment: None,
                         },
                     ),
+                ),
+                web_url: Some(
+                    Url {
+                        scheme: "https",
+                        cannot_be_a_base: false,
+                        username: "",
+                        password: None,
+                        host: Some(
+                            Domain(
+                                "www.bilibili.com",
+                            ),
+                        ),
+                        port: None,
+                        path: "/video/BV1xx",
+                        query: Some(
+                            "p=1",
+                        ),
+                        fragment: None,
+                    },
                 ),
                 source_url: None,
                 unavailable: false,
@@ -167,6 +203,25 @@ Album {
                             fragment: None,
                         },
                     ),
+                ),
+                web_url: Some(
+                    Url {
+                        scheme: "https",
+                        cannot_be_a_base: false,
+                        username: "",
+                        password: None,
+                        host: Some(
+                            Domain(
+                                "www.bilibili.com",
+                            ),
+                        ),
+                        port: None,
+                        path: "/video/BV1xx",
+                        query: Some(
+                            "p=2",
+                        ),
+                        fragment: None,
+                    },
                 ),
                 source_url: None,
                 unavailable: false,

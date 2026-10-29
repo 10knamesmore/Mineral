@@ -6,6 +6,7 @@ use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
+use url::Url;
 
 use crate::persistence::ServerStore;
 use crate::persistence::entity::{
@@ -254,6 +255,7 @@ impl NamespaceStore {
     /// # Params:
     ///   - `id`: 歌单 id
     ///   - `name`: 歌单名(可空)
+    ///   - `web_url`: 来源提供的歌单网页地址(可空)
     ///   - `track_update_time`: 歌单版本戳(网易云 `trackUpdateTime`,可空)
     ///   - `entries`: 显式 index + SongId relation，Song namespace 不由 Playlist 隐含
     ///
@@ -263,6 +265,7 @@ impl NamespaceStore {
         &self,
         id: &PlaylistId,
         name: Option<&str>,
+        web_url: Option<&Url>,
         track_update_time: Option<i64>,
         entries: &[CachedPlaylistEntry],
     ) -> crate::persistence::Result<()> {
@@ -284,6 +287,7 @@ impl NamespaceStore {
             namespace: Set(ns.to_owned()),
             playlist_id: Set(pid.to_owned()),
             name: Set(name.map(str::to_owned)),
+            web_url: Set(web_url.map(Url::to_string)),
             fetched_at: Set(crate::persistence::db::time::now_ms()),
             track_update_time: Set(track_update_time),
         })
@@ -294,6 +298,7 @@ impl NamespaceStore {
             ])
             .update_columns([
                 playlist_cache::Column::Name,
+                playlist_cache::Column::WebUrl,
                 playlist_cache::Column::FetchedAt,
                 playlist_cache::Column::TrackUpdateTime,
             ])
@@ -401,6 +406,7 @@ impl NamespaceStore {
             .collect::<crate::persistence::Result<Vec<_>>>()?;
         Ok(Some(PlaylistCacheEntry {
             name: head.name,
+            web_url: head.web_url.as_deref().map(Url::parse).transpose()?,
             fetched_at: head.fetched_at,
             track_update_time: head.track_update_time,
             entries,
@@ -506,8 +512,14 @@ mod tests {
             cached(3, SourceKind::BILIBILI, "s2"),
             cached(9, SourceKind::NETEASE, "s3"),
         ];
-        s.put_playlist_cache(&pid, Some("我的歌单"), Some(1_775_781_450_653), &entries)
-            .await?;
+        s.put_playlist_cache(
+            &pid,
+            Some("我的歌单"),
+            None,
+            Some(1_775_781_450_653),
+            &entries,
+        )
+        .await?;
         let got = s.get_playlist_cache(&pid).await?;
         assert!(got.is_some());
         if let Some(g) = got {
@@ -531,6 +543,7 @@ mod tests {
         s.put_playlist_cache(
             &pid,
             Some("v1"),
+            None,
             Some(100),
             &[
                 cached(0, SourceKind::NETEASE, "a"),
@@ -541,6 +554,7 @@ mod tests {
         s.put_playlist_cache(
             &pid,
             Some("v2"),
+            None,
             Some(200),
             &[cached(5, SourceKind::BILIBILI, "c")],
         )

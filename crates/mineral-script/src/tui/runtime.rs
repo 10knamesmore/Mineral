@@ -6,7 +6,7 @@ use mlua::Lua;
 use parking_lot::Mutex;
 
 use super::TuiCommand;
-use crate::{CopyTemplateCtx, Error, Result, SourceWebUrls, WatchdogConfig};
+use crate::{CopyTemplateCtx, Result, WatchdogConfig};
 
 /// Lua API 的命令暂存区；每次成功求值或渲染后交还给 TUI。
 #[derive(Clone, Debug, Default)]
@@ -72,22 +72,5 @@ impl TuiRuntime {
             "local copy template rendered"
         );
         Ok((text, commands))
-    }
-
-    /// 保存各来源网页模板，之后的本地实体投影据此生成 url 字段。
-    ///
-    /// # Params:
-    ///   - `urls`: TUI 已知的来源模板；缺席的实体网页链接为 nil
-    ///
-    /// # Return:
-    ///   写入结果；不执行复制回调，也不产生界面效果。
-    pub fn seed_web_url_templates(
-        &self,
-        urls: impl IntoIterator<Item = SourceWebUrls>,
-    ) -> Result<()> {
-        crate::seed_web_url_templates(&self.lua, urls).map_err(|source| Error::Lua {
-            operation: "保存 TUI 网页链接模板",
-            source,
-        })
     }
 }

@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use mineral_model::{AlbumId, AlbumRef, ArtistId, ArtistRef, MediaUrl, Song, SongId, SourceKind};
 use sea_orm::FromQueryResult;
+use url::Url;
 
 pub(crate) use crate::persistence::entity::song_meta::Model as SongMetaRow;
 
@@ -24,8 +25,9 @@ impl SongMetaRow {
     ///   - `artists`: 该歌的艺人行(调用方保证顺序)
     ///
     /// # Return:
-    ///   重建的 [`Song`];`duration_ms` 负值(库损坏)时报错。
+    ///   重建的 [`Song`];`duration_ms` 负值或网页地址无效(库损坏)时报错。
     pub(crate) fn into_song(self, artists: Vec<SongArtistRow>) -> crate::persistence::Result<Song> {
+        let web_url = self.web_url.as_deref().map(Url::parse).transpose()?;
         let source = SourceKind::from_name(&self.namespace);
         let artists = artists
             .into_iter()
@@ -58,6 +60,7 @@ impl SongMetaRow {
             .album(album)
             .duration_ms(duration_ms)
             .cover_url(cover_url)
+            .web_url(web_url)
             .build())
     }
 }

@@ -8,12 +8,39 @@ use mineral_model::{
 };
 use mineral_playback::DirectMedia;
 use rustc_hash::FxHashMap;
+use url::Url;
 
+use crate::Result;
 use crate::wire::album::SavedAlbum;
 use crate::wire::artist::{ArtistAlbum, ArtistAlbumsResult, ArtistDetailResult};
 use crate::wire::playlist::{PlaylistInfo, TrackId};
 use crate::wire::search::{AlbumDetailResult, SearchAlbum, SearchArtist, SearchPlaylist};
 use crate::wire::song::{AlbumSong, Artist as WireArtist, SongUrl};
+
+pub(crate) enum WebPage {
+    Song(i64),
+
+    Album(i64),
+
+    Artist(i64),
+
+    Playlist(i64),
+}
+
+impl WebPage {
+    pub(crate) fn into_url(self) -> Result<Url> {
+        let (path, id) = match self {
+            Self::Song(id) => ("song", id),
+            Self::Album(id) => ("album", id),
+            Self::Artist(id) => ("artist", id),
+            Self::Playlist(id) => ("playlist", id),
+        };
+        let mut url = Url::parse("https://music.163.com/")?;
+        url.set_path(path);
+        url.query_pairs_mut().append_pair("id", &id.to_string());
+        Ok(url)
+    }
+}
 
 /// 把网易 JSON 里的字符串字段(永远是 http(s) URL)转成 `MediaUrl::Remote`。
 ///
@@ -52,8 +79,9 @@ pub(crate) fn album_artist_refs(
 /// 专辑元信息 DTO + 已解析曲目 → 统一 [`Album`]。
 ///
 /// 搜索与详情共用:搜索结果只有元信息(`songs` 传空),详情端点元信息 + 曲目都全。
-pub(crate) fn album_dto_to_model(a: SearchAlbum, tracks: Vec<AlbumTrack>) -> Album {
-    Album::builder()
+pub(crate) fn album_dto_to_model(a: SearchAlbum, tracks: Vec<AlbumTrack>) -> Result<Album> {
+    Ok(Album::builder()
+        .web_url(Some(WebPage::Album(a.id).into_url()?))
         .id(AlbumId::new(SourceKind::NETEASE, a.id.to_string()))
         .name(a.name)
         .artists(album_artist_refs(a.artists, a.artist))
@@ -63,27 +91,28 @@ pub(crate) fn album_dto_to_model(a: SearchAlbum, tracks: Vec<AlbumTrack>) -> Alb
         .track_count(Some(a.size))
         .cover_url(a.pic_url.as_deref().and_then(parse_remote))
         .tracks(tracks)
-        .build()
+        .build())
 }
 
 /// 账号收藏列表保留全部艺人和未知曲目数，不推导曲目或收藏时间。
-pub(crate) fn saved_album_to_model(album: SavedAlbum) -> Album {
-    Album::builder()
+pub(crate) fn saved_album_to_model(album: SavedAlbum) -> Result<Album> {
+    Ok(Album::builder()
+        .web_url(Some(WebPage::Album(album.id).into_url()?))
         .id(AlbumId::new(SourceKind::NETEASE, album.id.to_string()))
         .name(album.name)
         .artists(album_artist_refs(album.artists, None))
         .track_count(album.size)
         .cover_url(parse_remote_opt(album.pic_url.as_deref()))
-        .build()
+        .build())
 }
 
 /// 专辑详情响应(元信息 + 曲目)→ 统一 [`Album`]。
-pub(crate) fn album_detail_to_model(r: AlbumDetailResult) -> Album {
+pub(crate) fn album_detail_to_model(r: AlbumDetailResult) -> Result<Album> {
     let songs = r
         .songs
         .into_iter()
         .map(album_song_to_model)
-        .collect::<Vec<Song>>();
+        .collect::<Result<Vec<Song>>>()?;
     album_dto_to_model(r.album, AlbumTrack::enumerate(songs))
 }
 
@@ -91,8 +120,12 @@ pub(crate) fn album_detail_to_model(r: AlbumDetailResult) -> Album {
 ///
 /// 详情与用户列表共用:详情端点元信息 + 曲目都有(`songs` 传全拉/缓存重建的曲目);
 /// 用户列表项只有元信息(`songs` 传空)。
-pub(crate) fn playlist_info_to_model(info: &PlaylistInfo, entries: Vec<PlaylistEntry>) -> Playlist {
-    Playlist::builder()
+pub(crate) fn playlist_info_to_model(
+    info: &PlaylistInfo,
+    entries: Vec<PlaylistEntry>,
+) -> Result<Playlist> {
+    Ok(Playlist::builder()
+        .web_url(Some(WebPage::Playlist(info.id).into_url()?))
         .id(PlaylistId::new(SourceKind::NETEASE, info.id.to_string()))
         .name(info.name.clone())
         .description(info.description.clone())
@@ -101,7 +134,7 @@ pub(crate) fn playlist_info_to_model(info: &PlaylistInfo, entries: Vec<PlaylistE
         .play_count(info.play_count)
         .subscriber_count(info.subscribed_count)
         .entries(entries)
-        .build()
+        .build())
 }
 
 /// 以 authoritative `trackIds[]` array coordinate join Song metadata，保留缺 metadata 的 gap。
@@ -139,8 +172,9 @@ pub(crate) fn playlist_entries_from_order(
 }
 
 /// 专辑/歌单/artist 详情里的 [`AlbumSong`](ar/al/dt 字段风格)→ 统一 [`Song`]。
-pub(crate) fn album_song_to_model(s: AlbumSong) -> Song {
-    Song::builder()
+pub(crate) fn album_song_to_model(s: AlbumSong) -> Result<Song> {
+    Ok(Song::builder()
+        .web_url(Some(WebPage::Song(s.id).into_url()?))
         .id(SongId::new(SourceKind::NETEASE, s.id.to_string()))
         .name(s.name)
         // 别名优先取译名(tns),译名无效再退网易「别名」(alia:副标题/罗马音/出处)——tns 更有
@@ -167,24 +201,26 @@ pub(crate) fn album_song_to_model(s: AlbumSong) -> Song {
         .duration_ms((s.dt > 0).then_some(s.dt))
         .cover_url(s.al.pic_url.as_deref().and_then(parse_remote))
         .unavailable(s.privilege.as_ref().is_some_and(|p| p.st < 0))
-        .build()
+        .build())
 }
 
 /// 搜索结果 artist DTO → 统一 [`Artist`]。
 ///
 /// 搜索只给元信息 + 粉丝数(`fansSize`),不含简介/热门曲——简介与曲目按需走 `artist_detail`。
-pub(crate) fn search_artist_to_model(a: SearchArtist) -> Artist {
-    Artist::builder()
+pub(crate) fn search_artist_to_model(a: SearchArtist) -> Result<Artist> {
+    Ok(Artist::builder()
+        .web_url(Some(WebPage::Artist(a.id).into_url()?))
         .id(ArtistId::new(SourceKind::NETEASE, a.id.to_string()))
         .name(a.name)
         .follower_count(a.fans_size)
         .avatar_url(parse_remote_opt(a.pic_url.as_deref()))
-        .build()
+        .build())
 }
 
 /// 搜索结果歌单 DTO → 统一 [`Playlist`](只有元信息,曲目按需走 `playlist_detail`)。
-pub(crate) fn search_playlist_to_model(p: SearchPlaylist) -> Playlist {
-    Playlist::builder()
+pub(crate) fn search_playlist_to_model(p: SearchPlaylist) -> Result<Playlist> {
+    Ok(Playlist::builder()
+        .web_url(Some(WebPage::Playlist(p.id).into_url()?))
         .id(PlaylistId::new(SourceKind::NETEASE, p.id.to_string()))
         .name(p.name)
         .description(p.description.unwrap_or_default())
@@ -192,15 +228,16 @@ pub(crate) fn search_playlist_to_model(p: SearchPlaylist) -> Playlist {
         .track_count(p.track_count)
         .play_count(p.play_count)
         .subscriber_count(p.book_count)
-        .build()
+        .build())
 }
 
 /// artist 详情响应 + 粉丝数 → 统一 [`Artist`]。
 ///
 /// `fans` 来自 `/api/artist/follow/count/get`——详情端点顶层不带粉丝数,由 channel 并发补打
 /// 后传入(补打失败为 `None`)。`albumSize`/`musicSize` 是详情端点顶层独家给的名下专辑/歌曲计数。
-pub(crate) fn artist_detail_to_model(r: ArtistDetailResult, fans: Option<u64>) -> Artist {
-    Artist::builder()
+pub(crate) fn artist_detail_to_model(r: ArtistDetailResult, fans: Option<u64>) -> Result<Artist> {
+    Ok(Artist::builder()
+        .web_url(Some(WebPage::Artist(r.artist.id).into_url()?))
         .id(ArtistId::new(SourceKind::NETEASE, r.artist.id.to_string()))
         .name(r.artist.name)
         .description(r.artist.brief_desc)
@@ -208,25 +245,31 @@ pub(crate) fn artist_detail_to_model(r: ArtistDetailResult, fans: Option<u64>) -
         .album_count(r.artist.album_size)
         .song_count(r.artist.music_size)
         .avatar_url(parse_remote_opt(r.artist.pic_url.as_deref()))
-        .songs(r.hot_songs.into_iter().map(album_song_to_model).collect())
-        .build()
+        .songs(
+            r.hot_songs
+                .into_iter()
+                .map(album_song_to_model)
+                .collect::<Result<Vec<_>>>()?,
+        )
+        .build())
 }
 
 /// 转换艺人专辑页，并保留响应的 `more`；字段缺失时由上层按条数判断。
-pub(crate) fn artist_albums_to_model(result: ArtistAlbumsResult) -> PageResult<Album> {
-    PageResult {
+pub(crate) fn artist_albums_to_model(result: ArtistAlbumsResult) -> Result<PageResult<Album>> {
+    Ok(PageResult {
         items: result
             .hot_albums
             .into_iter()
             .map(artist_album_to_model)
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         has_more: result.more,
-    }
+    })
 }
 
 /// artist 专辑列表项 → 统一 [`Album`](曲目留空,按需走 `album_detail`)。
-pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Album {
-    Album::builder()
+pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Result<Album> {
+    Ok(Album::builder()
+        .web_url(Some(WebPage::Album(a.id).into_url()?))
         .id(AlbumId::new(SourceKind::NETEASE, a.id.to_string()))
         .name(a.name)
         .artists(album_artist_refs(a.artists, a.artist))
@@ -234,7 +277,7 @@ pub(crate) fn artist_album_to_model(a: ArtistAlbum) -> Album {
         .publish_time_ms(a.publish_time)
         .track_count(Some(a.size))
         .cover_url(parse_remote_opt(a.pic_url.as_deref()))
-        .build()
+        .build())
 }
 
 /// 播放 URL 端点 DTO 列表 → [`DirectMedia`] 列表,丢弃不可播的项。
@@ -381,19 +424,19 @@ mod tests {
             "dt": 269_000,
             "privilege": { "id": 186_016, "st": -200, "pl": 0, "dl": 0 }
         }))?;
-        assert!(album_song_to_model(grey).unavailable, "st=-200 应判不可播");
+        assert!(album_song_to_model(grey)?.unavailable, "st=-200 应判不可播");
 
         let normal: AlbumSong = from_value(serde_json::json!({
             "id": 1, "name": "ok", "al": { "id": 2, "name": "a" },
             "privilege": { "id": 1, "st": 0 }
         }))?;
-        assert!(!album_song_to_model(normal).unavailable, "st=0 应可播");
+        assert!(!album_song_to_model(normal)?.unavailable, "st=0 应可播");
 
         let missing: AlbumSong = from_value(serde_json::json!({
             "id": 3, "name": "no-priv", "al": { "id": 4, "name": "b" }
         }))?;
         assert!(
-            !album_song_to_model(missing).unavailable,
+            !album_song_to_model(missing)?.unavailable,
             "权限块缺失不得误判不可播"
         );
         Ok(())
@@ -409,7 +452,7 @@ mod tests {
 
         let alias_of = |v: serde_json::Value| -> color_eyre::Result<Option<String>> {
             let s: AlbumSong = from_value(v)?;
-            Ok(album_song_to_model(s).alias)
+            Ok(album_song_to_model(s)?.alias)
         };
 
         // tns=null(真实形态)、alia 有罗马音 → 退 alia。
@@ -477,7 +520,7 @@ mod tests {
             ]
         });
         let dto: AlbumDetailResult = from_value(raw)?;
-        let album = album_detail_to_model(dto);
+        let album = album_detail_to_model(dto)?;
         assert_eq!(album.name, "Chinese Football");
         assert_eq!(album.description, "成军四年的首张全长专辑。");
         assert_eq!(album.track_count, Some(13));
@@ -513,7 +556,7 @@ mod tests {
             ]
         });
         let dto: AlbumDetailResult = from_value(raw)?;
-        let album = album_detail_to_model(dto);
+        let album = album_detail_to_model(dto)?;
         let ids = album
             .tracks
             .iter()
@@ -556,9 +599,9 @@ mod tests {
         let songs = std::mem::take(&mut info.tracks)
             .into_iter()
             .map(album_song_to_model)
-            .collect::<Vec<_>>();
+            .collect::<crate::Result<Vec<_>>>()?;
         let entries = playlist_entries_from_order(&info.track_ids, songs);
-        let pl = playlist_info_to_model(&info, entries);
+        let pl = playlist_info_to_model(&info, entries)?;
         assert_eq!(pl.name, "City Pop");
         assert_eq!(pl.description, "昭和旋律");
         assert_eq!(pl.track_count, 147);
@@ -592,7 +635,7 @@ mod tests {
             ]
         });
         let dto: ArtistDetailResult = from_value(raw)?;
-        let model = artist_detail_to_model(dto, /*fans*/ Some(8_900_000));
+        let model = artist_detail_to_model(dto, /*fans*/ Some(8_900_000))?;
         assert_eq!(model.album_count, Some(146));
         assert_eq!(model.song_count, Some(2570));
         assert_eq!(model.follower_count, Some(8_900_000));
@@ -617,7 +660,7 @@ mod tests {
                 { "id": 8, "name": "继续革命", "publishTime": 715_000_000_000_i64 }
             ]);
             let dto = from_value::<ArtistAlbumsResult>(raw)?;
-            let result = artist_albums_to_model(dto);
+            let result = artist_albums_to_model(dto)?;
             assert_eq!(result.has_more, expected);
             assert_eq!(result.items.len(), 1);
             assert_eq!(
@@ -637,7 +680,7 @@ mod tests {
         let raw =
             serde_json::json!({ "id": 8, "name": "继续革命", "publishTime": 715_000_000_000_i64 });
         let dto: ArtistAlbum = from_value(raw)?;
-        let model = artist_album_to_model(dto);
+        let model = artist_album_to_model(dto)?;
         assert!(model.artists.is_empty());
         assert!(model.tracks.is_empty());
         assert_eq!(model.publish_time_ms, Some(715_000_000_000));
@@ -659,7 +702,7 @@ mod tests {
                           "coverImgUrl": "https://p1.music.126.net/c.jpg", "description": null }
         });
         let dto: CreatePlaylistResult = from_value(raw)?;
-        let pl = playlist_info_to_model(&dto.playlist, Vec::new());
+        let pl = playlist_info_to_model(&dto.playlist, Vec::new())?;
         assert_eq!(pl.id, PlaylistId::new(SourceKind::NETEASE, "987654"));
         assert_eq!(pl.name, "开车歌单");
         assert_eq!(pl.description, "");

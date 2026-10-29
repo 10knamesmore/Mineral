@@ -3,10 +3,15 @@
 use std::path::PathBuf;
 
 use thiserror::Error as ThisError;
+use url::ParseError;
 
 /// B站请求、凭证与登录操作的错误。
 #[derive(Debug, ThisError)]
 pub enum Error {
+    /// 实体网页地址解析失败。
+    #[error("parse entity web URL")]
+    WebUrl(#[from] ParseError),
+
     /// 远端返回非成功业务码。
     #[error(transparent)]
     Api(

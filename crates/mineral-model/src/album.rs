@@ -1,6 +1,7 @@
 use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
+use url::Url;
 
 use crate::{
     collection::AlbumTrack, ids::AlbumId, refs::ArtistRef, source::SourceKind, url::MediaUrl,
@@ -42,6 +43,10 @@ pub struct Album {
     /// 封面 URL,无封面给 `None`。
     #[builder(default)]
     pub cover_url: Option<MediaUrl>,
+
+    /// 此专辑的网页分享地址；没有可分享页面时为 None。
+    #[builder(default)]
+    pub web_url: Option<Url>,
 
     /// 已加载的曲目 relation；每项保留 canonical snapshot 中的 0-based absolute index。
     #[builder(default)]

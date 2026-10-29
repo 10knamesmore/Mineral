@@ -42,6 +42,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub cover_url: Option<String>,
 
+    /// 专辑的来源网页地址。
+    #[sea_orm(column_type = "Text")]
+    pub web_url: Option<String>,
+
     /// channel 确定的 UTC 过期时间，读取不续期。
     pub expired_at: DateTimeUtc,
 }

@@ -98,6 +98,8 @@ pub(super) struct SongAttributes {
 
     pub cover: Option<MediaUrl>,
 
+    pub web_url: Option<Url>,
+
     pub duration_ms: Option<u64>,
 
     pub playable: bool,
@@ -119,6 +121,8 @@ pub(super) struct AlbumAttributes {
     pub name: String,
 
     pub cover: Option<MediaUrl>,
+
+    pub web_url: Option<Url>,
 
     pub track_count: Option<u64>,
 
@@ -144,6 +148,8 @@ pub(super) struct ArtistAttributes {
 
     pub cover: Option<MediaUrl>,
 
+    pub web_url: Option<Url>,
+
     pub description: Option<String>,
 }
 
@@ -161,6 +167,8 @@ pub(super) struct PlaylistAttributes {
     pub name: String,
 
     pub cover: Option<MediaUrl>,
+
+    pub web_url: Option<Url>,
 
     pub description: Option<String>,
 

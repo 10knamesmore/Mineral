@@ -4,6 +4,7 @@ use mineral_model::{Song, SongId};
 use rustc_hash::FxHashMap;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Select};
 
+use crate::persistence::Error;
 use crate::persistence::db::namespace::NamespaceStore;
 use crate::persistence::db::rows::SongArtistRow;
 use crate::persistence::entity::{song_artists, song_meta};
@@ -18,8 +19,9 @@ impl NamespaceStore {
     ///   - `ids`: 本 namespace 内的歌曲身份；重复 ID 只返回一份 metadata
     ///
     /// # Return:
-    ///   按 SongId 索引的歌曲。缺失或无法重建的记录跳过，坏记录记日志；
-    ///   查询失败返回错误。关系顺序与重复条目由调用方用原始 relation 重建。
+    ///   按 SongId 索引的歌曲。网页地址无效或查询失败返回错误；
+    ///   缺失或因其他原因无法重建的记录跳过，坏记录记日志。
+    ///   关系顺序与重复条目由调用方用原始 relation 重建。
     pub async fn get_meta_batch(
         &self,
         ids: &[SongId],
@@ -80,6 +82,7 @@ impl NamespaceStore {
                     Ok(song) => {
                         songs.insert(song.id.clone(), song);
                     }
+                    Err(error @ Error::InvalidWebUrl { .. }) => return Err(error),
                     Err(error) => {
                         mineral_log::warn!(target: "persist", source = ns, song_id = id,
                             error = mineral_log::chain(&error), "skip unreadable song metadata");

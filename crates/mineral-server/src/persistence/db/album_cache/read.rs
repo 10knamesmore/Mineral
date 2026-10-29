@@ -9,6 +9,7 @@ use mineral_model::{
 };
 use rustc_hash::FxHashMap;
 use sea_orm::{ColumnTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, TransactionTrait};
+use url::Url;
 
 use crate::persistence::db::NamespaceStore;
 use crate::persistence::entity::album_cache::{albums, artists, track_artists, tracks};
@@ -88,6 +89,7 @@ impl NamespaceStore {
                     .album(song_album)
                     .duration_ms(track.duration_ms.map(u64::try_from).transpose()?)
                     .cover_url(track.cover_url.as_deref().map(parse_url))
+                    .web_url(track.web_url.as_deref().map(Url::parse).transpose()?)
                     .source_url(track.source_url.as_deref().map(parse_url))
                     .unavailable(track.unavailable)
                     .build();
@@ -105,6 +107,7 @@ impl NamespaceStore {
             .publish_time_ms(header.publish_time_ms)
             .track_count(header.track_count.map(u64::try_from).transpose()?)
             .cover_url(header.cover_url.as_deref().map(parse_url))
+            .web_url(header.web_url.as_deref().map(Url::parse).transpose()?)
             .artists(
                 album_artists
                     .into_iter()

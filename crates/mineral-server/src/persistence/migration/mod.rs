@@ -8,3 +8,4 @@ pub(crate) use migrator::ServerMigrator;
 mod m20260930_user_playlists;
 mod m20261007_album_cache;
 mod m20261026_album_release_date;
+mod m20261029_entity_web_urls;
