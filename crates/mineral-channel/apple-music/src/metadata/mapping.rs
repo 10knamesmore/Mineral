@@ -1,175 +1,112 @@
-//! Projects Apple identities and metadata into shared model types.
+//! Projects resource-specific Apple metadata into shared models.
 
-use chrono::NaiveDate;
-use html2text::config::with_decorator;
-use html2text::render::TrivialDecorator;
 use mineral_model::{
-    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, MediaUrl, Playlist, PlaylistId, Song,
-    SongId, SourceKind,
+    Album, AlbumId, AlbumRef, Artist, ArtistId, ArtistRef, Playlist, PlaylistId, Song, SongId,
+    SourceKind,
 };
 
-use super::wire::{Attributes, Resource};
+use super::data::{
+    AlbumResource, ArtistResource, PlaylistResource, SongAttributes, SongResource, TrackResource,
+};
 use crate::{Error, Result};
 
-/// Catalog equivalents unify recording identity; uploads retain their library identity.
-pub(super) fn song_resource(resource: &Resource) -> &Resource {
-    resource
-        .relationships
-        .catalog
-        .as_ref()
-        .and_then(|page| page.data.first())
-        .filter(|catalog| catalog.kind == "songs" && catalog.attributes.is_some())
-        .unwrap_or(resource)
+pub(super) fn song(resource: &SongResource) -> Song {
+    let recording = resource.recording();
+    song_metadata(
+        recording.id.as_str(),
+        recording.attributes.as_ref(),
+        &recording.artists,
+        recording.album.as_ref(),
+    )
 }
 
-/// Only expanded artists have a usable identity and name; display names are not IDs.
-fn artists(resource: &Resource) -> Vec<ArtistRef> {
-    resource
-        .relationships
-        .artists
-        .as_ref()
-        .into_iter()
-        .flat_map(|page| &page.data)
-        .filter_map(|artist| {
-            artist.attributes.as_ref().map(|attributes| ArtistRef {
-                id: ArtistId::new(SourceKind::APPLE_MUSIC, &artist.id),
-                name: attributes.name.clone(),
-            })
-        })
-        .collect()
-}
-
-fn cover(attributes: &Attributes) -> Result<Option<MediaUrl>> {
-    attributes
-        .artwork
-        .as_ref()
-        .map(|artwork| {
-            MediaUrl::remote(&artwork.url.replace("{w}", "600").replace("{h}", "600"))
-                .map_err(Error::Url)
-        })
-        .transpose()
-}
-
-/// Missing attributes retain the original identity as an unavailable membership.
-pub(super) fn song(resource: &Resource) -> Result<Song> {
-    let resource = song_resource(resource);
-    let id = SongId::new(SourceKind::APPLE_MUSIC, &resource.id);
-    let Some(attributes) = &resource.attributes else {
-        return Ok(Song::builder()
-            .id(id)
-            .name(resource.id.clone())
-            .unavailable(true)
-            .build());
+fn song_metadata(
+    id: &str,
+    attributes: Option<&SongAttributes>,
+    artists: &[ArtistRef],
+    album: Option<&AlbumRef>,
+) -> Song {
+    let id = SongId::new(SourceKind::APPLE_MUSIC, id);
+    let Some(attributes) = attributes else {
+        let name = id.as_str().to_owned();
+        return Song::builder().id(id).name(name).unavailable(true).build();
     };
-    let album = resource
-        .relationships
-        .albums
-        .as_ref()
-        .and_then(|page| page.data.first())
-        .and_then(|album| {
-            album.attributes.as_ref().map(|attributes| AlbumRef {
-                id: AlbumId::new(SourceKind::APPLE_MUSIC, &album.id),
-                name: attributes.name.clone(),
-            })
-        });
-    Ok(Song::builder()
+    Song::builder()
         .id(id)
         .name(attributes.name.clone())
-        .artists(artists(resource))
-        .album(album)
-        .duration_ms(attributes.duration_in_millis)
-        .cover_url(cover(attributes)?)
-        .unavailable(attributes.play_params.is_none())
-        .build())
+        .artists(artists.to_vec())
+        .album(album.cloned())
+        .duration_ms(attributes.duration_ms)
+        .cover_url(attributes.cover.clone())
+        .unavailable(!attributes.playable)
+        .build()
 }
 
-/// Saved albums keep their library ID even when catalog metadata is expanded.
-pub(super) fn album(resource: &Resource) -> Result<Album> {
+pub(super) fn track(resource: &TrackResource) -> Song {
+    match resource {
+        TrackResource::Song(resource) => song(resource),
+        TrackResource::Unavailable(resource) => {
+            let mut song = song_metadata(
+                &resource.id,
+                resource.attributes.as_ref(),
+                &resource.artists,
+                resource.album.as_ref(),
+            );
+            song.unavailable = true;
+            song
+        }
+    }
+}
+
+/// Saved albums retain their own identity even when artist metadata comes from the catalog.
+pub(super) fn album(resource: &AlbumResource) -> Result<Album> {
     let attributes = resource.attributes.as_ref().ok_or(Error::InvalidData {
         field: "album attributes",
     })?;
-    let artist_resource = resource
-        .relationships
-        .catalog
-        .as_ref()
-        .and_then(|page| page.data.first())
-        .unwrap_or(resource);
-    let mut album = Album::builder()
-        .id(AlbumId::new(SourceKind::APPLE_MUSIC, &resource.id))
+    Ok(Album::builder()
+        .id(AlbumId::new(SourceKind::APPLE_MUSIC, resource.id.as_str()))
         .name(attributes.name.clone())
-        .artists(artists(artist_resource))
+        .artists(resource.artists.clone())
         .company(attributes.record_label.clone())
         .track_count(attributes.track_count)
-        .cover_url(cover(attributes)?)
-        .build();
-    if let Some(date) = &attributes.release_date {
-        // Apple also supplies YYYY; the timestamp-only model uses that year's start.
-        let date = if date.len() == 4 {
-            format!("{date}-01-01")
-        } else {
-            date.clone()
-        };
-        let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
-        let midnight = date.and_hms_opt(0, 0, 0).ok_or(Error::InvalidData {
-            field: "album release date",
-        })?;
-        album.publish_time_ms = Some(midnight.and_utc().timestamp_millis());
-    }
-    Ok(album)
+        .cover_url(attributes.cover.clone())
+        .publish_time_ms(attributes.publish_time_ms)
+        .build())
 }
 
-/// Keep each resource's own identity; library and catalog playlists remain separate.
-/// Catalog totals are extended attributes; library totals come from the tracks relationship.
-pub(super) fn playlist(resource: &Resource) -> Result<Playlist> {
+pub(super) fn playlist(resource: &PlaylistResource) -> Result<Playlist> {
     let attributes = resource.attributes.as_ref().ok_or(Error::InvalidData {
         field: "playlist attributes",
     })?;
-    let track_count = match resource.kind.as_str() {
-        "playlists" => attributes.track_count,
-        "library-playlists" => resource
-            .relationships
-            .tracks
-            .as_ref()
-            .and_then(|tracks| tracks.meta.as_ref())
-            .and_then(|meta| meta.total),
-        _ => {
-            return Err(Error::InvalidData {
-                field: "playlist resource",
-            });
-        }
-    }
-    .ok_or(Error::InvalidData {
+    let track_count = attributes.track_count.ok_or(Error::InvalidData {
         field: "playlist track total",
     })?;
     let mut playlist = Playlist::builder()
-        .id(PlaylistId::new(SourceKind::APPLE_MUSIC, &resource.id))
+        .id(PlaylistId::new(
+            SourceKind::APPLE_MUSIC,
+            resource.id.as_str(),
+        ))
         .name(attributes.name.clone())
-        .cover_url(cover(attributes)?)
+        .cover_url(attributes.cover.clone())
         .track_count(track_count)
         .build();
     if let Some(description) = &attributes.description {
-        playlist.description.clone_from(&description.standard);
+        playlist.description.clone_from(description);
     }
     Ok(playlist)
 }
 
-pub(super) fn artist(resource: &Resource) -> Result<Artist> {
+pub(super) fn artist(resource: &ArtistResource) -> Result<Artist> {
     let attributes = resource.attributes.as_ref().ok_or(Error::InvalidData {
         field: "artist attributes",
     })?;
     let mut artist = Artist::builder()
-        .id(ArtistId::new(SourceKind::APPLE_MUSIC, &resource.id))
+        .id(ArtistId::new(SourceKind::APPLE_MUSIC, resource.id.as_str()))
         .name(attributes.name.clone())
-        .avatar_url(cover(attributes)?)
+        .avatar_url(attributes.cover.clone())
         .build();
-    if let Some(notes) = &attributes.editorial_notes
-        && let Some(html) = notes.standard.as_deref().or(notes.short.as_deref())
-    {
-        // The source length leaves room for the text; the TUI owns display wrapping.
-        artist.description = with_decorator(TrivialDecorator::new())
-            .string_from_read(html.as_bytes(), html.len())?
-            .trim()
-            .to_owned();
+    if let Some(description) = &attributes.description {
+        artist.description.clone_from(description);
     }
     Ok(artist)
 }

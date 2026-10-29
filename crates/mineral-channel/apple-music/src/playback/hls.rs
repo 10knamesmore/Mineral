@@ -11,6 +11,7 @@ use url::Url;
 
 use super::cdn::{self, MediaResource};
 use super::error::{Error, Result};
+use super::license::LicenseMetadata;
 
 // Apple's opening samples use a fixed prefetch key; only the later key needs a license.
 const PREFETCH_WIDEVINE_URI: &str = concat!(
@@ -23,7 +24,7 @@ pub(super) struct Manifest {
 
     pub segments: Vec<MediaSegment>,
 
-    pub key_uri: String,
+    pub license: LicenseMetadata,
 }
 
 pub(super) struct MediaSegment {
@@ -108,7 +109,7 @@ pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
     let map = first.map.as_ref().ok_or(Error::InvalidMedia {
         field: "initialization map",
     })?;
-    let key_uri = playlist
+    let license_key = playlist
         .segments
         .values()
         .flat_map(|segment| &segment.keys)
@@ -121,9 +122,8 @@ pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
         })
         .ok_or(Error::InvalidMedia {
             field: "license key URI",
-        })?
-        .uri()
-        .to_string();
+        })?;
+    let license = LicenseMetadata::parse_uri(license_key.uri())?;
     let mut segments = Vec::new();
     for (index, segment) in playlist.segments.values().enumerate() {
         if segment.map.as_ref().is_some_and(|next| next != map)
@@ -147,7 +147,7 @@ pub(super) async fn manifest(client: &Client, base: &Url) -> Result<Manifest> {
             range: byte_range(map.range())?,
         },
         segments,
-        key_uri,
+        license,
     })
 }
 

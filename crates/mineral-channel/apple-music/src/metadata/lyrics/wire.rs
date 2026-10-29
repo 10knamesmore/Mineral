@@ -2,9 +2,49 @@
 
 use serde::Deserialize;
 
+use crate::{Error, Result};
+
 #[derive(Deserialize)]
 pub(super) struct SongLyricsResponse {
-    pub data: Vec<Song>,
+    data: Vec<Song>,
+}
+
+impl SongLyricsResponse {
+    pub fn document(self) -> Result<Option<String>> {
+        let song = self
+            .data
+            .into_iter()
+            .next()
+            .ok_or(Error::Http { status: 404 })?;
+        let Some(relationships) = song.relationships else {
+            return Ok(None);
+        };
+        let representation = relationships
+            .syllable_lyrics
+            .into_iter()
+            .flat_map(|page| page.data)
+            .next()
+            .or_else(|| {
+                relationships
+                    .lyrics
+                    .into_iter()
+                    .flat_map(|page| page.data)
+                    .next()
+            });
+        let Some(resource) = representation else {
+            return Ok(None);
+        };
+        let attributes = resource.attributes.ok_or(Error::InvalidData {
+            field: "lyrics attributes",
+        })?;
+        attributes
+            .ttml
+            .or(attributes.ttml_localizations)
+            .map(Some)
+            .ok_or(Error::InvalidData {
+                field: "lyrics TTML",
+            })
+    }
 }
 
 #[derive(Deserialize)]

@@ -13,10 +13,32 @@ use zeroize::Zeroizing;
 
 use super::error::{Error, Result};
 use super::mp4::widevine_pssh_payload;
-use super::widevine::{
-    ContentKey, DeviceIdentity, LicenseExchange, initialization_key_id, key_initialization,
-};
+use super::widevine::{ContentKey, DeviceIdentity, LicenseExchange, LicenseInitialization};
 use crate::account::{AccountClient, SESSION_ENDED_FAILURE};
+
+/// Parsed HLS license metadata. Apple's request still needs the original URI,
+/// while key selection and challenge construction use its validated initialization.
+pub(super) struct LicenseMetadata {
+    uri: String,
+
+    initialization: LicenseInitialization,
+}
+
+impl LicenseMetadata {
+    pub fn parse_uri(uri: &str) -> Result<Self> {
+        let encoded = uri.rsplit_once(',').map_or(uri, |(_, encoded)| encoded);
+        let data = STANDARD.decode(encoded)?;
+        // Web keys carry a raw KID; enhanced playlists carry a v0 Widevine PSSH.
+        let initialization = match <[u8; 16]>::try_from(data.as_slice()) {
+            Ok(key_id) => LicenseInitialization::from_key_id(key_id),
+            Err(_wrong_length) => LicenseInitialization::parse(widevine_pssh_payload(&data)?)?,
+        };
+        Ok(Self {
+            uri: uri.to_owned(),
+            initialization,
+        })
+    }
+}
 
 #[derive(Serialize)]
 struct LicenseRequest<'a> {
@@ -51,7 +73,7 @@ pub(super) async fn content_key(
     account: &AccountClient,
     device_file: Option<&Path>,
     track_id: &str,
-    uri: &str,
+    metadata: &LicenseMetadata,
 ) -> Result<ContentKey> {
     let started = Instant::now();
     let device = match device_file {
@@ -62,18 +84,11 @@ pub(super) async fn content_key(
         None => DeviceIdentity::from_wvd(include_bytes!("../../assets/gamdl-android-l3.wvd"))?,
     };
     let device = Arc::new(device);
-    let data = STANDARD.decode(
-        uri.rsplit(',')
-            .next()
-            .ok_or(Error::InvalidMedia { field: "key URI" })?,
-    )?;
-    let initialization = license_initialization(&data)?;
-    let key_id = initialization_key_id(&initialization)?;
-    let exchange = LicenseExchange::streaming(device, initialization)?;
+    let exchange = LicenseExchange::streaming(device, &metadata.initialization)?;
     let body = LicenseRequest {
         challenge: STANDARD.encode(exchange.challenge()),
         key_system: "com.widevine.alpha",
-        uri,
+        uri: &metadata.uri,
         track_id,
         is_library: false,
         user_initiated: true,
@@ -98,20 +113,7 @@ pub(super) async fn content_key(
     let encoded = response.license.ok_or(Error::InvalidMedia {
         field: "license payload",
     })?;
-    let keys = exchange.finish(&STANDARD.decode(encoded)?)?;
+    let key = exchange.finish(&STANDARD.decode(encoded)?)?;
     mineral_log::debug!(target: "apple_music", elapsed_ms = started.elapsed().as_millis(), "license exchange completed");
-    keys.into_iter()
-        .find(|key| key.id.as_slice() == key_id)
-        .ok_or(Error::InvalidMedia {
-            field: "content key matching HLS license metadata",
-        })
-}
-
-/// Web keys carry a raw KID; enhanced playlists carry a v0 Widevine PSSH box.
-/// The license challenge embeds the PSSH's protobuf payload, without the MP4 box header.
-fn license_initialization(data: &[u8]) -> Result<Vec<u8>> {
-    if let Ok(key_id) = <&[u8; 16]>::try_from(data) {
-        return Ok(key_initialization(key_id));
-    }
-    widevine_pssh_payload(data)
+    Ok(key)
 }
