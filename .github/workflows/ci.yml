@@ -43,7 +43,7 @@ jobs:
           tool: cargo-nextest,stylua
 
       - name: 安装 Dylint
-        run: cargo install --locked cargo-dylint dylint-link
+        run: cargo install --locked --version 6.3.0 cargo-dylint dylint-link
 
       - name: 完整检查
         env:
