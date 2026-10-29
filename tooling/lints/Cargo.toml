@@ -22,7 +22,7 @@ indexing_slicing = "deny"
 as_conversions = "deny"
 
 [dependencies]
-dylint_linting = "6.0"
+dylint_linting = "6.3"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["derive"] }
 syn = { version = "2", features = ["full", "visit"] }
@@ -31,7 +31,7 @@ walkdir = "2.5"
 
 [dev-dependencies]
 color-eyre = "0.6"
-dylint_testing = "6.0"
+dylint_testing = "6.3"
 
 [package.metadata.rust-analyzer]
 rustc_private = true
