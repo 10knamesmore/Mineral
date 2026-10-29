@@ -100,6 +100,9 @@ impl App {
 
     /// 应用一条完成事件。
     fn apply_completion(&mut self, completion: Completion) {
+        if let Completion::QueueEdit(outcome) = &completion {
+            self.complete_queue_edit(outcome);
+        }
         match completion {
             Completion::Playlist { op, outcome } => {
                 use mineral_protocol::{FailureKind, PlaylistOp};

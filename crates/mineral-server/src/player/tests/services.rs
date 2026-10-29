@@ -106,7 +106,9 @@ async fn service_names_dispatch_stably_across_reload_and_disappear_on_detach()
                 selected: None
             })
             .await,
-        QueueEditOutcome::Applied
+        QueueEditOutcome::Applied {
+            queue_version: core.with_state(|state| state.queue_version),
+        }
     );
     assert_eq!(
         core.with_state(|state| state.queue.clone()),

@@ -2,6 +2,7 @@
 //!
 //! 编辑是「对已在队列里的条目做删除与重排」,不引入新歌——加歌走各自的插入 / 追加请求。
 
+use mineral_common::revision::Revision;
 use mineral_model::SongId;
 use serde::{Deserialize, Serialize};
 
@@ -90,8 +91,11 @@ pub enum QueueOp {
 /// 一次队列编辑的结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QueueEditOutcome {
-    /// 队列已变更,随后的队列同步会带上新内容。
-    Applied,
+    /// 队列已变更；订阅推送与回执可按任意顺序到达。
+    Applied {
+        /// 本次编辑在状态锁内提交的队列版本。
+        queue_version: Revision,
+    },
 
     /// 锚点处的歌与 client 所报不符,未执行。
     ///

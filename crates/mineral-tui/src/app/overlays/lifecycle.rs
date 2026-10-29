@@ -151,6 +151,12 @@ impl OverlayStack<AppOverlay> {
         }
     }
 
+    pub(crate) fn follow_queue_reorder(&mut self, destination: usize) {
+        if let Some(AppOverlay::Queue(queue)) = self.active_mut() {
+            queue.follow_reorder(destination);
+        }
+    }
+
     /// 下载明细只在有消费者时订阅。
     pub(crate) fn has_downloads(&self) -> bool {
         self.iter()

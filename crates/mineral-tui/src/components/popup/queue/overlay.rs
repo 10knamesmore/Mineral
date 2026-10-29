@@ -30,7 +30,7 @@ use crate::runtime::state::{ListExpansionState, OverlayReveal};
 
 /// 浮动 queue 浮层。
 ///
-/// 只持有 UI-local 光标 + 视口滚动(`list`,永不被 server snapshot 覆盖,仅 clamp 防越界)
+/// 持有 UI-local 光标 + 视口滚动(`list`，快照只钳制范围，本地移动确认后跟随条目)
 /// 与本地 `/` 模糊过滤态(`search`);队列曲目是后端权威态,通过 `QueueInput` 借入。
 ///
 /// `/` 过滤只重排**显示**:光标 `list` 索引的是过滤视图(按匹配分降序),经
@@ -78,6 +78,12 @@ impl QueueOverlay {
         if self.list.sel() != selected {
             self.last_sel_change = Instant::now();
         }
+    }
+
+    /// 与本次编辑对应的队列已同步后，光标跟随条目的新下标。
+    pub(crate) fn follow_reorder(&mut self, destination: usize) {
+        self.list.set_sel(destination);
+        self.last_sel_change = Instant::now();
     }
 
     /// 与浮层栈同拍推进搜索展开，结束后释放可见帧。
@@ -607,25 +613,20 @@ impl Overlay for QueueOverlay {
                 OverlayResponse::Do(OverlayAction::DownloadQueueIndex(i))
             })),
             // 上下移动条目:过滤态屏蔽——视图按分重排后「上一格」对应队列非相邻位,
-            // 移动语义混乱;无过滤时视图位即队列真实位,光标跟着歌走预移一格,端点不动。
+            // 移动语义混乱。这里只提交方向，边界与光标跟随由编辑执行器按确认后的队列处理。
             Action::ReorderSelection(mv) => {
                 if self.is_filtering() {
                     return Some(OverlayResponse::Consumed);
                 }
-                let at = sel;
-                let moved = match mv {
-                    SelectionMove::Down(_) if at.saturating_add(1) < len => at.saturating_add(1),
-                    SelectionMove::Up(_) if at > 0 => at.saturating_sub(1),
-                    _ => at,
-                };
-                if moved == at {
-                    return Some(OverlayResponse::Consumed);
+                match (raw, mv) {
+                    (Some(idx), SelectionMove::Up(_) | SelectionMove::Down(_)) => {
+                        Some(OverlayResponse::Do(OverlayAction::ReorderQueueIndex {
+                            idx,
+                            down: matches!(mv, SelectionMove::Down(_)),
+                        }))
+                    }
+                    _ => Some(OverlayResponse::Consumed),
                 }
-                self.list.move_by(mv, len);
-                Some(OverlayResponse::Do(OverlayAction::ReorderQueueIndex {
-                    idx: at,
-                    down: matches!(mv, SelectionMove::Down(_)),
-                }))
             }
             // 跳回在播条目:找到在播歌在过滤视图中的位置移光标(被过滤掉则不动)。只移光标
             // 不碰视口——视口交给渲染端 Advancing 缓动滚过去,故是「滚动到那里」而非瞬移。
@@ -897,18 +898,21 @@ mod tests {
         Ok(())
     }
 
-    /// 移动条目:光标跟着歌走(预移一格),端点不动且不发请求。
+    /// 移动输入只提交方向，不预移光标；端点判断留到意图执行时。
     #[test]
-    fn reorder_follows_the_song_and_stops_at_edges() -> color_eyre::Result<()> {
+    fn reorder_emits_direction_without_moving_cursor() -> color_eyre::Result<()> {
         let ctx = ctx_with_queue(3, None)?;
         let mut o = QueueOverlay::new(0);
-        // 首项上移 = 端点,不动也不发请求。
+        // 当前处于端点也传递方向，之前尚未确认的移动可能改变它的位置。
         assert!(matches!(
             o.on_action(
                 Action::ReorderSelection(SelectionMove::Up(1)),
                 &crate::app::overlays::input::queue(&ctx)
             ),
-            Some(OverlayResponse::Consumed)
+            Some(OverlayResponse::Do(OverlayAction::ReorderQueueIndex {
+                idx: 0,
+                down: false,
+            }))
         ));
         assert_eq!(o.cursor(), 0, "端点不环绕");
 
@@ -920,7 +924,7 @@ mod tests {
             color_eyre::eyre::bail!("下移应产出 ReorderQueueIndex");
         };
         assert_eq!((idx, down), (0, true), "带原下标与方向");
-        assert_eq!(o.cursor(), 1, "光标跟着歌下移一格");
+        assert_eq!(o.cursor(), 0, "确认前光标保持原位");
         Ok(())
     }
 

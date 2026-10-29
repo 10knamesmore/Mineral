@@ -22,6 +22,7 @@ use crate::runtime::ui::prefs::UiPrefs;
 use crate::runtime::window_title::WindowTitle;
 
 use super::clipboard::ClipboardState;
+use super::queue_edit::QueueEdits;
 
 /// 应用顶层状态。
 pub struct App {
@@ -63,6 +64,9 @@ pub struct App {
 
     /// queue 浮层最近一次输入后的真实队列下标；关闭再开时恢复，队列快照替换后作废。
     pub(crate) queue_cursor_memo: Option<usize>,
+
+    /// 队列编辑回执、同步等待及连续移动意图。
+    pub(super) queue_edits: QueueEdits,
 
     /// 整屏转场动画:`None` 为正常运行;`Some` 且 `leaving()` 为退出收缩(归零后真正退出),
     /// `Some` 且非 `leaving()` 为启动扩大(推满后转入正常运行)。两者时间上互斥,共用此字段。
@@ -183,6 +187,7 @@ impl App {
             notice_hint,
             overlays,
             queue_cursor_memo: None,
+            queue_edits: QueueEdits::default(),
             transition: None,
             stop_daemon_on_quit: false,
             last_tick: Instant::now(),

@@ -18,7 +18,7 @@ impl App {
             .transport
             .sync_mode(sync.play_mode, self.state.cfg.animation());
         // 在播位置锚点是轻段,每 tick 灌(prev/next 可在 queue 列表不变时单独前进)。
-        // 它决定 queue 浮层的在播行样式，独立于客户端的 UI 光标(后者只钳防越界)。
+        // 它决定 queue 浮层的在播行样式，不覆盖客户端的选择；本地编辑确认后单独跟随光标。
         self.state.models.player.cursor = sync.cursor;
         if let Some(q) = sync.queue {
             if let Some(previous) = self.queue_cursor_memo.take() {
@@ -55,6 +55,7 @@ impl App {
                 self.state.models.library.lyrics.insert(song_id, lyrics);
             }
         }
+        self.advance_queue_edits();
     }
 }
 

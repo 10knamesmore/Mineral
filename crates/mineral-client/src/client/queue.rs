@@ -97,11 +97,13 @@ impl Client {
                         detail: format!("{request_name} 收到意外应答 {other:?}"),
                     },
                 },
-                OperationResult::Applied => Outcome::Applied(QueueEditOutcome::Applied),
-                OperationResult::Accepted => Outcome::Accepted(QueueEditOutcome::Applied),
                 OperationResult::Failed(failure) => Outcome::Failed {
                     kind: failure.kind,
                     detail: failure.detail,
+                },
+                OperationResult::Applied | OperationResult::Accepted => Outcome::Failed {
+                    kind: FailureKind::Internal,
+                    detail: format!("{request_name} 缺少队列编辑结果"),
                 },
             },
         )

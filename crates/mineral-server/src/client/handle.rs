@@ -160,7 +160,7 @@ impl ClientHandle {
                         .notify()
                         .failure(mineral_protocol::FailureNotice::QueueTransformInvalidSong);
                 }
-                if matches!(outcome, QueueEditOutcome::Applied) {
+                if matches!(outcome, QueueEditOutcome::Applied { .. }) {
                     self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
                         op: mineral_stats::QueueOp::Transform,
                         song: None,
@@ -444,7 +444,7 @@ impl ClientHandle {
     pub(crate) fn queue_edit(&self, op: &QueueOp) -> QueueEditOutcome {
         let before = self.player.with_state(|st| st.queue.len());
         let outcome = self.player.queue_edit(op);
-        if matches!(outcome, QueueEditOutcome::Applied) {
+        if matches!(outcome, QueueEditOutcome::Applied { .. }) {
             let after = self.player.with_state(|st| st.queue.len());
             self.record_behavior(mineral_stats::BehaviorEvent::QueueOp {
                 op: stats_queue_op(op),

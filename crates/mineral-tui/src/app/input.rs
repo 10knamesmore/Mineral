@@ -87,6 +87,26 @@ impl App {
         // 与 behavior 步长),浮层不认或未命中再走浮层裸键;无浮层走全局 dispatch。
         let action = chord_from_event(key).and_then(|c| self.keymap.lookup(c));
 
+        if self.overlays.active_queue_cursor(&self.state).is_some()
+            && matches!(
+                action,
+                Some(
+                    Action::MoveSelection(_)
+                        | Action::Scroll(_)
+                        | Action::JumpToCurrent
+                        | Action::EnterSearch
+                        | Action::BackOrClearSearch
+                        | Action::OpenQueue
+                        | Action::OpenQuitConfirm
+                        | Action::OpenActionMenu
+                        | Action::OpenCopyMenu
+                        | Action::ActivateSelection
+                )
+            )
+        {
+            self.cancel_queue_reorder();
+        }
+
         // 活跃浮层(栈顶未退场)优先吃键；关闭并执行时先退场，避免重复提交。
         if let Some(resp) = self.overlays.dispatch_key(key, action, &self.state) {
             // 在关闭或叠加浮层之前保存本次输入后的真实队列位置，不等异步播放同步。
@@ -405,7 +425,7 @@ mod tests {
         Ok(())
     }
 
-    /// 集成:queue 上按移动键 → 送出带身份定位的 Move,光标跟着歌走。
+    /// queue 上按移动键提交带身份定位的 Move，不在确认前预移光标。
     #[test]
     fn queue_reorder_key_sends_move_with_anchor() -> color_eyre::Result<()> {
         use crossterm::event::{KeyEvent, KeyModifiers};
@@ -423,7 +443,7 @@ mod tests {
         };
         assert_eq!(at.index, 1, "定位是移动前的下标");
         assert_eq!(to, &mineral_protocol::QueuePos::Down);
-        assert_eq!(app.overlays.queue_sel(), Some(2), "光标跟着歌下移");
+        assert_eq!(app.overlays.queue_sel(), Some(1), "确认前光标保持原位");
         Ok(())
     }
 
