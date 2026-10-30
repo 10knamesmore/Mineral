@@ -86,6 +86,7 @@ impl Keymap {
                 cycle_detail_section => CycleDetailSection, "Cycle section";
             }
             Actions {
+                refresh => RefreshCollections, "Refresh library category / collection";
                 love => ToggleLoveSelection, "Love";
                 reorder_down => ReorderSelection(SelectionMove::Down(1)), "Move item down / up";
                 reorder_up => ReorderSelection(SelectionMove::Up(1)), "Move item down / up";
@@ -233,6 +234,7 @@ mod tests {
             ("<C-k>", Action::ReorderSelection(SelectionMove::Up(1))),
             ("c", Action::JumpToCurrent),
             ("d", Action::DownloadSelection),
+            ("R", Action::RefreshCollections),
             ("x", Action::DismissNotice),
             ("o", Action::OpenActionMenu),
             ("y", Action::OpenCopyMenu),

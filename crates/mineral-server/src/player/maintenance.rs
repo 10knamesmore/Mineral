@@ -28,12 +28,13 @@ impl PlayerCore {
     /// 瞬间的空库假象),再重拉各源歌单 + 触发收藏同步。收藏走 server 侧 async
     /// 编排(需 persist,不进 task lane),把 canonical favorited 集推给 client。
     pub fn refresh_initial_loads(&self) {
+        let _publication = self.inner.collection_publication.lock();
         self.push_cached_library_snapshot();
         // Reconnect sync includes the slot envelope; replay only fills missing normal-song data.
         self.replay_current_envelope();
         for ch in &self.inner.channels {
             let source = ch.source();
-            self.submit_my_playlists(source);
+            self.submit_my_playlists_locked(source);
             self.inner.scheduler.submit(
                 TaskKind::ChannelFetch(ChannelFetchKind::MyAlbums { source }),
                 Priority::User,

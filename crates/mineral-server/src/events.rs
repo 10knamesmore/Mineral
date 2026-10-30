@@ -28,6 +28,7 @@ impl PlayerCore {
     /// 一次 drain:把 TaskEvent 分类——LyricsReady 内部消化、PlaylistWriteDone 成功先收敛缓存、
     /// 其余通过 event hub 推给订阅 client。
     pub(crate) fn consume_events_once(&self) {
+        let _publication = self.inner.collection_publication.lock();
         let events = self.inner.scheduler.drain_events();
         if events.is_empty() {
             return;
@@ -41,7 +42,7 @@ impl PlayerCore {
                 // 逐源列表进聚合态,client 只见出口变换后的合并快照
                 // (LibrarySnapshot,由管线异步推)。
                 TaskEvent::PlaylistsFetched { source, playlists } => {
-                    self.library_concluded(source, Some(playlists));
+                    self.library_concluded(source, Some(playlists), self.library_generation());
                 }
                 TaskEvent::AlbumsFetched { source, albums } => {
                     let albums = self.library().replace_saved_albums(source, albums);
@@ -107,12 +108,12 @@ impl PlayerCore {
                 );
             }
             PlaylistWriteOp::Create { source, .. } => {
-                self.submit_my_playlists(*source);
+                self.submit_my_playlists_locked(*source);
             }
             PlaylistWriteOp::Delete { id }
             | PlaylistWriteOp::Rename { id, .. }
             | PlaylistWriteOp::SetDescription { id, .. } => {
-                self.submit_my_playlists(id.namespace());
+                self.submit_my_playlists_locked(id.namespace());
             }
         }
     }

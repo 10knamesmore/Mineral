@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crate::persistence::ServerStore;
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
+use mineral_channel_core::store::NamespaceStore;
 use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{Event, PlayMode};
 use mineral_task::Scheduler;
@@ -80,7 +81,16 @@ impl Server {
     ) -> Result<Self, crate::Error> {
         let channels = &sources.channels;
         mineral_log::debug!(target: "server", channels = channels.len(), "spawning server components");
-        let scheduler = Scheduler::new(channels, *config.channel_workers_per());
+        let stores = channels
+            .iter()
+            .map(|channel| -> Arc<dyn NamespaceStore> { Arc::new(persist.scope(channel.source())) })
+            .collect::<Vec<_>>();
+        let scheduler = Scheduler::new(
+            channels,
+            *config.channel_workers_per(),
+            &stores,
+            Some(Arc::new(persist.clone())),
+        );
         let (audio, spectrum_tap) = AudioHandle::spawn(audio_mode, config.engine().clone())?;
         mineral_log::debug!(target: "server", "audio engine ready");
         let media_cache = open_media_cache(&persist, *config.audio_cache_capacity()).await;

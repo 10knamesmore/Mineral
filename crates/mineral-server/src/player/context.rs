@@ -11,9 +11,9 @@ use mineral_common::revision::Revision;
 use mineral_model::{BitRate, SourceKind};
 use mineral_playback::PlaybackRegistry;
 use mineral_protocol::{PlayerSync, PlayerVersions};
-use mineral_task::{Priority, Scheduler, Snapshot, TaskKind};
+use mineral_task::{ChannelFetchKind, Priority, Scheduler, Snapshot, TaskKind};
 use parking_lot::Mutex;
-use tokio::sync::watch;
+use tokio::sync::{Mutex as AsyncMutex, watch};
 
 use crate::download;
 use crate::media_cache::MediaCache;
@@ -28,6 +28,9 @@ pub struct PlayerCore {
 
 /// `PlayerCore` 的真实状态。
 pub(crate) struct Inner {
+    /// Serializes collection invalidation, event forwarding and script-pipeline publication.
+    pub(crate) collection_publication: Mutex<()>,
+
     /// 底层音频引擎句柄。
     pub(crate) audio: AudioHandle,
 
@@ -91,6 +94,9 @@ pub(crate) struct Inner {
     /// 互斥,防并发交错导致陈旧远端快照复活刚取消的收藏、或乐观收藏被整源桶替换清掉。
     /// 只护 persist 读写 + 推送,**不**跨远端网络调用(镜像 / fetch 都在锁外)。
     pub(crate) favorites_lock: tokio::sync::Mutex<()>,
+
+    /// Serialize aggregate read submissions so overlapping membership changes cannot dedup away the last rebuild.
+    pub(crate) aggregate_rebuild: AsyncMutex<()>,
 
     /// 上次「周期 position 刷新」落盘时刻;background_loop 按 `session_save` 节流。
     pub(crate) last_session_save: Mutex<Instant>,
@@ -264,6 +270,11 @@ impl PlayerCore {
 
     /// 把 client 请求交给 scheduler；返回时不等待任务完成。
     pub fn submit_task(&self, kind: TaskKind, priority: Priority) {
+        if let TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists { source }) = kind {
+            self.submit_my_playlists(source);
+            return;
+        }
+        let _publication = self.inner.collection_publication.lock();
         self.inner.scheduler.submit(kind, priority);
     }
 }

@@ -8,6 +8,7 @@ use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, MusicChannel, Page, PageResult, PlaylistDetail,
     PlaylistLoad,
 };
+use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
     SourceKind,
@@ -99,7 +100,11 @@ impl MusicChannel for AppleMusicChannel {
         Ok(self.metadata.search_playlists(query, page).await?)
     }
 
-    async fn songs_detail(&self, ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {
+    async fn songs_detail(
+        &self,
+        ids: &[SongId],
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Vec<Song>> {
         Ok(self.metadata.songs_detail(ids).await?)
     }
 
@@ -107,11 +112,14 @@ impl MusicChannel for AppleMusicChannel {
         Ok(self.metadata.lyrics(id).await?)
     }
 
-    async fn my_albums(&self) -> mineral_channel_core::Result<Vec<Album>> {
+    async fn my_albums(&self, _cache: CachePolicy) -> mineral_channel_core::Result<Vec<Album>> {
         Ok(self.metadata.my_albums().await?)
     }
 
-    async fn my_playlists(&self) -> mineral_channel_core::Result<Vec<Playlist>> {
+    async fn my_playlists(
+        &self,
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Vec<Playlist>> {
         Ok(self.metadata.my_playlists().await?)
     }
 
@@ -119,12 +127,17 @@ impl MusicChannel for AppleMusicChannel {
         &self,
         id: &PlaylistId,
         load: PlaylistLoad,
+        _cache: CachePolicy,
     ) -> mineral_channel_core::Result<PlaylistDetail> {
         Ok(self.metadata.playlist_detail(id, load).await?)
     }
 
-    async fn album_detail(&self, id: &AlbumId) -> mineral_channel_core::Result<Album> {
-        Ok(self.metadata.album_detail(id).await?)
+    async fn album_detail(
+        &self,
+        id: &AlbumId,
+        cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Album> {
+        Ok(self.metadata.album_detail(id, cache).await?)
     }
 
     async fn artist_detail(&self, id: &ArtistId) -> mineral_channel_core::Result<Artist> {

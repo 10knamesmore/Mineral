@@ -66,3 +66,5 @@ pub use url::MediaUrl;
 
 mod store;
 pub use store::StoreValue;
+mod refresh;
+pub use refresh::{CachePolicy, CollectionCategory, RefreshScope};

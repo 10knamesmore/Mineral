@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use mineral_channel_core::{
     ArtistSections, ChannelCaps, Error, MusicChannel, PlaylistDetail, PlaylistLoad, Result,
 };
+use mineral_model::CachePolicy;
 use mineral_model::{
     DirectMedia, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId, Song, SongId, SourceKind,
 };
@@ -29,8 +30,8 @@ impl MusicChannel for LocalLibrary {
             .build()
     }
 
-    async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>> {
-        let catalog = self.catalog().await?;
+    async fn songs_detail(&self, ids: &[SongId], cache: CachePolicy) -> Result<Vec<Song>> {
+        let catalog = self.read_catalog(cache).await?;
         ids.iter()
             .map(|id| {
                 catalog
@@ -41,8 +42,8 @@ impl MusicChannel for LocalLibrary {
             .collect()
     }
 
-    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
-        let catalog = self.catalog().await?;
+    async fn my_playlists(&self, cache: CachePolicy) -> Result<Vec<Playlist>> {
+        let catalog = self.read_catalog(cache).await?;
         Ok(catalog
             .playlists
             .iter()
@@ -54,8 +55,9 @@ impl MusicChannel for LocalLibrary {
         &self,
         id: &PlaylistId,
         _load: PlaylistLoad,
+        cache: CachePolicy,
     ) -> Result<PlaylistDetail> {
-        let catalog = self.catalog().await?;
+        let catalog = self.read_catalog(cache).await?;
         let playlist = catalog
             .playlists
             .iter()

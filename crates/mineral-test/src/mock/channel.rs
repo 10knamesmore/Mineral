@@ -8,6 +8,7 @@ use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult,
     Result as ChannelResult,
 };
+use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, AudioFormat, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId,
     Song, SongId, SourceKind,
@@ -52,11 +53,11 @@ impl MusicChannel for UrlChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_detail(&self, _ids: &[SongId]) -> ChannelResult<Vec<Song>> {
+    async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> ChannelResult<Vec<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn album_detail(&self, _id: &AlbumId) -> ChannelResult<Album> {
+    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> ChannelResult<Album> {
         Err(Error::NotSupported)
     }
 
@@ -64,6 +65,7 @@ impl MusicChannel for UrlChannel {
         &self,
         _id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> ChannelResult<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
@@ -204,7 +206,7 @@ impl MusicChannel for CannedChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_detail(&self, ids: &[SongId]) -> ChannelResult<Vec<Song>> {
+    async fn songs_detail(&self, ids: &[SongId], _cache: CachePolicy) -> ChannelResult<Vec<Song>> {
         Ok(self
             .detail_songs
             .iter()
@@ -213,7 +215,7 @@ impl MusicChannel for CannedChannel {
             .collect())
     }
 
-    async fn album_detail(&self, _id: &AlbumId) -> ChannelResult<Album> {
+    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> ChannelResult<Album> {
         self.album_calls
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.album.clone().ok_or(Error::NotSupported)
@@ -223,6 +225,7 @@ impl MusicChannel for CannedChannel {
         &self,
         _id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> ChannelResult<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
@@ -259,7 +262,7 @@ impl MusicChannel for DetailChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_detail(&self, ids: &[SongId]) -> ChannelResult<Vec<Song>> {
+    async fn songs_detail(&self, ids: &[SongId], _cache: CachePolicy) -> ChannelResult<Vec<Song>> {
         Ok(self
             .songs
             .iter()

@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 
 use mineral_client::operation::SubmitError;
+use mineral_model::RefreshScope;
 use mineral_task::{DedupKey, Priority, TaskKind};
 
 /// 后端持有的待提交任务；成功交给 client 后移除，不重发结果未知的请求。
@@ -28,6 +29,11 @@ struct PendingTask {
 }
 
 impl TaskSubmissions {
+    pub(super) fn invalidate(&mut self, scope: &RefreshScope) {
+        self.pending.retain(
+            |task| !matches!(&task.kind, TaskKind::ChannelFetch(kind) if kind.affected_by(scope)),
+        );
+    }
     /// 接收业务提交；同一待提交任务只保留一次，重复的用户请求提升其优先级。
     pub(super) fn enqueue(&mut self, kind: TaskKind, priority: Priority) {
         if self.blocked == Some(SubmitError::Disconnected) {

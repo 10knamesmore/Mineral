@@ -132,6 +132,10 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
             client.submit_task(kind, priority);
             OperationResult::Accepted
         }
+        Request::RefreshCollections(scope) => {
+            client.refresh_collections(&scope);
+            OperationResult::Applied
+        }
         Request::Download(target) => {
             client.download(target);
             OperationResult::Accepted

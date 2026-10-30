@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mineral_channel_core::{Error as ChannelError, MusicChannel};
-use mineral_model::{MediaUrl, Song};
+use mineral_model::{CachePolicy, MediaUrl, Song};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -97,7 +97,10 @@ async fn fetch_album(
     if let Some(hit) = cache.lock().get(&key) {
         return hit.clone();
     }
-    let result = match channel.album_detail(&album_ref.id).await {
+    let result = match channel
+        .album_detail(&album_ref.id, CachePolicy::UseCache)
+        .await
+    {
         Ok(album) => Some(AlbumTags {
             artists: album
                 .artists

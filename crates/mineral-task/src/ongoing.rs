@@ -156,6 +156,22 @@ impl Ongoing {
         }
     }
 
+    /// Detach refresh-invalidated bindings so their replacements never share old handles.
+    pub fn invalidate(&self, pred: impl Fn(&TaskKind) -> bool) {
+        let mut inner = self.inner.lock();
+        let ids = inner
+            .tasks
+            .iter()
+            .filter_map(|(id, meta)| pred(&meta.kind).then_some(*id))
+            .collect::<Vec<_>>();
+        for id in ids {
+            if let Some(meta) = inner.tasks.remove(&id) {
+                meta.cancel.cancel();
+                inner.by_dedup.remove(&meta.kind.dedup_key());
+            }
+        }
+    }
+
     /// 当前 running 计数(含 enqueued 未真正开跑的)。
     pub fn snapshot(&self) -> SnapshotCounts {
         let inner = self.inner.lock();

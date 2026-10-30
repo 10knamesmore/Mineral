@@ -12,9 +12,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures_util::{FutureExt, StreamExt};
-use mineral_channel_core::MusicChannel;
-use mineral_model::{Song, SongId, SourceKind};
-use mineral_task::TaskEvent;
+use mineral_channel_core::{MusicChannel, PlaylistLoad};
+use mineral_channel_mineral::favorites_playlist_id;
+use mineral_model::{CachePolicy, Song, SongId, SourceKind};
+use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::player::PlayerCore;
@@ -254,49 +255,20 @@ impl PlayerCore {
 
     /// 收藏集变化后重合成聚合歌单(mineral 源)并重推
     pub(crate) async fn refresh_aggregate_favorites(&self) {
-        let Some(channel) = self.channel_for(SourceKind::MINERAL) else {
+        if self.channel_for(SourceKind::MINERAL).is_none() {
             return;
-        };
-        let channel = Arc::clone(channel);
-        let playlists = {
-            let _guard = self.inner.favorites_lock.lock().await;
-            let playlists = match channel.my_playlists().await {
-                Ok(playlists) => playlists,
-                Err(e) => {
-                    mineral_log::debug!(
-                        target: "favorites",
-                        error = mineral_log::chain(&e),
-                        "聚合歌单列表重合成失败,跳过重推"
-                    );
-                    return;
-                }
-            };
-            // this is a special one , so use the specific channel
-            let id = mineral_channel_mineral::favorites_playlist_id();
-            match channel
-                .playlist_detail(&id, mineral_channel_core::PlaylistLoad::Complete)
-                .await
-            {
-                Ok(playlist) => {
-                    self.notify().task_event(TaskEvent::PlaylistDetailFetched {
-                        id,
-                        detail: Box::new(playlist),
-                        load: mineral_channel_core::PlaylistLoad::Complete,
-                    });
-                }
-                Err(e) => {
-                    mineral_log::debug!(
-                        target: "favorites",
-                        playlist = id.qualified(),
-                        error = mineral_log::chain(&e),
-                        "聚合收藏歌单详情重建失败，跳过详情推送"
-                    );
-                }
-            }
-            playlists
-        };
-        // 歌单列表进出口管线(与其它源同路),产出 client 认得的 LibrarySnapshot 刷 sidebar 计数。
-        self.library_concluded(SourceKind::MINERAL, Some(playlists));
+        }
+        let _rebuild = self.inner.aggregate_rebuild.lock().await;
+        let lists = self.submit_my_playlists(SourceKind::MINERAL);
+        let detail = self.inner.scheduler.submit(
+            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
+                id: favorites_playlist_id(),
+                load: PlaylistLoad::Complete,
+            }),
+            Priority::User,
+        );
+        lists.done().await;
+        detail.done().await;
     }
 
     /// 触发后台补 meta(单飞):sync 导入的红心先只有 id,后台扫全部缺 meta 的 loved 歌,逐源
@@ -361,7 +333,9 @@ impl PlayerCore {
         // stream 上 map 捕获 `Arc<dyn MusicChannel>` 会撞 HRTB lifetime 推断(闭包不够泛型)。
         let futures = jobs
             .into_iter()
-            .map(|(channel, chunk)| async move { channel.songs_detail(&chunk).await }.boxed())
+            .map(|(channel, chunk)| {
+                async move { channel.songs_detail(&chunk, CachePolicy::UseCache).await }.boxed()
+            })
             .collect::<Vec<_>>();
         let stream = futures_util::stream::iter(futures).buffer_unordered(max_concurrent);
         let mut stream = std::pin::pin!(stream);

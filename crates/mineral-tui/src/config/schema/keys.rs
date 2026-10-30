@@ -13,6 +13,9 @@ use crate::config::key_syntax::KeyChord;
 /// 动作对应按键，空数组解绑
 #[config_section]
 pub struct KeysConfig {
+    /// 刷新当前曲库分类或完整歌单、专辑；不改变播放与收藏。
+    refresh: KeyBinding,
+
     /// 暂停 / 恢复。
     play_pause: KeyBinding,
 

@@ -2,7 +2,10 @@
 
 use crate::app::AppOverlay;
 
+use crate::runtime::collection::{CollectionGroup, CollectionId};
+use crate::runtime::state::View;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use mineral_model::{CollectionCategory, RefreshScope};
 
 use crate::components::popup::{OverlayAction, OverlayResponse};
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
@@ -139,6 +142,7 @@ impl App {
     /// 执行一个查表命中的 [`Action`]:每分支一行调用对应执行器,逻辑都在执行器里。
     pub(super) fn dispatch(&mut self, action: Action) {
         match action {
+            Action::RefreshCollections => self.refresh_collections(),
             Action::ToggleFullscreen => self.toggle_fullscreen(),
             Action::OpenSearchView => self.open_search_view(),
             Action::OpenQueue => self.open_queue(),
@@ -182,6 +186,41 @@ impl App {
             self.state.cfg.animation(),
             std::time::Instant::now(),
         );
+    }
+
+    fn refresh_collections(&mut self) {
+        if self.state.page_kind() != PageKind::Browse
+            || self.transition.is_some()
+            || self.state.ui.browse.fullscreen.on()
+            || !self.state.ui.browse.fullscreen.at_min()
+            || !self.state.ui.channel_search.active.at_min()
+            || match self.state.ui.browse.view.current() {
+                View::Collections => !self.state.ui.browse.view.at_min(),
+                View::Tracks => !self.state.ui.browse.view.at_max(),
+            }
+            || self.state.in_text_input()
+            || self.overlays.len() != 0
+        {
+            return;
+        }
+        let scope = match self.state.ui.browse.view.current() {
+            View::Collections => {
+                RefreshScope::Collections(match self.state.ui.browse.collections.group() {
+                    CollectionGroup::Playlists => CollectionCategory::Playlists,
+                    CollectionGroup::Albums => CollectionCategory::Albums,
+                })
+            }
+            View::Tracks => match &self.state.ui.browse.nav.opened_collection {
+                Some(CollectionId::Playlist(id)) => RefreshScope::Playlist(id.clone()),
+                Some(CollectionId::Album(id)) => RefreshScope::Album(id.clone()),
+                None => return,
+            },
+        };
+        self.client.refresh_collections(scope);
+        self.notifications.flash(tinted_text_item(
+            "Refresh requested".to_owned(),
+            TextTint::Normal,
+        ));
     }
 
     /// 关最早一张驻留通知卡片(连按逐条关;无卡空操作)。

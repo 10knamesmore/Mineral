@@ -2,14 +2,18 @@
 
 use std::sync::Arc;
 
-use mineral_model::{Song, SongId};
-use mineral_protocol::{FailureKind, OperationResult};
+use mineral_model::{RefreshScope, Song, SongId};
+use mineral_protocol::{FailureKind, OperationResult, Request};
 use mineral_task::TaskEvent;
 
 use super::Client;
-use crate::operation::{Outcome, Pending, SubmitError};
+use crate::operation::{Outcome, Pending, SubmitError, decode_applied};
 
 impl Client {
+    /// Invalidate server cache state without fetching. After success, discard local data and load normally.
+    pub fn refresh_collections(&self, scope: RefreshScope) -> Result<Pending<()>, SubmitError> {
+        self.submit(Request::RefreshCollections(scope), decode_applied)
+    }
     /// 切换喜欢状态。
     ///
     /// # Params:

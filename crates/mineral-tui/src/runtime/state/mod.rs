@@ -48,4 +48,5 @@ pub(crate) use view_switch::ViewSwitch;
 pub(crate) use detail::DetailStack;
 
 mod models;
+mod refresh;
 mod resources;

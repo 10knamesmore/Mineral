@@ -5,7 +5,7 @@ use std::path::Path;
 use color_eyre::eyre::eyre;
 use mineral_channel_core::{MusicChannel, PlaylistLoad};
 use mineral_channel_local::LocalLibrary;
-use mineral_model::{BitRate, Playlist, Song, SongId, SourceKind};
+use mineral_model::{BitRate, CachePolicy, Playlist, Song, SongId, SourceKind};
 use mineral_playback::{OpenOptions, PlaybackProvider, PlaybackRequest};
 use mineral_server::ServerStore;
 use rustc_hash::FxHashSet;
@@ -23,9 +23,9 @@ fn open(directory: &Path, store: &ServerStore) -> LocalLibrary {
 /// Fully materialize the local playlists through the channel interface.
 async fn playlists(library: &LocalLibrary) -> color_eyre::Result<Vec<Playlist>> {
     let mut result = Vec::new();
-    for playlist in library.my_playlists().await? {
+    for playlist in library.my_playlists(CachePolicy::UseCache).await? {
         let detail = library
-            .playlist_detail(&playlist.id, PlaylistLoad::Complete)
+            .playlist_detail(&playlist.id, PlaylistLoad::Complete, CachePolicy::UseCache)
             .await?;
         assert!(detail.complete);
         assert!(detail.next_offset.is_none());
@@ -89,7 +89,9 @@ async fn one_time_load_identity_lyrics_and_playback() -> color_eyre::Result<()> 
     assert_eq!(first.duration_ms, Some(100));
     let foreign_id = SongId::new(SourceKind::NETEASE, first.id.value());
     assert!(matches!(
-        library.songs_detail(&[foreign_id]).await,
+        library
+            .songs_detail(&[foreign_id], CachePolicy::UseCache)
+            .await,
         Err(mineral_channel_core::Error::NotFound)
     ));
     let scope = store.scope(SourceKind::LOCAL);
@@ -139,7 +141,9 @@ async fn one_time_load_identity_lyrics_and_playback() -> color_eyre::Result<()> 
     assert!(!scope.is_loved(&moved.id).await?);
     assert!(scope.is_loved(&first.id).await?);
     assert!(matches!(
-        library.songs_detail(std::slice::from_ref(&first.id)).await,
+        library
+            .songs_detail(std::slice::from_ref(&first.id), CachePolicy::UseCache)
+            .await,
         Err(mineral_channel_core::Error::NotFound)
     ));
     std::fs::copy(root.join("moved.wav"), root.join("copy.wav"))?;
@@ -196,11 +200,13 @@ async fn one_time_load_identity_lyrics_and_playback() -> color_eyre::Result<()> 
     drop(opened);
     drop(library);
     let restored = open(temp.path(), &store);
-    assert_eq!(restored.my_playlists().await?.len(), 2);
+    assert_eq!(restored.my_playlists(CachePolicy::UseCache).await?.len(), 2);
     std::fs::remove_file(root.join("moved.wav"))?;
     let restored = open(temp.path(), &store);
     assert!(matches!(
-        restored.songs_detail(&[moved.id]).await,
+        restored
+            .songs_detail(&[moved.id], CachePolicy::UseCache)
+            .await,
         Err(mineral_channel_core::Error::NotFound)
     ));
     Ok(())
@@ -254,7 +260,9 @@ async fn unavailable_root_can_be_loaded_later() -> color_eyre::Result<()> {
         temp.path().join("covers"),
         vec![root.clone()],
     );
-    let Err(mineral_channel_core::Error::Storage { source }) = library.my_playlists().await else {
+    let Err(mineral_channel_core::Error::Storage { source }) =
+        library.my_playlists(CachePolicy::UseCache).await
+    else {
         return Err(eyre!("expected local storage failure"));
     };
     assert_eq!(
@@ -266,6 +274,6 @@ async fn unavailable_root_can_be_loaded_later() -> color_eyre::Result<()> {
     );
     std::fs::create_dir(&root)?;
     audio(&root.join("appeared.wav"))?;
-    assert_eq!(library.my_playlists().await?.len(), 1);
+    assert_eq!(library.my_playlists(CachePolicy::UseCache).await?.len(), 1);
     Ok(())
 }

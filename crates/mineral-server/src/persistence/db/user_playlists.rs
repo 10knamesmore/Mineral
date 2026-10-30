@@ -2,13 +2,25 @@
 
 use super::super::entity::{user_playlist_entries, user_playlists};
 use super::super::{Error, Result, ServerStore};
+use mineral_channel_core::store::CachedPlaylistEntry;
 use mineral_model::{
     CollectionIndex, Playlist, PlaylistActions, PlaylistEntry, PlaylistId, Song, SongId, SourceKind,
 };
 use rustc_hash::FxHashMap;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+};
 
 impl ServerStore {
+    pub(crate) async fn user_playlist_entries(
+        &self,
+        id: &PlaylistId,
+    ) -> Result<Vec<CachedPlaylistEntry>> {
+        let Some(db) = self.pool() else {
+            return Ok(Vec::new());
+        };
+        playlist_entries_on(db, id).await
+    }
     /// 一次事务保存完整队列的身份与顺序，并补入缺失的共享元数据。
     /// 每次生成独立的歌单身份，已存在的歌曲资料不被队列覆盖。
     pub(crate) async fn create_user_playlist(
@@ -91,22 +103,14 @@ impl ServerStore {
         else {
             return Ok(None);
         };
-        let rows = user_playlist_entries::Entity::find()
-            .filter(user_playlist_entries::Column::PlaylistId.eq(id.value()))
-            .order_by_asc(user_playlist_entries::Column::Position)
-            .all(&tx)
-            .await
-            .map_err(database_error)?;
+        let rows = playlist_entries_on(&tx, id).await?;
         let mut by_source = FxHashMap::<SourceKind, Vec<SongId>>::default();
         let mut relations = Vec::with_capacity(rows.len());
         for entry in rows {
-            let source = SourceKind::from_name(&entry.song_namespace);
-            let song_id = SongId::new(source, entry.song_value);
+            let source = entry.song_id.namespace();
+            let song_id = entry.song_id;
             by_source.entry(source).or_default().push(song_id.clone());
-            relations.push((
-                CollectionIndex::new(u64::try_from(entry.position)?),
-                song_id,
-            ));
+            relations.push((entry.index, song_id));
         }
         let mut metadata = FxHashMap::default();
         for (source, ids) in by_source {
@@ -162,6 +166,29 @@ impl ServerStore {
         }
         Ok(())
     }
+}
+
+async fn playlist_entries_on(
+    db: &impl ConnectionTrait,
+    id: &PlaylistId,
+) -> Result<Vec<CachedPlaylistEntry>> {
+    user_playlist_entries::Entity::find()
+        .filter(user_playlist_entries::Column::PlaylistId.eq(id.value()))
+        .order_by_asc(user_playlist_entries::Column::Position)
+        .all(db)
+        .await
+        .map_err(database_error)?
+        .into_iter()
+        .map(|entry| {
+            Ok(CachedPlaylistEntry {
+                index: CollectionIndex::new(u64::try_from(entry.position)?),
+                song_id: SongId::new(
+                    SourceKind::from_name(&entry.song_namespace),
+                    entry.song_value,
+                ),
+            })
+        })
+        .collect()
 }
 
 /// 歌单头部携带本地可管理的操作资格。

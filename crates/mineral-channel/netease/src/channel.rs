@@ -10,6 +10,7 @@ use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
 };
+use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
     SourceKind, UserId,
@@ -335,7 +336,7 @@ impl MusicChannel for NeteaseChannel {
             .map_err(map_err)
     }
 
-    async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>> {
+    async fn songs_detail(&self, ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         let dtos = api::song::songs_detail(&self.transport, ids)
             .await
             .map_err(map_err)?;
@@ -345,13 +346,14 @@ impl MusicChannel for NeteaseChannel {
             .map_err(map_err)
     }
 
-    async fn album_detail(&self, id: &AlbumId) -> Result<Album> {
+    async fn album_detail(&self, id: &AlbumId, cache: CachePolicy) -> Result<Album> {
         self.album
             .load(
                 &self.transport,
                 &self.requests.album_detail,
                 self.persist.as_deref(),
                 id,
+                cache,
             )
             .await
             .map_err(map_err)
@@ -362,9 +364,10 @@ impl MusicChannel for NeteaseChannel {
         &self,
         id: &PlaylistId,
         load: mineral_channel_core::PlaylistLoad,
+        cache: CachePolicy,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
         self.playlist
-            .load(&self.transport, self.persist.as_deref(), id, load)
+            .load(&self.transport, self.persist.as_deref(), id, load, cache)
             .await
             .map_err(map_err)
     }
@@ -387,14 +390,14 @@ impl MusicChannel for NeteaseChannel {
             .map_err(map_err)
     }
 
-    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
         match self.user_id.as_ref() {
             Some(uid) => self.user_playlists(uid).await,
             None => Err(Error::NotSupported),
         }
     }
 
-    async fn my_albums(&self) -> Result<Vec<Album>> {
+    async fn my_albums(&self, _cache: CachePolicy) -> Result<Vec<Album>> {
         if self.user_id.is_none() {
             return Err(Error::NotSupported);
         }
@@ -517,7 +520,7 @@ mod tests {
     use std::time::Duration;
 
     use mineral_channel_core::{Error, MusicChannel};
-    use mineral_model::{SongId, SourceKind};
+    use mineral_model::{CachePolicy, SongId, SourceKind};
 
     use crate::NeteaseChannel;
     use crate::config::{AlbumCacheConfig, NeteaseConfig, RequestsConfig};
@@ -602,7 +605,7 @@ mod tests {
             "匿名 liked_song_ids 应 NotSupported(纯远端,不降级本地)"
         );
         assert!(matches!(
-            channel.my_albums().await,
+            channel.my_albums(CachePolicy::UseCache).await,
             Err(Error::NotSupported)
         ));
         let id = SongId::new(SourceKind::NETEASE, "10001");

@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
 };
+use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
     UserId,
@@ -172,7 +173,7 @@ impl MusicChannel for BilibiliChannel {
             .map_err(map_err)
     }
 
-    async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>> {
+    async fn songs_detail(&self, ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         // 按 bvid 去重取 view,产出各 P 的 Song,再过滤回请求的 id(同视频不重复取 view)。
         let wanted: FxHashSet<String> = ids.iter().map(|i| i.as_str().to_owned()).collect();
         let mut bvids = Vec::<String>::new();
@@ -198,7 +199,7 @@ impl MusicChannel for BilibiliChannel {
         Ok(out)
     }
 
-    async fn album_detail(&self, id: &AlbumId) -> Result<Album> {
+    async fn album_detail(&self, id: &AlbumId, _cache: CachePolicy) -> Result<Album> {
         let info = api::view::video_info(&self.transport, id.as_str())
             .await
             .map_err(map_err)?;
@@ -232,6 +233,7 @@ impl MusicChannel for BilibiliChannel {
         &self,
         id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
         // 自身内容业务码可降级为 unavailable 单行；解析、无效响应及全局故障
         // 必须中止整夹，避免将系统性故障伪装成一批失效视频。
@@ -283,7 +285,7 @@ impl MusicChannel for BilibiliChannel {
         Ok(mineral_channel_core::PlaylistDetail::complete(playlist))
     }
 
-    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
         // 需登录(mid 来自凭证);guest 无 mid → NotSupported(上层视为该源不贡献歌单)。
         let Some(uid) = self.user_id.as_ref() else {
             return Err(Error::NotSupported);

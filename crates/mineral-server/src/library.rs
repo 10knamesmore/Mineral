@@ -4,9 +4,10 @@
 //! 有数据生效,被藏的歌单永不丢失。管线经串行锁逐结论推进,消除并发重算
 //! 竞态;任何 transform 失败都透传原列表(fail-open)。
 
-use mineral_model::{Album, Playlist, PlaylistId, SourceKind};
+use mineral_common::revision::Revision;
+use mineral_model::{Album, CollectionCategory, Playlist, PlaylistId, RefreshScope, SourceKind};
 use mineral_script::{CurateOutcome, CuratedEntry, PlaylistBrief, QueryId, ResolveValue};
-use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind, TaskOutcome};
+use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskHandle, TaskKind, TaskOutcome};
 use parking_lot::Mutex;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -26,6 +27,8 @@ pub(crate) struct Library {
 
 /// [`Library`] 的可变态。
 struct LibraryInner {
+    generation: Revision,
+
     /// 各来源最近一次成功拉取的收藏专辑，重拉失败时保留。
     saved_albums: FxHashMap<SourceKind, Vec<Album>>,
 
@@ -80,6 +83,7 @@ impl Library {
         let pending = order.iter().copied().collect::<FxHashSet<SourceKind>>();
         Self {
             state: Mutex::new(LibraryInner {
+                generation: Revision::default(),
                 saved_albums: FxHashMap::default(),
                 raw: FxHashMap::default(),
                 curated: FxHashMap::default(),
@@ -223,27 +227,64 @@ fn apply_curated(originals: Vec<Playlist>, entries: Vec<CuratedEntry>) -> Vec<Pl
 }
 
 impl PlayerCore {
+    /// Invalidates only the requested collection family; details remain lazy for list refreshes.
+    pub fn refresh_collections(&self, scope: &RefreshScope) {
+        let _publication = self.inner.collection_publication.lock();
+        self.inner.scheduler.invalidate(scope);
+        {
+            let mut state = self.library().state.lock();
+            match scope {
+                RefreshScope::Collections(CollectionCategory::Playlists) => {
+                    state.generation = state.generation.next();
+                    state.raw.clear();
+                    state.curated.clear();
+                    state.snapshot.clear();
+                    state.pending = self.library().order.iter().copied().collect();
+                }
+                RefreshScope::Collections(CollectionCategory::Albums) => state.saved_albums.clear(),
+                RefreshScope::Playlist(_) | RefreshScope::Album(_) => {}
+            }
+        }
+    }
+
+    pub(crate) fn library_generation(&self) -> Revision {
+        self.library().state.lock().generation
+    }
+
     /// 提交一次某源的 `MyPlaylists` 拉取,并挂失败观察者:任务终态非 Ok 时
     /// 以空贡献落结论——初始完备不因失败源卡死(成功结论走 `PlaylistsFetched`
     /// 事件路,见 [`crate::events`])。
-    pub(crate) fn submit_my_playlists(&self, source: SourceKind) {
+    pub(crate) fn submit_my_playlists(&self, source: SourceKind) -> TaskHandle {
+        let _publication = self.inner.collection_publication.lock();
+        self.submit_my_playlists_locked(source)
+    }
+
+    pub(crate) fn submit_my_playlists_locked(&self, source: SourceKind) -> TaskHandle {
+        let generation = self.library_generation();
         let handle = self.inner.scheduler.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists { source }),
             Priority::User,
         );
         let player = self.clone();
+        let observed = handle.clone();
         tokio::spawn(async move {
-            if !matches!(handle.done().await, TaskOutcome::Ok) {
-                player.library_concluded(source, /*raw*/ None);
+            if matches!(observed.done().await, TaskOutcome::Failed) {
+                player.library_concluded(source, /*raw*/ None, generation);
             }
         });
+        handle
     }
 
     /// 某源歌单结论到达(`Some` = 成功原始列表 / `None` = 失败空贡献):
     /// spawn 出口变换管线,不卡调用方(player tick / 任务观察者)。
-    pub(crate) fn library_concluded(&self, source: SourceKind, raw: Option<Vec<Playlist>>) {
+    pub(crate) fn library_concluded(
+        &self,
+        source: SourceKind,
+        raw: Option<Vec<Playlist>>,
+        generation: Revision,
+    ) {
         let player = self.clone();
-        tokio::spawn(async move { player.run_library_pipeline(source, raw).await });
+        tokio::spawn(async move { player.run_library_pipeline(source, raw, generation).await });
     }
 
     /// 脚本 `library.playlists` 查询:完备即回快照;未完备停靠,初始完备
@@ -266,16 +307,35 @@ impl PlayerCore {
 
     /// 出口变换管线:落结论 → 补算 per-source curate → 注册序 concat → 跨源
     /// curate → 提交快照 + 推 client + resolve 停靠 query。整体在管线串行锁内。
-    async fn run_library_pipeline(&self, source: SourceKind, raw: Option<Vec<Playlist>>) {
+    async fn run_library_pipeline(
+        &self,
+        source: SourceKind,
+        raw: Option<Vec<Playlist>>,
+        generation: Revision,
+    ) {
         let library = self.library();
         let _serial = library.pipeline.lock().await;
-        library.conclude(source, raw);
+        {
+            let _publication = self.inner.collection_publication.lock();
+            if self.library_generation() != generation {
+                return;
+            }
+            library.conclude(source, raw);
+        }
         for (src, raw_list) in library.stale_sources() {
             let curated = self.curate_via_script(Some(src), raw_list).await;
+            let _publication = self.inner.collection_publication.lock();
+            if self.library_generation() != generation {
+                return;
+            }
             library.set_curated(src, curated);
         }
         let merged = library.merged_input();
         let snapshot = self.curate_via_script(/*source*/ None, merged).await;
+        let _publication = self.inner.collection_publication.lock();
+        if self.library_generation() != generation {
+            return;
+        }
         let parked = library.commit_snapshot(snapshot.clone());
         self.notify().task_event(TaskEvent::LibrarySnapshot {
             playlists: snapshot.clone(),

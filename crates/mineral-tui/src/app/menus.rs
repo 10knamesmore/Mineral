@@ -1128,8 +1128,7 @@ mod tests {
         draw_once(&mut app)?;
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('n'));
-        let key =
-            DetailFetch::PlaylistDetail(PlaylistId::new(SourceKind::NETEASE, "p1")).dedup_key();
+        let key = DetailFetch::PlaylistDetail(PlaylistId::new(SourceKind::NETEASE, "p1"));
         assert_eq!(
             app.pending_container.get(&key),
             Some(&crate::player_actions::PlayMode::InsertNext),

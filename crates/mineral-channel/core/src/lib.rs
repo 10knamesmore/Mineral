@@ -20,8 +20,8 @@ use rustc_hash::FxHashSet;
 
 use async_trait::async_trait;
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind,
-    UserId,
+    Album, AlbumId, Artist, ArtistId, CachePolicy, Lyrics, Playlist, PlaylistId, Song, SongId,
+    SourceKind, UserId,
 };
 
 /// 接入一个音乐源的 channel(连接器)统一接口。
@@ -62,24 +62,25 @@ pub trait MusicChannel: Send + Sync {
 
     // ---------- 详情 ----------
     /// 拉取若干歌曲的详情。
-    async fn songs_detail(&self, ids: &[SongId]) -> Result<Vec<Song>>;
+    async fn songs_detail(&self, ids: &[SongId], cache: CachePolicy) -> Result<Vec<Song>>;
 
     /// 拉取一张专辑的完整详情:元信息(简介 / 发行信息 / 曲目数等)+ 曲目 relation(`tracks`)。
     ///
     /// 返回**完整实体**而非裸曲目:上层要的是"这张专辑的完整视图",至于 channel 内部打几个
     /// 端点拼出来是实现细节。只要曲目的调用方从 `.tracks` 投影 `.song` 即可。
-    async fn album_detail(&self, _id: &AlbumId) -> Result<Album> {
+    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> Result<Album> {
         Err(Error::NotSupported)
     }
 
     /// 按加载意图获取歌单；预览可返回首批，完整加载须检查所有曲目。
     ///
-    /// channel 决定远端批次和缓存策略，并显式报告完整性。完整加载请求失败时返回
-    /// 错误，不能把旧缓存或首批伪装成完整结果。
+    /// channel 决定远端批次并显式报告完整性。`CachePolicy::Reload` 禁止读取旧缓存或
+    /// 失败后回退；加载范围仍由 `PlaylistLoad` 决定，完整请求失败不能返回首批。
     async fn playlist_detail(
         &self,
         _id: &PlaylistId,
         _load: PlaylistLoad,
+        _cache: CachePolicy,
     ) -> Result<PlaylistDetail> {
         Err(Error::NotSupported)
     }
@@ -172,12 +173,12 @@ pub trait MusicChannel: Send + Sync {
     /// [`Self::user_playlists`];没有当前用户歌单能力或未登录时返回 [`Error::NotSupported`]。
     ///
     /// 聚合层把 `NotSupported` 视为该 channel 空贡献,并继续从其他 channel 拉取。
-    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
         Err(Error::NotSupported)
     }
 
     /// 拉取该 channel 当前账号收藏的全部专辑，保留来源返回的顺序。
-    async fn my_albums(&self) -> Result<Vec<Album>> {
+    async fn my_albums(&self, _cache: CachePolicy) -> Result<Vec<Album>> {
         Err(Error::NotSupported)
     }
 

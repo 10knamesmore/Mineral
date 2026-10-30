@@ -2,7 +2,7 @@
 //!
 //! 实现 `App` 的播放控制、love 与下载；入口由 `App::dispatch` 调用。
 
-use mineral_model::{PlaylistEntry, Song};
+use mineral_model::{PlaylistEntry, RefreshScope, Song};
 use mineral_protocol::DownloadTarget;
 use mineral_task::{Priority, TaskEvent};
 
@@ -240,7 +240,7 @@ impl App {
             fetch.clone(),
             Priority::User,
         );
-        self.pending_container.insert(fetch.dedup_key(), mode);
+        self.pending_container.insert(fetch, mode);
     }
 
     /// 整张操作复用曲库中完整的歌单或专辑曲目；艺人热曲由详情任务获取。
@@ -344,7 +344,7 @@ impl App {
         }
     }
 
-    /// 容器播放意图兑现:`*Fetched` 事件按 [`DetailFetch::dedup_key`] 与登记意图配对,命中则从
+    /// 容器播放意图兑现:`*Fetched` 事件按 [`DetailFetch`] 与登记意图配对,命中则从
     /// **事件载荷**(非 detail 帧——帧可能已切走)取曲目入队、清意图。artist 只认热门曲那路
     /// (`ArtistDetailFetched`),`ArtistAlbumsFetched` 是专辑壳、与播放无关,不响应。
     pub(crate) fn fulfill_pending_container(&mut self, ev: &TaskEvent) {
@@ -356,7 +356,7 @@ impl App {
         {
             let container = self
                 .pending_container
-                .remove(&DetailFetch::PlaylistDetail(id.clone()).dedup_key())
+                .remove(&DetailFetch::PlaylistDetail(id.clone()))
                 .is_some();
             let selection = self
                 .pending_playlist_play
@@ -401,7 +401,7 @@ impl App {
         // 语境由到货事件的实体 id 直接定出(专辑 / 歌单 / artist),与登记意图时的容器同一身份。
         let (key, songs, context) = match ev {
             TaskEvent::AlbumDetailFetched { id, album } => (
-                DetailFetch::AlbumDetail(id.clone()).dedup_key(),
+                DetailFetch::AlbumDetail(id.clone()),
                 album
                     .tracks
                     .iter()
@@ -413,7 +413,7 @@ impl App {
                 },
             ),
             TaskEvent::PlaylistDetailFetched { id, detail, .. } if detail.complete => (
-                DetailFetch::PlaylistDetail(id.clone()).dedup_key(),
+                DetailFetch::PlaylistDetail(id.clone()),
                 detail
                     .playlist
                     .entries
@@ -426,7 +426,7 @@ impl App {
                 },
             ),
             TaskEvent::ArtistDetailFetched { id, artist } => (
-                DetailFetch::Artist(id.clone()).dedup_key(),
+                DetailFetch::Artist(id.clone()),
                 artist.songs.clone(),
                 QueueContextWire::Artist {
                     id: id.clone(),
@@ -440,9 +440,20 @@ impl App {
             self.enqueue_songs(songs, mode, context);
         }
     }
+
+    /// A refreshed detail must not fulfill a playback intent attached to the discarded read.
+    pub(crate) fn invalidate_pending_collection_playback(&mut self, scope: &RefreshScope) {
+        self.pending_container
+            .retain(|fetch, _| !fetch.affected_by(scope));
+        if self.pending_playlist_play.as_ref().is_some_and(|pending| {
+            DetailFetch::PlaylistDetail(pending.playlist.clone()).affected_by(scope)
+        }) {
+            self.pending_playlist_play = None;
+        }
+    }
 }
 
-/// 容器 → 其详情拉取目标(`DetailFetch`,跨类型 dedup_key 不碰撞)。
+/// 容器 → 其详情拉取目标(`DetailFetch` 区分实体类型和身份)。
 fn container_fetch(container: &ContainerRef) -> DetailFetch {
     match container {
         ContainerRef::Album(a) => DetailFetch::AlbumDetail(a.id.clone()),
@@ -600,7 +611,7 @@ mod tests {
         );
         assert!(
             app.pending_container
-                .contains_key(&DetailFetch::AlbumDetail(album.id.clone()).dedup_key()),
+                .contains_key(&DetailFetch::AlbumDetail(album.id.clone())),
             "已挂 pending 意图"
         );
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
@@ -629,10 +640,8 @@ mod tests {
             .iter()
             .map(|track| ("append", track.song.id.qualified()))
             .collect();
-        app.pending_container.insert(
-            DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
-            PlayMode::Append,
-        );
+        app.pending_container
+            .insert(DetailFetch::AlbumDetail(album.id.clone()), PlayMode::Append);
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
             id: album.id.clone(),
             album: Box::new(album),
@@ -717,7 +726,7 @@ mod tests {
     #[test]
     fn container_intent_matches_by_id() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
-        let key1 = DetailFetch::AlbumDetail(AlbumId::new(SourceKind::NETEASE, "al1")).dedup_key();
+        let key1 = DetailFetch::AlbumDetail(AlbumId::new(SourceKind::NETEASE, "al1"));
         app.pending_container
             .insert(key1.clone(), PlayMode::Replace);
         let al2 = album_with_songs("al2", 2);
@@ -741,10 +750,8 @@ mod tests {
     fn artist_play_only_fulfills_detail_path() -> color_eyre::Result<()> {
         let (mut app, queue_ops) = app_with_library_probed(/*len*/ 1, /*sel_track*/ 0)?;
         let aid = ArtistId::new(SourceKind::NETEASE, "ar1");
-        app.pending_container.insert(
-            DetailFetch::Artist(aid.clone()).dedup_key(),
-            PlayMode::Replace,
-        );
+        app.pending_container
+            .insert(DetailFetch::Artist(aid.clone()), PlayMode::Replace);
         // 专辑那路到货:不兑现。
         app.fulfill_pending_container(&TaskEvent::ArtistAlbumsFetched {
             id: aid.clone(),
@@ -843,7 +850,7 @@ mod tests {
             .map(|track| ("insert_next", track.song.id.qualified()))
             .collect::<Vec<_>>();
         app.pending_container.insert(
-            DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
+            DetailFetch::AlbumDetail(album.id.clone()),
             PlayMode::InsertNext,
         );
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
@@ -886,7 +893,7 @@ mod tests {
             .map(|track| ("insert_next", track.song.id.qualified()))
             .collect::<Vec<_>>();
         app.pending_container.insert(
-            DetailFetch::AlbumDetail(album.id.clone()).dedup_key(),
+            DetailFetch::AlbumDetail(album.id.clone()),
             PlayMode::InsertNext,
         );
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mineral_client::Client;
 use mineral_client::operation::{Outcome, Pending, SubmitError, UnknownReason};
 use mineral_client::state::{DownloadsDetailMirror, PlaybackMirror, PlayerMirror};
-use mineral_model::{Song, SongId};
+use mineral_model::{RefreshScope, Song, SongId};
 use mineral_protocol::{
     DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp, Request, SubscriptionTopic,
 };
@@ -79,6 +79,18 @@ impl ClientBackend {
 }
 
 impl Backend for ClientBackend {
+    fn refresh_collections(&self, scope: RefreshScope) {
+        let pending = self.client.refresh_collections(scope.clone());
+        self.spawn_pending(pending, move |outcome| Completion::Refresh {
+            scope,
+            outcome,
+        });
+    }
+
+    fn invalidate_collection_reads(&self, scope: &RefreshScope) {
+        self.task_submissions.lock().invalidate(scope);
+        self.client.mirror().discard_collection_events(scope);
+    }
     fn playlist_operation(&self, op: mineral_protocol::PlaylistOp) {
         match op.clone() {
             mineral_protocol::PlaylistOp::SaveQueue { name } => {

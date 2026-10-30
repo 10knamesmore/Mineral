@@ -88,6 +88,17 @@ impl AppState {
                 }
                 update.record(self);
                 let playlist = &detail.playlist;
+                if *load == PlaylistLoad::Complete
+                    && let Some(listed) = self
+                        .models
+                        .library
+                        .playlists
+                        .iter_mut()
+                        .find(|listed| listed.data.id == *id)
+                {
+                    listed.data = playlist.clone();
+                    listed.data.entries.clear();
+                }
                 let selected_index = (self.ui.browse.view == super::View::Tracks)
                     .then(|| {
                         self.selected_playlist()

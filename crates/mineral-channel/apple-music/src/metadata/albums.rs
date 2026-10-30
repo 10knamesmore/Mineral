@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use mineral_channel_core::store::{AlbumCacheEntry, NamespaceStore};
-use mineral_model::{Album, AlbumId, AlbumRef, AlbumTrack, CollectionIndex};
+use mineral_model::{Album, AlbumId, AlbumRef, AlbumTrack, CachePolicy, CollectionIndex};
 use rustc_hash::FxHasher;
 
 use super::data::{AlbumResource, ResourceKind, ResourceScope, TrackResource};
@@ -34,8 +34,14 @@ impl AlbumLoader {
     }
 
     /// Library and catalog IDs own separate snapshots, preserving saved track subsets.
-    async fn load(&self, metadata: &MetadataClient, id: &AlbumId) -> Result<Album> {
-        if let Some(store) = &self.persist
+    async fn load(
+        &self,
+        metadata: &MetadataClient,
+        id: &AlbumId,
+        cache: CachePolicy,
+    ) -> Result<Album> {
+        if cache == CachePolicy::UseCache
+            && let Some(store) = &self.persist
             && let Some(entry) = store.get_album_cache(id).await?
             && entry.expired_at > Utc::now()
         {
@@ -71,8 +77,8 @@ impl AlbumLoader {
 
 impl MetadataClient {
     /// Return a complete album snapshot, loading missing track pages on a cache miss.
-    pub(crate) async fn album_detail(&self, id: &AlbumId) -> Result<Album> {
-        self.albums.load(self, id).await
+    pub(crate) async fn album_detail(&self, id: &AlbumId, cache: CachePolicy) -> Result<Album> {
+        self.albums.load(self, id, cache).await
     }
 }
 

@@ -17,7 +17,7 @@ use crate::render::anim::{Transition, ticks16_from_ms};
 use crate::render::theme::Theme;
 use crate::runtime::backend::Backend;
 use crate::runtime::keymap::Keymap;
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, DetailFetch};
 use crate::runtime::ui::prefs::UiPrefs;
 use crate::runtime::window_title::WindowTitle;
 
@@ -112,10 +112,10 @@ pub struct App {
     /// 后台剪贴板写入入口与最近一次复制的结果。
     pub(crate) clipboard: ClipboardState,
 
-    /// 容器「播放全部 / 加入队列」的待兑现意图:key = [`crate::runtime::state::DetailFetch::dedup_key`],value = 入队
+    /// 容器「播放全部 / 加入队列」的待兑现意图:key = [`DetailFetch`],value = 入队
     /// 模式。容器曲目未加载时登记,对应 `*Fetched` 事件到货后由 [`Self::fulfill_pending_container`]
     /// 取载荷入队并清除(入队走 client,故意图落 App 而非 state)。同 key 后发覆盖、切走不命中即丢。
-    pub(crate) pending_container: FxHashMap<String, PlayMode>,
+    pub(crate) pending_container: FxHashMap<DetailFetch, PlayMode>,
 
     /// 首批可见时发起的起播意图；完整曲目到货后保留原始位置和过滤词兑现。
     pub(crate) pending_playlist_play: Option<crate::player_actions::PendingPlaylistPlay>,

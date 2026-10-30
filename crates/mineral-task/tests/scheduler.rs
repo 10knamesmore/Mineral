@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult, Result};
+use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
@@ -83,16 +84,17 @@ impl MusicChannel for FakeChannel {
     async fn search_playlists(&self, _q: &str, _p: Page) -> Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
-    async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
+    async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
-    async fn album_detail(&self, _id: &AlbumId) -> Result<Album> {
+    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> Result<Album> {
         Err(Error::NotSupported)
     }
     async fn playlist_detail(
         &self,
         id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
         self.maybe_wait().await;
         Ok(mineral_channel_core::PlaylistDetail::complete(
@@ -113,7 +115,7 @@ impl MusicChannel for FakeChannel {
             lines: mineral_model::parse_lrc("[00:01.00]hello\n[00:02.50]world"),
         })
     }
-    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
         self.maybe_wait().await;
         Ok(self.playlists.clone())
     }
@@ -145,7 +147,7 @@ fn channels(gate: Option<Arc<Semaphore>>) -> Vec<Arc<dyn MusicChannel>> {
 
 #[tokio::test]
 async fn submit_and_done_ok() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8, &[], None);
     let h = sched.submit(my_playlists_kind(), Priority::User);
     assert_eq!(h.done().await, TaskOutcome::Ok);
 
@@ -176,6 +178,8 @@ async fn dedup_returns_same_handle() -> color_eyre::Result<()> {
     let sched = Scheduler::new(
         &channels(Some(Arc::clone(&gate))),
         /*workers_per_channel*/ 8,
+        &[],
+        None,
     );
     let h1 = sched.submit(my_playlists_kind(), Priority::User);
     let h2 = sched.submit(my_playlists_kind(), Priority::User);
@@ -189,7 +193,12 @@ async fn dedup_returns_same_handle() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn cancel_where_batch() -> color_eyre::Result<()> {
     let gate = Arc::new(Semaphore::new(0));
-    let sched = Scheduler::new(&channels(Some(gate)), /*workers_per_channel*/ 8);
+    let sched = Scheduler::new(
+        &channels(Some(gate)),
+        /*workers_per_channel*/ 8,
+        &[],
+        None,
+    );
     let h1 = sched.submit(my_playlists_kind(), Priority::User);
     let h2 = sched.submit(playlist_tracks_kind(), Priority::User);
     sched.cancel_where(|k| matches!(k, TaskKind::ChannelFetch(_)));
@@ -204,6 +213,8 @@ async fn escalate_replaces_background() -> color_eyre::Result<()> {
     let sched = Scheduler::new(
         &channels(Some(Arc::clone(&gate))),
         /*workers_per_channel*/ 8,
+        &[],
+        None,
     );
     let h_bg = sched.submit(my_playlists_kind(), Priority::Background);
     let h_user = sched.submit(my_playlists_kind(), Priority::User);
@@ -216,7 +227,7 @@ async fn escalate_replaces_background() -> color_eyre::Result<()> {
 
 #[tokio::test]
 async fn lyrics_emits_event() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8, &[], None);
     let h = sched.submit(lyrics_kind("s3"), Priority::User);
     assert_eq!(h.done().await, TaskOutcome::Ok);
 
@@ -239,7 +250,7 @@ async fn lyrics_emits_event() -> color_eyre::Result<()> {
 /// 搜索端点失败时回带完整请求，且保留失败埋点。
 #[tokio::test]
 async fn search_failure_emits_request_and_fetch_done() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8, &[], None);
     let source = SourceKind::NETEASE;
     let kind = SearchKind::Album;
     let query = "续页失败".to_owned();
@@ -284,7 +295,7 @@ async fn search_cancellation_emits_request_before_and_during_execution() -> colo
         let channel = FakeChannel::new(Some(Arc::new(Semaphore::new(0))));
         let page_started = Arc::clone(&channel.page_started);
         let channel: Arc<dyn MusicChannel> = Arc::new(channel);
-        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1);
+        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1, &[], None);
         let source = SourceKind::NETEASE;
         let kind = SearchKind::Song;
         let query = "取消续页".to_owned();
@@ -342,7 +353,7 @@ async fn search_cancellation_emits_request_before_and_during_execution() -> colo
 /// 成功搜索只发送结果与成功埋点，不能误发释放待收取页的失败事件。
 #[tokio::test]
 async fn successful_search_emits_results_without_failure() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8, &[], None);
     let source = SourceKind::NETEASE;
     let kind = SearchKind::Song;
     let query = "成功续页".to_owned();
@@ -403,7 +414,7 @@ async fn artist_albums_preserve_page_metadata() -> color_eyre::Result<()> {
             has_more,
         });
         let channel: Arc<dyn MusicChannel> = Arc::new(channel);
-        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1);
+        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1, &[], None);
         let id = ArtistId::new(SourceKind::NETEASE, "artist1");
         let artist_ref = id.qualified();
         let page = Page::new(60, 20);
@@ -442,7 +453,7 @@ async fn artist_albums_preserve_page_metadata() -> color_eyre::Result<()> {
 /// 艺人专辑页失败时回带艺人和分页请求，且保留失败埋点。
 #[tokio::test]
 async fn artist_albums_failure_emits_request_and_fetch_done() -> color_eyre::Result<()> {
-    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 1);
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 1, &[], None);
     let id = ArtistId::new(SourceKind::NETEASE, "artist1");
     let artist_ref = id.qualified();
     let page = Page::new(60, 20);
@@ -479,7 +490,7 @@ async fn artist_albums_cancel_before_and_during_execution() -> color_eyre::Resul
         let channel = FakeChannel::new(Some(Arc::new(Semaphore::new(0))));
         let page_started = Arc::clone(&channel.page_started);
         let channel: Arc<dyn MusicChannel> = Arc::new(channel);
-        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1);
+        let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1, &[], None);
         let id = ArtistId::new(SourceKind::NETEASE, "artist1");
         let artist_ref = id.qualified();
         let page = Page::new(90, 15);
@@ -561,16 +572,21 @@ impl MusicChannel for WriteRecorder {
     async fn search_playlists(&self, _q: &str, _p: Page) -> Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
-    async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
+    async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
-    async fn album_detail(&self, _id: &mineral_model::AlbumId) -> Result<mineral_model::Album> {
+    async fn album_detail(
+        &self,
+        _id: &mineral_model::AlbumId,
+        _cache: CachePolicy,
+    ) -> Result<mineral_model::Album> {
         Err(Error::NotSupported)
     }
     async fn playlist_detail(
         &self,
         _id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
@@ -600,7 +616,7 @@ async fn playlist_writes_run_serially_in_submit_order() -> color_eyre::Result<()
     let ch: Arc<dyn MusicChannel> = Arc::new(WriteRecorder {
         events: Arc::clone(&events),
     });
-    let sched = Scheduler::new(&[ch], /*workers_per_channel*/ 8);
+    let sched = Scheduler::new(&[ch], /*workers_per_channel*/ 8, &[], None);
 
     let h1 = sched.submit(rename_op("a"), Priority::User);
     let h2 = sched.submit(rename_op("b"), Priority::User);
@@ -627,7 +643,7 @@ async fn playlist_writes_run_serially_in_submit_order() -> color_eyre::Result<()
 #[tokio::test]
 async fn playlist_write_failure_emits_error_event() -> color_eyre::Result<()> {
     // FakeChannel 没实现写方法 → trait 默认 NotSupported
-    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8);
+    let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 8, &[], None);
     let h = sched.submit(rename_op("x"), Priority::User);
     assert_eq!(h.done().await, TaskOutcome::Failed);
 

@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
-use mineral_protocol::{SessionMessage, SubscribeRequest, SubscriptionId, SubscriptionTopic};
+use mineral_protocol::{
+    SessionMessage, SubscribeRequest, Subscription, SubscriptionId, SubscriptionTopic,
+};
 use rustc_hash::FxHashMap;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use super::session::SessionServices;
@@ -25,6 +27,9 @@ struct Pump {
 
     /// PCM 订阅令牌(退订时归还中继)。
     pcm: Option<PcmSubscription>,
+
+    /// Flush already-published task results into the session's ordered output before an ack.
+    flush_events: Option<mpsc::UnboundedSender<oneshot::Sender<()>>>,
 }
 
 /// 一条连接的订阅登记。
@@ -58,6 +63,7 @@ impl Subscriptions {
             return;
         }
         let resync = Arc::new(Notify::new());
+        let mut flush_events = None;
         let (handle, pcm) = match request.topic {
             SubscriptionTopic::Player => {
                 let known = request.known_player.unwrap_or_default();
@@ -110,12 +116,17 @@ impl Subscriptions {
                 (handle, Some(token))
             }
             SubscriptionTopic::Events(category) => {
+                let (flush_tx, flush_rx) = mpsc::unbounded_channel();
+                if category == Subscription::Task {
+                    flush_events = Some(flush_tx);
+                }
                 let handle = tokio::spawn(pump_events(
                     services.publishers.events(),
                     category,
                     request.id,
                     client.clone(),
                     out.clone(),
+                    flush_rx,
                 ));
                 (handle, None)
             }
@@ -126,8 +137,21 @@ impl Subscriptions {
                 handle,
                 resync,
                 pcm,
+                flush_events,
             },
         );
+    }
+
+    /// Acknowledgements must not overtake results waiting in a task subscription's broadcast receiver.
+    pub(super) async fn flush_task_events(&self) {
+        for pump in self.pumps.values() {
+            if let Some(flush) = &pump.flush_events {
+                let (done, waiting) = oneshot::channel();
+                if flush.send(done).is_ok() {
+                    let _ = waiting.await;
+                }
+            }
+        }
     }
 
     /// 取消订阅。

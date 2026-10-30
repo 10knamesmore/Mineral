@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use mineral_channel_core::store::{AlbumCacheEntry, NamespaceStore};
-use mineral_model::{Album, AlbumId};
+use mineral_model::{Album, AlbumId, CachePolicy};
 use rustc_hash::FxHasher;
 
 use crate::config::AlbumCacheConfig;
@@ -38,8 +38,11 @@ impl AlbumLoader {
         policy: &RequestPolicy,
         persist: Option<&dyn NamespaceStore>,
         id: &AlbumId,
+        cache: CachePolicy,
     ) -> Result<Album> {
-        if let Some(store) = persist {
+        if cache == CachePolicy::UseCache
+            && let Some(store) = persist
+        {
             match store.get_album_cache(id).await {
                 Ok(Some(entry)) if entry.expired_at > Utc::now() => {
                     mineral_log::debug!(target: "channel_netease", album = %id,
@@ -69,6 +72,9 @@ impl AlbumLoader {
         if let Some(store) = persist
             && let Err(error) = store.put_album_cache(&entry).await
         {
+            if cache == CachePolicy::Reload {
+                return Err(error.into());
+            }
             mineral_log::warn!(target: "channel_netease", album = %id,
                 error = mineral_log::chain(&error), "album cache write failed");
         }

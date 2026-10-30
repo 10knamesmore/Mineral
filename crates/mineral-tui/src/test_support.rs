@@ -12,7 +12,8 @@ use mineral_client::operation::Outcome;
 use mineral_client::state::{PlaybackMirror, PlayerMirror};
 use mineral_common::revision::Revision;
 use mineral_model::{
-    MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind, Song, SongId, SourceKind,
+    MediaUrl, Playlist, PlaylistEntry, PlaylistId, RefreshScope, SearchKind, Song, SongId,
+    SourceKind,
 };
 use mineral_protocol::{
     DownloadSummary, Event, FailureKind, QueueContextWire, QueueEditOutcome, QueueOp,
@@ -473,6 +474,10 @@ impl Backend for TestClient {
             v.push(kind);
         }
     }
+
+    fn refresh_collections(&self, _scope: RefreshScope) {}
+
+    fn invalidate_collection_reads(&self, _scope: &RefreshScope) {}
 
     // 测试后端立即接收任务，没有待提交积压。
     fn flush_task_submissions(&self) {}
