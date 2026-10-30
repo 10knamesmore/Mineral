@@ -118,7 +118,7 @@ fn eval_default(lua: &Lua, source: &str, name: &str) -> Result<Table> {
         .set_name(name)
         .eval()
         .map_err(|source| Error::Lua {
-            operation: "求值内置默认配置",
+            operation: "evaluate bundled default configuration",
             source,
         })
 }
