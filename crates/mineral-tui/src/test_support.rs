@@ -22,12 +22,14 @@ use mineral_protocol::{
 use mineral_task::{Priority, Snapshot, TaskKind};
 
 use crate::app::App;
+use crate::config::TuiConfig;
 use crate::image::ImageEngine;
 use crate::render::anim::Toggle;
 use crate::render::theme::Theme;
 use crate::runtime::backend::{Backend, BackendBootstrap, Completion, CompletionQueue};
 use crate::runtime::state::{AppState, LyricExtra, View};
 use crate::runtime::view_model::{CollectionTrackView, PlaylistView};
+use crate::terminal::ColorReplies;
 
 // 共享零件经 mineral-test 收口;re-export 让调用点继续写 `crate::test_support::xxx`。
 pub(crate) use mineral_test::{
@@ -41,7 +43,11 @@ pub(crate) use mineral_test::{
 ///   与生产启动相同配置路径生成的主题；`tui-default.lua` 无法加载时返回错误。
 pub(crate) fn default_theme() -> color_eyre::Result<Theme> {
     let cfg = crate::config::TuiConfig::defaults()?;
-    Ok(Theme::from_config(cfg.theme()))
+    theme_from_config(&cfg)
+}
+
+pub(crate) fn theme_from_config(cfg: &TuiConfig) -> color_eyre::Result<Theme> {
+    Ok(Theme::from_config(cfg, &ColorReplies::default()))
 }
 
 /// 造一个 `PlaylistView`(空曲目,只元信息)。
@@ -525,7 +531,7 @@ fn test_app() -> color_eyre::Result<App> {
 
 /// 同 [`test_app`],client 由调用方注入(需要探针 / 自定义剧本的测试用)。
 fn test_app_with(client: Arc<dyn Backend>) -> color_eyre::Result<App> {
-    let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
+    let cfg = Arc::new(TuiConfig::defaults()?);
     let images = ImageEngine::disabled(Arc::clone(&cfg));
     Ok(App::new(
         client,
@@ -533,6 +539,7 @@ fn test_app_with(client: Arc<dyn Backend>) -> color_eyre::Result<App> {
         /*launch_anchor*/ None,
         cfg,
         crate::runtime::ui::prefs::UiPrefs::disabled(),
+        ColorReplies::default(),
     ))
 }
 

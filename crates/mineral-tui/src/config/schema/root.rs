@@ -19,6 +19,7 @@ use super::script::TuiScriptConfig;
 use super::search::SearchConfig;
 use super::spectrum::SpectrumConfig;
 use super::theme::{ColorRef, ThemeConfig};
+use super::theme_defaults::ThemeDefaults;
 use super::toast::ToastConfig;
 use super::waveform::WaveformConfig;
 use super::window_title::WindowTitleConfig;
@@ -42,6 +43,9 @@ pub struct TuiConfig {
 
     /// 主题配色
     theme: ThemeConfig,
+
+    /// Fixed RGB palette used when required terminal color replies are unavailable.
+    theme_defaults: ThemeDefaults,
 
     /// 按键绑定
     keys: KeysConfig,

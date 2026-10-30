@@ -43,9 +43,13 @@ impl crate::app::App {
             return;
         }
         if let Some(palette) = self.state.resources.images.palettes.get(&url).cloned() {
-            let accents = self
-                .dynamic_accent_enabled()
-                .then(|| derive_accents(&palette));
+            let accents = self.dynamic_accent_enabled().then(|| {
+                derive_accents(
+                    &palette,
+                    self.theme_base.background_rgb(),
+                    *self.state.cfg.theme().dynamic().minimum_contrast(),
+                )
+            });
             self.accent_fade.set_target(accents, &self.theme_base);
             self.feed_ambient(Some(&palette));
             self.state
@@ -87,7 +91,7 @@ impl crate::app::App {
     }
 
     /// 向氛围渐变投喂目标:开关关闭 / 无色板 → 回落底色场。
-    /// ANSI 主题无真彩底色,氛围场不可用,状态机保持现状(渲染侧同样拦下)。
+    /// An explicit non-RGB base leaves the ambient field unchanged.
     pub(crate) fn feed_ambient(&mut self, palette: Option<&crate::render::palette::CoverPalette>) {
         let Some(base) = crate::render::ambient::rgb_of(self.theme_base.base) else {
             return;

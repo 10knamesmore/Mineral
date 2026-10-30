@@ -68,7 +68,8 @@ pub fn load_daemon_with_vm(
 impl DaemonConfig {
     /// 只求值内置 daemon 默认;程序分发的默认配置损坏时返回错误。
     pub fn defaults() -> Result<Self> {
-        let (config, _) = mineral_config::defaults(DEFAULT, "daemon-default.lua", prepare_daemon)?;
+        let (config, _) =
+            mineral_config::defaults(&Lua::new(), DEFAULT, "daemon-default.lua", prepare_daemon)?;
         Ok(config)
     }
 }
@@ -76,8 +77,12 @@ impl DaemonConfig {
 /// 内置 daemon 默认树;供宿主测试构造 session 覆盖,不读取用户文件。
 #[cfg(test)]
 pub(crate) fn default_daemon_tree() -> Result<serde_json::Value> {
-    let (_, tree) =
-        mineral_config::defaults::<DaemonConfig>(DEFAULT, "daemon-default.lua", prepare_daemon)?;
+    let (_, tree) = mineral_config::defaults::<DaemonConfig>(
+        &Lua::new(),
+        DEFAULT,
+        "daemon-default.lua",
+        prepare_daemon,
+    )?;
     Ok(tree)
 }
 

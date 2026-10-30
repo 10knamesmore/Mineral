@@ -47,7 +47,7 @@ impl PaintView for CounterComponent {
 #[test]
 fn component_identity_survives_moves_but_not_new_instances() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -92,7 +92,7 @@ fn component_identity_survives_moves_but_not_new_instances() -> color_eyre::Resu
 #[test]
 fn reordering_instances_invalidates_an_otherwise_unchanged_plan() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -124,7 +124,7 @@ fn reordering_instances_invalidates_an_otherwise_unchanged_plan() -> color_eyre:
 #[test]
 fn preparation_runs_through_cache_hits_and_cancelled_plans() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,

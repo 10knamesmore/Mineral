@@ -4,6 +4,8 @@ use mineral_model::{SongId, SourceKind};
 use mineral_protocol::StoreValue;
 use mlua::{IntoLua, Lua};
 
+use crate::color::ColorValue;
+
 /// 解析 qualified 形式的歌曲 id(`"namespace:value"`)，与音乐 hook 和查询投影一致。
 ///
 /// # Params:
@@ -99,11 +101,13 @@ pub(crate) fn store_to_lua(lua: &Lua, value: &StoreValue) -> mlua::Result<mlua::
 /// 配置值的嵌套深度上限，循环引用表在边界报错。
 const CONFIG_MAX_DEPTH: u8 = 8;
 
-/// Lua 配置值 → [`mineral_protocol::BusValue`]，由两侧配置覆盖共用。
+/// Converts a Lua configuration payload into [`mineral_protocol::BusValue`] for
+/// both host override paths.
 ///
-/// table 判形:键全为 `1..=n` 连续整数 → `Array`;键全为字符串 → `Map`
-/// (保留遍历顺序);混合 / 其他键型报错。function / userdata 等不可
-/// 序列化类型报错。
+/// Tables with consecutive integer keys become arrays and tables with string
+/// keys become maps; mixed or other key types are rejected. A [`ColorValue`]
+/// userdata is converted through its tagged JSON encoding so a runtime override
+/// keeps the color atomic. Functions and other userdata are rejected.
 ///
 /// # Params:
 ///   - `value`: 脚本侧载荷
@@ -125,6 +129,12 @@ pub(crate) fn lua_to_bus(
         mlua::Value::Number(f) => Ok(BusValue::Float(*f)),
         mlua::Value::String(s) => Ok(BusValue::Str(s.to_str()?.to_owned())),
         mlua::Value::Table(table) => lua_table_to_bus(table, depth),
+        mlua::Value::UserData(userdata) if userdata.is::<ColorValue>() => {
+            let json = serde_json::to_value(userdata).map_err(|source| {
+                mlua::Error::RuntimeError(format!("failed to serialize color value: {source}"))
+            })?;
+            Ok(BusValue::from_json(json))
+        }
         other => Err(mlua::Error::RuntimeError(format!(
             "payload 不支持 {} 类型(可用:nil/boolean/number/string/table)",
             other.type_name()

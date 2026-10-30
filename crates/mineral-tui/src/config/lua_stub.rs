@@ -10,10 +10,10 @@ use super::schema::{
     MarqueeMode, MenuReveal, MinimapConfig, PlayheadConfig, PrefetchConfig, ProgressConfig,
     ProgressTrackConfig, PulseConfig, PulseDepthConfig, PunchConfig, RevealConfig, RotateConfig,
     ScopeConfig, SearchConfig, SearchFocusTransition, SearchHitConfig, SpectrumConfig,
-    SpectrumStyle, SweepStyle, TerrainConfig, TextAlphaConfig, TextStyle, ThemeConfig, TitleField,
-    TitleIcons, ToastConfig, TrackPosMemory, TrailTimingConfig, TransportFeedbackConfig, TuiConfig,
-    TuiScriptConfig, VignetteConfig, WaterfallConfig, WaveformConfig, WindowTitleConfig,
-    ZoomConfig,
+    SpectrumStyle, SweepStyle, TerrainConfig, TextAlphaConfig, TextStyle, ThemeConfig,
+    ThemeDefaults, TitleField, TitleIcons, ToastConfig, TrackPosMemory, TrailTimingConfig,
+    TransportFeedbackConfig, TuiConfig, TuiScriptConfig, VignetteConfig, WaterfallConfig,
+    WaveformConfig, WindowTitleConfig, ZoomConfig,
 };
 
 /// LuaLS 文件头与使用说明。
@@ -44,6 +44,7 @@ pub(super) fn meta_config_lua() -> String {
         TuiConfig::LUA_STUB,
         TuiScriptConfig::LUA_STUB,
         ThemeConfig::LUA_STUB,
+        ThemeDefaults::LUA_STUB,
         DynamicThemeConfig::LUA_STUB,
         SearchHitConfig::LUA_STUB,
         TextAlphaConfig::LUA_STUB,

@@ -4,13 +4,19 @@
 //! (`sources.<name>.color`),由 [`SourceColors`] 按 source 名解析(命中走配置色,未配置走中立
 //! 兜底)——不用一个闭合调色枚举强塞进开放的来源集合。
 
-use crate::config::{AnsiSlot, ColorRef, ColorValue};
+use crate::config::{ColorRef, TuiConfig};
+use crate::render::palette::Rgb;
+use crate::render::theme_palette::{color_of_value, select_palette};
+use crate::terminal::{ColorReplies, TerminalPalette};
 use mineral_model::SourceKind;
 use ratatui::style::{Color, Modifier, Style};
 
 /// 一组完整的 UI 颜色 token。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
+    /// The selected palette also resolves source badges and explicit color references.
+    pub(crate) terminal_palette: TerminalPalette,
+
     /// 主背景。
     pub base: Color,
 
@@ -86,10 +92,8 @@ pub struct TextAlpha {
     pub ghost: u16,
 }
 
-/// 对实际背景现算的三档次级文本色：`lerp(bg, text, alpha)`。
-///
-/// 一处渲染面采样一次背景、换出一组 `Ink` 共用。采不到真彩背景时按 `base` 混合；
-/// `base` 或 `text` 也非真彩才回落静态 token（`subtext` / `overlay` / `surface1`）。
+/// Three text levels blended against the sampled background.
+/// Reset colors use the selected terminal palette for calculations.
 #[derive(Clone, Copy, Debug)]
 pub struct Ink {
     /// 次级文本:metadata / 面板标题 / 时间戳。
@@ -103,6 +107,24 @@ pub struct Ink {
 }
 
 impl Theme {
+    /// RGB backing the configured background, including terminal-default backgrounds.
+    pub(crate) fn background_rgb(&self) -> Rgb {
+        match self.background {
+            Color::Rgb(r, g, b) => Rgb::new(r, g, b),
+            Color::Reset => {
+                let color = self.terminal_palette.background;
+                Rgb::new(color.red, color.green, color.blue)
+            }
+            _ => match self.base {
+                Color::Rgb(r, g, b) => Rgb::new(r, g, b),
+                _ => {
+                    let color = self.terminal_palette.background;
+                    Rgb::new(color.red, color.green, color.blue)
+                }
+            },
+        }
+    }
+
     /// unavailable(来源标记「无可播资源」)行的整行降权样式:DIM 叠加,各列语义色不动。
     /// 只降视觉权重、**不禁选**——unavailable 是列表元数据口径,播放时取流失败自有
     /// 拦截脚本补救,禁选会堵死这条路。
@@ -124,35 +146,49 @@ impl Theme {
     ///   落地颜色。
     pub fn resolve(&self, cr: &ColorRef) -> Color {
         match cr {
-            ColorRef::Value(v) => color_of_value(*v),
+            ColorRef::Value(v) => color_of_value(v, &self.terminal_palette),
             ColorRef::Token(name) => self.token_by_name(name.as_str()),
         }
     }
 
-    /// 从配置切片落地主题:14 token 各取一色 + search_hit 样式。
-    ///
-    /// # Params:
-    ///   - `cfg`: 主题配置切片
-    ///
-    /// # Return:
-    ///   落地后的 [`Theme`]。
-    pub fn from_config(cfg: &crate::config::ThemeConfig) -> Self {
-        let c = |v: &ColorValue| color_of_value(*v);
+    /// Resolve interface colors using either terminal replies or theme_defaults.
+    pub(crate) fn from_config(config: &TuiConfig, colors: &ColorReplies) -> Self {
+        let terminal_palette = select_palette(config, colors);
+        let cfg = config.theme();
+        let [
+            base,
+            mantle,
+            crust,
+            surface0,
+            surface1,
+            overlay,
+            subtext,
+            text,
+            accent,
+            accent_2,
+            red,
+            yellow,
+            green,
+            peach,
+        ] = cfg
+            .colors()
+            .map(|value| color_of_value(value, &terminal_palette));
         let mut t = Self {
-            base: c(cfg.base()),
-            mantle: c(cfg.mantle()),
-            crust: c(cfg.crust()),
-            surface0: c(cfg.surface0()),
-            surface1: c(cfg.surface1()),
-            overlay: c(cfg.overlay()),
-            subtext: c(cfg.subtext()),
-            text: c(cfg.text()),
-            accent: c(cfg.accent()),
-            accent_2: c(cfg.accent_2()),
-            red: c(cfg.red()),
-            yellow: c(cfg.yellow()),
-            green: c(cfg.green()),
-            peach: c(cfg.peach()),
+            terminal_palette,
+            base,
+            mantle,
+            crust,
+            surface0,
+            surface1,
+            overlay,
+            subtext,
+            text,
+            accent,
+            accent_2,
+            red,
+            yellow,
+            green,
+            peach,
             background: Color::Reset,
             search_hit_color: Color::Reset,
             search_hit_modifier: Modifier::empty(),
@@ -195,8 +231,7 @@ impl Theme {
         }
     }
 
-    /// 按实际背景现算三档次级文本色;回落链(bg → `base` → 静态 token)见
-    /// [`Theme::text_over`]。
+    /// Calculate text levels against the actual background; see [`Theme::text_over`].
     ///
     /// # Params:
     ///   - `bg`: 所在渲染面的实际背景色(先铺 bg 后画字,从 buffer 采样)
@@ -217,29 +252,28 @@ impl Theme {
         }
     }
 
-    /// `lerp(bg, text, alpha)`:主文本色对实际背景按千分比混合(连续 alpha,歌词
-    /// 距离淡出用;三档离散层级走 [`Theme::ink_over`])。
-    ///
-    /// 采样给的 `bg` 非真彩(无人铺 bg 的面采到 Reset / ANSI cell)时按「背景 ≈
-    /// `base`」混合——browse 面板不铺底色、观感即 base 是仓库既有假设(marquee
-    /// `fade_to` 同源),这级回落让 `text_alpha` 不依赖氛围背景恒生效。
-    ///
-    /// # Params:
-    ///   - `bg`: 实际背景色
-    ///   - `alpha_permille`: 混合比例,千分比(`1000` = 纯 `text`)
-    ///
-    /// # Return:
-    ///   混合色;`base` 也非真彩(ANSI / 跟随终端主题)或 `text` 非真彩时 `None`,
-    ///   调用方回落静态 token。
+    /// Blend text over the sampled background with an opacity in thousandths.
+    /// A Reset cell uses terminal background RGB without changing its output style.
     pub fn text_over(&self, bg: Color, alpha_permille: u16) -> Option<Color> {
         let bg = match bg {
             Color::Rgb(..) => bg,
+            Color::Reset => {
+                let color = self.terminal_palette.background;
+                Color::Rgb(color.red, color.green, color.blue)
+            }
             _ => self.base,
         };
-        match (bg, self.text) {
+        let text = match self.text {
+            Color::Reset => {
+                let color = self.terminal_palette.foreground;
+                Color::Rgb(color.red, color.green, color.blue)
+            }
+            text => text,
+        };
+        match (bg, text) {
             (Color::Rgb(..), Color::Rgb(..)) => Some(crate::render::color::lerp_color(
                 bg,
-                self.text,
+                text,
                 u64::from(alpha_permille),
                 1000,
             )),
@@ -287,52 +321,5 @@ fn modifier_of(style: crate::config::TextStyle) -> Modifier {
         crate::config::TextStyle::Dim => Modifier::DIM,
         crate::config::TextStyle::Reversed => Modifier::REVERSED,
         crate::config::TextStyle::CrossedOut => Modifier::CROSSED_OUT,
-    }
-}
-
-/// 把配置层的具体色值落地成 ratatui [`Color`]:固定色 → `Rgb`、ANSI 槽 → 具名色
-/// (随终端配色联动)、终端默认 → `Reset`。14 个 token 与 [`ColorRef::Value`] 共用此映射。
-///
-/// # Params:
-///   - `value`: 具体色值
-///
-/// # Return:
-///   落地颜色。
-fn color_of_value(value: ColorValue) -> Color {
-    match value {
-        ColorValue::Hex(h) => Color::Rgb(h.r(), h.g(), h.b()),
-        ColorValue::Ansi(slot) => ansi_color(slot),
-        ColorValue::Reset => Color::Reset,
-    }
-}
-
-/// 16 个 ANSI 槽号 → ratatui 具名色。发经典 SGR(具名变体),由终端当前配色填 RGB。
-///
-/// **注**:ratatui 里槽 7(white)是 `Gray`、槽 15(bright white)是 `White`,别按名字直觉对。
-///
-/// # Params:
-///   - `slot`: ANSI 槽(`index()` 恒 ∈ `0..=15`)
-///
-/// # Return:
-///   对应具名色。
-fn ansi_color(slot: AnsiSlot) -> Color {
-    match slot.index() {
-        0 => Color::Black,
-        1 => Color::Red,
-        2 => Color::Green,
-        3 => Color::Yellow,
-        4 => Color::Blue,
-        5 => Color::Magenta,
-        6 => Color::Cyan,
-        7 => Color::Gray,
-        8 => Color::DarkGray,
-        9 => Color::LightRed,
-        10 => Color::LightGreen,
-        11 => Color::LightYellow,
-        12 => Color::LightBlue,
-        13 => Color::LightMagenta,
-        14 => Color::LightCyan,
-        // 15;index() 恒 ≤ 15,catch-all 兜类型穷尽。
-        _ => Color::White,
     }
 }

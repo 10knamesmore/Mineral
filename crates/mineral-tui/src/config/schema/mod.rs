@@ -16,6 +16,7 @@ mod script;
 mod search;
 mod spectrum;
 mod theme;
+mod theme_defaults;
 mod toast;
 mod waveform;
 mod window_title;
@@ -48,9 +49,10 @@ pub use spectrum::{
     BarsConfig, ScopeConfig, SpectrumConfig, SpectrumStyle, TerrainConfig, WaterfallConfig,
 };
 pub use theme::{
-    AnsiSlot, ColorRef, ColorValue, DynamicThemeConfig, SearchHitConfig, TextAlphaConfig,
-    TextStyle, ThemeConfig,
+    AnsiSlot, ColorMix, ColorRef, ColorSource, ColorValue, DynamicThemeConfig, HexColor,
+    SearchHitConfig, TerminalColor, TextAlphaConfig, TextStyle, ThemeConfig, TokenName,
 };
+pub use theme_defaults::ThemeDefaults;
 pub use toast::ToastConfig;
 pub use waveform::{RevealConfig, WaveformConfig};
 pub use window_title::{TimeFormat, TitleField, TitleIcons, TitleSegment, WindowTitleConfig};

@@ -20,6 +20,7 @@ use crate::runtime::keymap::Keymap;
 use crate::runtime::state::{AppState, DetailFetch};
 use crate::runtime::ui::prefs::UiPrefs;
 use crate::runtime::window_title::WindowTitle;
+use crate::terminal::ColorReplies;
 
 use super::clipboard::ClipboardState;
 use super::queue_edit::QueueEdits;
@@ -36,6 +37,9 @@ pub struct App {
     /// 配置落地的 base 主题(`Theme::from_config` 产物,热更时整体重建)。
     /// 渲染永远读 `theme`,本字段只作动态 accent 合成与回落的基准。
     pub(crate) theme_base: Theme,
+
+    /// Startup terminal replies reused by configuration reloads.
+    pub(crate) terminal_colors: ColorReplies,
 
     /// 封面驱动的 accent 渐变状态机:目标由 `sync_cover_palette` 按封面身份 diff
     /// 投喂,每拍推进并合成 effective `theme`。
@@ -143,9 +147,10 @@ impl App {
         launch_anchor: Option<Position>,
         cfg: Arc<crate::config::TuiConfig>,
         ui_prefs: UiPrefs,
+        terminal_colors: ColorReplies,
     ) -> Self {
         let completions = Arc::clone(client.completions());
-        let theme_base = Theme::from_config(cfg.theme());
+        let theme_base = Theme::from_config(&cfg, &terminal_colors);
         let theme = Arc::new(theme_base);
         let keymap = Keymap::from_config(cfg.keys(), cfg.behavior());
         let bootstrap = client.bootstrap();
@@ -179,6 +184,7 @@ impl App {
             should_quit: false,
             theme,
             theme_base,
+            terminal_colors,
             accent_fade,
             ambient,
             ambient_pulse,

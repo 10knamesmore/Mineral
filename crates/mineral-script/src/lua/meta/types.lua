@@ -1,5 +1,47 @@
 ---@meta _
--- daemon/tui 模块与配置回调共用的数据类型;不声明全局 host。
+-- Shared script values and the TUI configuration's read-only color API.
+
+--- An opaque color intent, resolved after configuration merging and palette selection.
+---@class mineral.ColorIntent
+
+--- A terminal foreground, background, or ANSI slot reference.
+---@class mineral.TerminalColorIntent: mineral.ColorIntent
+
+---@class mineral.AnsiColors
+---@field black mineral.TerminalColorIntent
+---@field red mineral.TerminalColorIntent
+---@field green mineral.TerminalColorIntent
+---@field yellow mineral.TerminalColorIntent
+---@field blue mineral.TerminalColorIntent
+---@field magenta mineral.TerminalColorIntent
+---@field cyan mineral.TerminalColorIntent
+---@field white mineral.TerminalColorIntent
+---@field bright_black mineral.TerminalColorIntent
+---@field bright_red mineral.TerminalColorIntent
+---@field bright_green mineral.TerminalColorIntent
+---@field bright_yellow mineral.TerminalColorIntent
+---@field bright_blue mineral.TerminalColorIntent
+---@field bright_magenta mineral.TerminalColorIntent
+---@field bright_cyan mineral.TerminalColorIntent
+---@field bright_white mineral.TerminalColorIntent
+
+---@class mineral.TerminalColors
+---@field foreground mineral.TerminalColorIntent
+---@field background mineral.TerminalColorIntent
+---@field ansi mineral.AnsiColors
+
+--- Mix accepts #rrggbb strings or terminal references; amount is finite and within 0..1.
+--- Amount 0 selects from; amount 1 selects to. Reset and theme token names are not RGB sources.
+---@class mineral.ColorLibrary
+---@field mix fun(from: string|mineral.TerminalColorIntent, to: string|mineral.TerminalColorIntent, amount: number): mineral.ColorIntent
+
+---@class mineral.ColorApi
+---@field terminal mineral.TerminalColors
+---@field color mineral.ColorLibrary
+
+--- Available while evaluating tui.lua and in its callbacks; performs no terminal I/O.
+---@type mineral.ColorApi
+mineral = {}
 
 --- 歌曲;队列和搜索返回此形态,不带歌单位置。
 ---@class mineral.Song
@@ -73,7 +115,7 @@
 ---@alias mineral.StoreValue integer|number|string|boolean|nil
 
 --- 配置覆盖可携带的 Lua 值;数组和字符串键映射不能在同一层混用。
----@alias mineral.ConfigValue nil|boolean|number|string|table
+---@alias mineral.ConfigValue nil|boolean|number|string|table|mineral.ColorIntent
 
 --- 可播资源,可直接作为 hook 改写结果。
 ---@class mineral.PlayUrl

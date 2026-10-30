@@ -14,7 +14,7 @@ use crate::components::frame::FrameEnv;
 #[test]
 fn values_are_reused_only_after_a_completed_paint() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -62,7 +62,7 @@ fn values_are_reused_only_after_a_completed_paint() -> color_eyre::Result<()> {
 #[test]
 fn underlying_changes_and_unmounts_are_not_hidden_by_cache_hits() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -113,7 +113,7 @@ fn underlying_changes_and_unmounts_are_not_hidden_by_cache_hits() -> color_eyre:
 #[test]
 fn a_changing_component_does_not_repaint_stable_layers_forever() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -154,7 +154,7 @@ fn a_changing_component_does_not_repaint_stable_layers_forever() -> color_eyre::
 #[test]
 fn retained_frame_leaves_unaffected_components_and_cells_alone() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,
@@ -206,7 +206,7 @@ fn retained_frame_leaves_unaffected_components_and_cells_alone() -> color_eyre::
 #[test]
 fn retained_frame_restores_moved_and_removed_layers() -> color_eyre::Result<()> {
     let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
-    let theme = crate::render::theme::Theme::from_config(cfg.theme());
+    let theme = crate::test_support::theme_from_config(&cfg)?;
     let env = FrameEnv {
         config: &cfg,
         theme: &theme,

@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::config::TuiConfig;
 use mineral_config::ConfigWarning;
 use mineral_script::{ConfigOverrideOp, CopyTemplateCtx, TuiCommand, TuiRuntime, WatchdogConfig};
 
@@ -15,6 +14,7 @@ use crate::app::App;
 use crate::components::toast::card::{plain_body, plain_line};
 use crate::components::toast::notifications::TextTint;
 use crate::components::toast::push::{apply_event, tint_of};
+use crate::config::TuiConfig;
 
 /// Minimum interval between local file checks.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
