@@ -1,4 +1,4 @@
-//! 在事件循环启动前执行有截止时间的终端 stdio 往返。
+//! Bounded terminal exchanges before the input event loop starts.
 
 use std::io::{Read as _, Write as _};
 use std::os::fd::AsFd as _;
@@ -6,15 +6,15 @@ use std::time::{Duration, Instant};
 
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
-/// 终端图形能力查询的 I/O 失败。
+/// Terminal query transport failures.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     /// 查询命令未能写出。
-    #[error("write terminal graphics query")]
+    #[error("write terminal query")]
     Write(#[source] std::io::Error),
 
     /// 查询命令未能刷新到终端。
-    #[error("flush terminal graphics query")]
+    #[error("flush terminal query")]
     Flush(#[source] std::io::Error),
 
     /// 超时时间超出 poll 支持范围。
@@ -22,11 +22,11 @@ pub(crate) enum Error {
     Timeout(#[source] std::io::Error),
 
     /// 等待查询结果失败。
-    #[error("poll terminal graphics response")]
+    #[error("poll terminal response")]
     Poll(#[source] nix::errno::Errno),
 
     /// 读取查询结果失败。
-    #[error("read terminal graphics response")]
+    #[error("read terminal response")]
     Read(#[source] std::io::Error),
 }
 

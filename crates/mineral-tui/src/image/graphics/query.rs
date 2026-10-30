@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use super::protocol::TerminalRelay;
-use super::stdio::exchange;
+use crate::terminal::exchange;
 
 /// 等待整组终端能力响应的上限。
 const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
