@@ -23,9 +23,6 @@ use crate::render::theme::Theme;
 /// 频谱柱条的逻辑分辨率(每格 1/8 字符高度,共 8 行 × 8 = 64 单位)。
 pub(super) const SPECTRUM_RES: u16 = mineral_spectrum::RES;
 
-/// 首帧 / 重启时的默认条数。首帧渲染后被实际 area.width 推算的值覆盖。
-const DEFAULT_BAR_COUNT: usize = 64;
-
 /// scope 包络历史环容量上限(列)。渲染按面板点宽取尾部,上限只防无界增长
 /// (16ms/列 × 2048 ≈ 33s,远超任何面板宽度所需;整环 16KB)。
 const SCOPE_HIST_CAP: usize = 2048;
@@ -294,9 +291,6 @@ pub struct SpectrumState {
     /// 配色状态机。默认 `Hue`(漂移),封面取色就绪后由 app 层命令切到过渡 / 静止。
     color: SpectrumColor,
 
-    /// 布局准备给出的目标条数，下次 FFT 更新使用；绘制只读取。
-    pub target_bars: usize,
-
     /// waterfall 历史环(头部最新)。行 = 推行那刻的 FFT 真值条(已乘音量,
     /// 不过 ADSR——瀑布要锐利的瞬时值,余韵是历史本身)。仅 `style = waterfall`
     /// 时推进;行按推行那刻的列数存,渲染按当前面板宽插值读取——列数变化
@@ -356,24 +350,22 @@ impl crate::components::lifecycle::PaintView for SpectrumState {
 }
 
 impl SpectrumState {
-    /// 初始静默状态。所有条都在 baseline,peak target/pos 同位,弹簧速度 0,色相 0。
+    /// 构造未布局的频谱状态；柱条由布局准备按实际内宽初始化。
     ///
     /// # Params:
     ///   - `cfg`: 频谱旋钮(配置 `spectrum` 段)
     ///   - `frame_tick_ms`: 主循环帧间隔(毫秒,配置 `animation.frame_tick_ms`);
     ///     时间制旋钮(`*_ms`)按它折算成拍数与每拍系数
     pub fn new(cfg: crate::config::SpectrumConfig, frame_tick_ms: u64) -> Self {
-        let baseline = f32::from(*cfg.baseline_min());
         let timing = Timing::derive(&cfg, frame_tick_ms);
         Self {
-            bars: vec![baseline; DEFAULT_BAR_COUNT],
-            peaks: vec![baseline; DEFAULT_BAR_COUNT],
-            peak_hold: vec![0; DEFAULT_BAR_COUNT],
-            peak_pos: vec![baseline; DEFAULT_BAR_COUNT],
-            peak_vel: vec![0.0; DEFAULT_BAR_COUNT],
+            bars: Vec::new(),
+            peaks: Vec::new(),
+            peak_hold: Vec::new(),
+            peak_pos: Vec::new(),
+            peak_vel: Vec::new(),
             hue_phase: 0,
             color: SpectrumColor::Hue,
-            target_bars: DEFAULT_BAR_COUNT,
             water_hist: VecDeque::new(),
             water_countdown: 0,
             terrain: TerrainHistory::default(),
@@ -403,18 +395,17 @@ impl SpectrumState {
         }
     }
 
-    /// 输入 bars 长度变化(终端 resize / 首次 tick)时,把所有 per-bar 状态 vec 调到同长度。
-    /// 缩短截断,扩张补 baseline。peak 状态丢一截在缩短时不可避免,resize 是低频事件不在意。
-    fn resize_state(&mut self, n: usize) {
-        if self.bars.len() == n {
+    /// 布局准备时同步柱条与峰值状态：缩短截断，新增柱条从 baseline 开始。
+    pub(super) fn resize_bars(&mut self, bar_count: usize) {
+        if self.bars.len() == bar_count {
             return;
         }
         let baseline = f32::from(*self.cfg.baseline_min());
-        self.bars.resize(n, baseline);
-        self.peaks.resize(n, baseline);
-        self.peak_hold.resize(n, 0);
-        self.peak_pos.resize(n, baseline);
-        self.peak_vel.resize(n, 0.0);
+        self.bars.resize(bar_count, baseline);
+        self.peaks.resize(bar_count, baseline);
+        self.peak_hold.resize(bar_count, 0);
+        self.peak_pos.resize(bar_count, baseline);
+        self.peak_vel.resize(bar_count, 0.0);
     }
 
     /// 当前色相旋转角度(度)。`hue_rotate = false` 时恒 0。
@@ -445,8 +436,8 @@ impl SpectrumState {
         clamped.round() as u16
     }
 
-    /// 渲染侧读:条状态数组长度。resize 间隙可能与面板宽不一致,渲染按 min 取。
-    pub(super) fn bar_len(&self) -> usize {
+    /// 布局准备后的实际柱条数，FFT 按此数量计算条高。
+    pub(crate) fn bar_count(&self) -> usize {
         self.bars.len()
     }
 
@@ -473,7 +464,7 @@ impl SpectrumState {
     /// PCM 取样在输出音量增益之前，频谱显示在 UI 层随音量调整。
     ///
     /// 条高走效果器 ADSR 包络(`b += α × (target − b)`,α 由时间制旋钮折算):
-    /// - `Some(targets)`:FFT 真值(= sustain),上升用 attack(快、贴鼓点),
+    /// - `Some(targets)`:按 [`Self::bar_count`] 计算的 FFT 真值(= sustain),上升用 attack(快、贴鼓点),
     ///   下落用 decay(慢、余韵滑落)——快攻慢放,延迟与动画感分属两个旋钮。
     /// - `None` + `playing=true`:FFT 还没出第一个窗(刚开播 / 切歌),保持当前值。
     /// - `None` + `playing=false`:释音(release),所有条滑向 0(由 baseline 兜底)。
@@ -490,12 +481,6 @@ impl SpectrumState {
         }
         if style == SpectrumStyle::Waterfall {
             self.push_water(bars, volume_pct);
-        }
-        match bars {
-            Some(targets) => self.resize_state(targets.len()),
-            // idle / 起播间隙没有 FFT 真值,仍把条数同步到渲染层反馈的面板宽度,
-            // 否则 baseline 只铺满初始 `DEFAULT_BAR_COUNT` 列、宽面板右侧空白。
-            None => self.resize_state(self.target_bars.max(1)),
         }
         match (bars, playing) {
             (Some(targets), _) => {
@@ -602,7 +587,7 @@ impl SpectrumState {
             return;
         }
         self.water_countdown = self.timing.water_push_ticks.saturating_sub(1);
-        let cols = self.target_bars.max(1);
+        let cols = self.bar_count();
         let mut row = vec![0_u16; cols].into_boxed_slice();
         if let Some(targets) = bars {
             let vol = u32::from(volume_pct.min(100));
@@ -848,14 +833,16 @@ mod tests {
         let tree = mineral_config::merge_tree(crate::config::default_tui_tree()?, overlay);
         let cfg = crate::config::tui_from_tree(&tree)
             .map_err(|w| color_eyre::eyre::eyre!("overlay 落型失败: {w}"))?;
-        Ok(SpectrumState::new(cfg.spectrum().clone(), TICK_MS))
+        let mut state = SpectrumState::new(cfg.spectrum().clone(), TICK_MS);
+        state.resize_bars(64);
+        Ok(state)
     }
 
     /// bars 风格不推 waterfall / terrain 历史(不为用不上的画面攒内存)。
     #[test]
     fn bars_style_keeps_histories_empty() -> color_eyre::Result<()> {
         let mut s = spectrum_state()?;
-        let n = s.target_bars;
+        let n = s.bar_count();
         let bars = vec![40_u16; n];
         for _ in 0..32 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -879,7 +866,7 @@ mod tests {
             "style": "waterfall",
             "waterfall": { "push_ms": 64 },
         }  }))?;
-        let n = s.target_bars;
+        let n = s.bar_count();
         let bars = vec![40_u16; n];
         assert!(s.water_hist.is_empty(), "初始无历史");
         for _ in 0..16 {
@@ -899,7 +886,7 @@ mod tests {
     #[test]
     fn waterfall_pause_freezes_history() -> color_eyre::Result<()> {
         let mut s = waterfall_state()?;
-        let n = s.target_bars;
+        let n = s.bar_count();
         let bars = vec![40_u16; n];
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -921,7 +908,7 @@ mod tests {
         let mut s = spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "terrain",
         }  }))?;
-        let n = s.target_bars;
+        let n = s.bar_count();
         let bars = vec![40_u16; n];
         for _ in 0..32 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -940,14 +927,14 @@ mod tests {
     #[test]
     fn waterfall_resize_keeps_history() -> color_eyre::Result<()> {
         let mut s = waterfall_state()?;
-        let n = s.target_bars;
+        let n = s.bar_count();
         let bars = vec![40_u16; n];
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
         }
         let rows_before = s.water_hist.len();
         assert!(rows_before > 0, "前置:已有历史");
-        s.target_bars = n + 7;
+        s.resize_bars(n + 7);
         let wider = vec![40_u16; n + 7];
         for _ in 0..4 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&wider));
@@ -969,7 +956,7 @@ mod tests {
         let mut s = spectrum_state_with(serde_json::json!({ "spectrum": {
             "style": "terrain",
         }  }))?;
-        let n = s.target_bars;
+        let n = s.bar_count();
         let bars = vec![40_u16; n];
         for _ in 0..200 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));
@@ -1083,7 +1070,7 @@ mod tests {
     #[test]
     fn reconfigure_style_switches_tick_behavior() -> color_eyre::Result<()> {
         let mut s = spectrum_state()?;
-        let n = s.target_bars;
+        let n = s.bar_count();
         let bars = vec![40_u16; n];
         for _ in 0..8 {
             s.tick(true /*playing*/, 100 /*volume_pct*/, Some(&bars));

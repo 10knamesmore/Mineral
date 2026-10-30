@@ -16,15 +16,13 @@ pub(super) fn paint(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, th
     }
     // 每根条恒 1 列。FFT 端按 area.width 对数等分桶映射,窗口越宽频率分辨率越细。
     let bar_step: u16 = 1;
-    let bar_count = usize::from(area.width).max(1);
+    let bar_count = usize::from(area.width);
     let total_w = u16::try_from(bar_count)
         .unwrap_or(0)
         .saturating_mul(bar_step);
     // 总宽除不尽时把剩余空格平分到两边,让 spectrum 视觉上居中,避免「左密右稀 / 右密左稀」。
     let pad_left = area.width.saturating_sub(total_w) / 2;
-    // state 的条数可能跟新 bar_count 不一致(刚 resize 终端,新 FFT 还没出第一窗),
-    // 这一帧只渲染已有的部分,其余留空。下一帧 tick 后对齐。
-    let render_count = bar_count.min(state.bar_len()).max(1);
+    let render_count = bar_count.min(state.bar_count());
     let max_units = u32::from(area.height) * 8;
     // 渐变跨度。0 → accent(底)、span → accent_2(顶)。area.height-1 给最顶格 100% accent_2。
     let grad_span = u64::from(area.height.saturating_sub(1)).max(1);

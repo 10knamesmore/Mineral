@@ -14,7 +14,10 @@ impl App {
             self.state.resources.fft.reset();
             self.state.ui.spectrum.reset_stream();
         }
+        let playing = self.state.models.playback.playing;
+        let volume_pct = self.state.models.playback.volume_pct;
         let Some(sample_rate) = self.client.pcm_sample_rate() else {
+            self.state.ui.spectrum.tick(playing, volume_pct, None);
             return;
         };
         if !samples.is_empty() {
@@ -23,16 +26,14 @@ impl App {
         // 同一批样本顺路喂氛围背景的响度包络(空样本 = 静音,包络自然回落)。
         self.ambient_pulse
             .feed(&samples, sample_rate, self.state.cfg.ambient().pulse());
-        let playing = self.state.models.playback.playing;
-        let volume_pct = self.state.models.playback.volume_pct;
         if *self.state.cfg.spectrum().style() == crate::config::SpectrumStyle::Scope {
             self.state
                 .ui
                 .spectrum
                 .tick_scope(volume_pct, &samples, sample_rate);
         } else {
-            let target_bars = self.state.ui.spectrum.target_bars;
-            let bars = self.state.resources.fft.compute(sample_rate, target_bars);
+            let bar_count = self.state.ui.spectrum.bar_count();
+            let bars = self.state.resources.fft.compute(sample_rate, bar_count);
             self.state
                 .ui
                 .spectrum
