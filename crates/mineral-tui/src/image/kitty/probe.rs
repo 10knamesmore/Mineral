@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use super::command::query_shared_memory;
 use super::shared_memory::SharedMemory;
-use crate::image::graphics::{TerminalRelay, exchange};
+use crate::image::graphics::TerminalRelay;
+use crate::terminal::{ExchangeError, exchange};
 
 /// POSIX shared memory 探针的回执 id。
 const PROBE_ID: u32 = 299;
@@ -21,7 +22,7 @@ enum Error {
 
     /// 终端查询往返失败。
     #[error("exchange Kitty probe")]
-    Exchange(#[from] crate::image::graphics::ExchangeError),
+    Exchange(#[from] ExchangeError),
 }
 
 /// 探测终端是否能读取当前进程创建的 POSIX shared memory object。

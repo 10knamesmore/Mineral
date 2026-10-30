@@ -10,6 +10,7 @@ mod persistence;
 mod player_actions;
 mod render;
 mod runtime;
+mod terminal;
 #[cfg(test)]
 mod test_support;
 mod tui;
