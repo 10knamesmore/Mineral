@@ -6,7 +6,9 @@ use std::time::Duration;
 use crate::persistence::ServerStore;
 use async_trait::async_trait;
 use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
-use mineral_model::{Album, AlbumId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{
+    Album, AlbumId, CachePolicy, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind,
+};
 use mineral_test::song;
 use pretty_assertions::assert_eq;
 
@@ -72,16 +74,25 @@ impl MusicChannel for WritableChannel {
     ) -> mineral_channel_core::Result<PageResult<Playlist>> {
         Err(Error::NotSupported)
     }
-    async fn songs_detail(&self, _ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {
+    async fn songs_detail(
+        &self,
+        _ids: &[SongId],
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
-    async fn album_detail(&self, _id: &AlbumId) -> mineral_channel_core::Result<Album> {
+    async fn album_detail(
+        &self,
+        _id: &AlbumId,
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Album> {
         Err(Error::NotSupported)
     }
     async fn playlist_detail(
         &self,
         _id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> mineral_channel_core::Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
@@ -96,7 +107,10 @@ impl MusicChannel for WritableChannel {
             .build())
     }
 
-    async fn my_playlists(&self) -> mineral_channel_core::Result<Vec<Playlist>> {
+    async fn my_playlists(
+        &self,
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Vec<Playlist>> {
         Ok(vec![
             Playlist::builder()
                 .id(PlaylistId::new(SourceKind::NETEASE, "created-1"))

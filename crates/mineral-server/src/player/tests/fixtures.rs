@@ -10,10 +10,12 @@ use std::time::Duration;
 use crate::persistence::ServerStore;
 use mineral_audio::{AudioHandle, AudioMode};
 use mineral_channel_core::MusicChannel;
+use mineral_channel_core::store::NamespaceStore;
 use mineral_model::{SongId, SourceKind};
 use mineral_playback::PlaybackRegistry;
 use mineral_task::Scheduler;
 use parking_lot::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::backends::{RecordingChannel, test_playback_registry};
 use crate::media_cache::MediaCache;
@@ -289,7 +291,16 @@ pub(super) fn core_with_events_stats_playback(
 ) -> color_eyre::Result<PlayerCore> {
     // fixture 从唯一默认配置源派生 server 切片。
     let cfg = crate::config::ServerConfig::from_config(&crate::config::DaemonConfig::defaults()?);
-    let scheduler = Scheduler::new(&channels, *cfg.channel_workers_per());
+    let stores = channels
+        .iter()
+        .map(|channel| -> Arc<dyn NamespaceStore> { Arc::new(persist.scope(channel.source())) })
+        .collect::<Vec<_>>();
+    let scheduler = Scheduler::new(
+        &channels,
+        *cfg.channel_workers_per(),
+        &stores,
+        Some(Arc::new(persist.clone())),
+    );
     let (audio, _tap) = AudioHandle::spawn(AudioMode::ForceNull, cfg.engine().clone())?;
     let library = crate::library::Library::new(
         channels
@@ -320,6 +331,7 @@ pub(super) fn core_with_events_stats_playback(
         *cfg.download().max_concurrent(),
     );
     let inner = Arc::new(Inner {
+        collection_publication: Mutex::new(()),
         state_changes: crate::state::StatePublisher::new().1,
         audio,
         scheduler,
@@ -342,6 +354,7 @@ pub(super) fn core_with_events_stats_playback(
         envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
         library,
         favorites_lock: tokio::sync::Mutex::new(()),
+        aggregate_rebuild: AsyncMutex::new(()),
         last_session_save: Mutex::new(std::time::Instant::now()),
         playback_quality: *cfg.playback_quality(),
         playback_prefetch_bytes: *cfg.engine().prefetch_bytes(),

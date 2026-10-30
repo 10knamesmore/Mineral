@@ -10,6 +10,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use arc_swap::ArcSwapOption;
 use mineral_channel_core::store::NamespaceStore;
+use mineral_model::CachePolicy;
 use tokio::sync::Mutex;
 
 use catalog::Catalog;
@@ -34,6 +35,16 @@ pub struct LocalLibrary {
 }
 
 impl LocalLibrary {
+    async fn read_catalog(&self, cache: CachePolicy) -> Result<Arc<Catalog>> {
+        if cache == CachePolicy::UseCache {
+            return self.catalog().await;
+        }
+        let _loading = self.load_lock.lock().await;
+        self.catalog.store(None);
+        let catalog = Arc::new(self.load_catalog().await?);
+        self.catalog.store(Some(Arc::clone(&catalog)));
+        Ok(catalog)
+    }
     /// Capture startup configuration without scanning directories.
     /// The first successful channel request loads the catalog.
     ///

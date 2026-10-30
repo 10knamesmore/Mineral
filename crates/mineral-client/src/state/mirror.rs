@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use mineral_audio::AudioSnapshot;
+use mineral_model::RefreshScope;
 use mineral_protocol::{
     DownloadDetailUpdate, DownloadId, DownloadStatus, DownloadSummary, Event, PlayCursor, PlayMode,
     PlaybackOrigin, PlayerSync, PlayerVersions, SongDownloadView, SubscriptionId,
@@ -423,6 +424,14 @@ impl Mirror {
     pub fn drain_events(&self) -> Vec<Event> {
         let mut state = self.state.write();
         state.events.drain(..).collect()
+    }
+
+    /// Discard pre-acknowledgement collection results before submitting replacement reads.
+    pub fn discard_collection_events(&self, scope: &RefreshScope) {
+        self.state
+            .write()
+            .events
+            .retain(|event| !matches!(event, Event::Task(task) if task.affected_by(scope)));
     }
 
     /// 取走 PCM 近期窗口；断续标记须另行调用 [`Self::take_pcm_discontinuity`] 消费。

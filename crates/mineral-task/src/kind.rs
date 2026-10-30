@@ -1,7 +1,9 @@
 //! 任务种类与 dedup 键。
 
 use mineral_channel_core::Page;
-use mineral_model::{AlbumId, ArtistId, PlaylistId, SearchKind, SongId, SourceKind};
+use mineral_model::{
+    AlbumId, ArtistId, CollectionCategory, PlaylistId, RefreshScope, SearchKind, SongId, SourceKind,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::write::PlaylistWriteOp;
@@ -100,6 +102,21 @@ pub enum ChannelFetchKind {
 }
 
 impl ChannelFetchKind {
+    /// Refreshes invalidate every load intent for a parent, but no playback task.
+    pub fn affected_by(&self, scope: &RefreshScope) -> bool {
+        match scope {
+            RefreshScope::Collections(CollectionCategory::Playlists) => {
+                matches!(self, Self::MyPlaylists { .. } | Self::PlaylistDetail { .. })
+            }
+            RefreshScope::Collections(CollectionCategory::Albums) => {
+                matches!(self, Self::MyAlbums { .. } | Self::AlbumDetail { .. })
+            }
+            RefreshScope::Playlist(parent) => {
+                matches!(self, Self::PlaylistDetail { id, .. } if id == parent)
+            }
+            RefreshScope::Album(parent) => matches!(self, Self::AlbumDetail { id } if id == parent),
+        }
+    }
     /// 产出 dedup key 的可变部分(channel + 子操作 + 关键参数)。
     ///
     /// 带 id 的形态用 `id.qualified()`(namespace 已在 id 内,自然带上来源);

@@ -9,6 +9,7 @@ use mineral_audio::AudioHandle;
 use mineral_model::SourceKind;
 use mineral_task::Scheduler;
 use parking_lot::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::{Inner, PlayerCore};
 use crate::download;
@@ -122,6 +123,7 @@ impl PlayerCore {
         );
         let (publisher, state_changes) = crate::state::StatePublisher::new();
         let inner = Arc::new(Inner {
+            collection_publication: Mutex::new(()),
             audio,
             scheduler,
             channels,
@@ -142,6 +144,7 @@ impl PlayerCore {
             envelope_inflight: Mutex::new(rustc_hash::FxHashSet::default()),
             library,
             favorites_lock: tokio::sync::Mutex::new(()),
+            aggregate_rebuild: AsyncMutex::new(()),
             last_session_save: Mutex::new(Instant::now()),
             playback_quality: *config.playback_quality(),
             playback_prefetch_bytes: *config.engine().prefetch_bytes(),

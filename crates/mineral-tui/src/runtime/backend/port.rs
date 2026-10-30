@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use mineral_channel_core::ChannelCaps;
 use mineral_client::state::{DownloadsDetailMirror, PlaybackMirror, PlayerMirror};
-use mineral_model::{Song, SongId, SourceKind};
+use mineral_model::{RefreshScope, Song, SongId, SourceKind};
 use mineral_protocol::{
     DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp, SubscriptionTopic,
 };
@@ -24,6 +24,11 @@ pub(crate) struct BackendBootstrap {
 
 /// TUI 后端端口。
 pub(crate) trait Backend: Send + Sync {
+    /// Request server cache invalidation; the completion carries its target back to the requester.
+    fn refresh_collections(&self, scope: RefreshScope);
+
+    /// After acknowledgement, discard this client's unsent reads and buffered results.
+    fn invalidate_collection_reads(&self, scope: &RefreshScope);
     /// 保存或管理歌单，结论进入完成队列。
     fn playlist_operation(&self, op: mineral_protocol::PlaylistOp);
     /// Queries output devices and delivers the result through the completion queue.

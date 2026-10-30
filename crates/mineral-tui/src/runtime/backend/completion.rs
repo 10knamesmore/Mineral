@@ -4,12 +4,19 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use mineral_client::operation::Outcome;
-use mineral_model::SongId;
+use mineral_model::{RefreshScope, SongId};
 use mineral_protocol::QueueEditOutcome;
 
 /// 操作完成事件(daemon 结论回流到 UI)。
 #[derive(Debug)]
 pub(crate) enum Completion {
+    /// Cache invalidation acknowledgement; ordinary loading starts after local cleanup.
+    Refresh {
+        scope: RefreshScope,
+
+        outcome: Outcome<()>,
+    },
+
     /// 歌单操作的结构化结果。
     Playlist {
         /// 已提交的操作，用于生成对应反馈。

@@ -159,6 +159,9 @@ pub trait NamespaceStore: Send + Sync {
 /// Provides library operations across sources.
 #[async_trait]
 pub trait LibraryStore: Send + Sync {
+    /// Reads authoritative local membership, including entries without metadata and duplicates.
+    async fn playlist_entries(&self, id: &PlaylistId) -> StoreResult<Vec<CachedPlaylistEntry>>;
+
     /// Lists user-created playlist headers without loading songs.
     async fn user_playlists(&self) -> StoreResult<Vec<Playlist>>;
 

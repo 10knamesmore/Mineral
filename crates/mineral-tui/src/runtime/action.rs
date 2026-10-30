@@ -16,6 +16,9 @@
 /// [`KeyChord`]: crate::config::key_syntax::KeyChord
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    /// Reload the current library category or the complete opened collection.
+    RefreshCollections,
+
     // ---- 视图动作(TUI 本地) ----
     /// 进 / 退全屏播放态(toggle)。
     ToggleFullscreen,

@@ -1,22 +1,30 @@
 //! ChannelFetch lane:per-channel 多 worker,两档优先级。
 
+use std::mem::take;
 use std::sync::Arc;
 
 use mineral_channel_core::MusicChannel;
-use mineral_model::SourceKind;
+use mineral_channel_core::store::{LibraryStore, NamespaceStore};
+use mineral_model::{CachePolicy, SourceKind};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use super::collection_read::CollectionReader;
 use crate::event::TaskEvent;
 use crate::id::{Priority, TaskId};
 use crate::kind::{ChannelFetchKind, ChannelFetchKindTag};
 use crate::ongoing::Ongoing;
 use crate::outcome::TaskOutcome;
+use crate::read_cache::ReadCache;
 
 /// 投递给 worker 的一次任务。
 pub(crate) struct Job {
+    pub cache: CachePolicy,
+
+    pub read_cache: Arc<ReadCache>,
+
     /// 任务 id,worker 完成后用于从 [`Ongoing`] 移除。
     pub id: TaskId,
 
@@ -61,7 +69,10 @@ impl ChannelFetchLane {
         ongoing: &Arc<Ongoing>,
         event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
         workers_per_channel: usize,
+        stores: &[Arc<dyn NamespaceStore>],
+        library: Option<Arc<dyn LibraryStore>>,
     ) -> Self {
+        let reader = Arc::new(CollectionReader::new(channels, stores, library));
         let mut senders = FxHashMap::<SourceKind, ChannelSenders>::default();
         for ch in channels {
             let source = ch.source();
@@ -70,7 +81,15 @@ impl ChannelFetchLane {
             }
             let (user_tx, user_rx) = mpsc::unbounded_channel::<Job>();
             let (bg_tx, bg_rx) = mpsc::unbounded_channel::<Job>();
-            spawn_worker_pool(ch, user_rx, bg_rx, ongoing, event_tx, workers_per_channel);
+            spawn_worker_pool(
+                ch,
+                user_rx,
+                bg_rx,
+                ongoing,
+                event_tx,
+                workers_per_channel,
+                &reader,
+            );
             senders.insert(
                 source,
                 ChannelSenders {
@@ -109,6 +128,7 @@ fn spawn_worker_pool(
     ongoing: &Arc<Ongoing>,
     event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
     workers_per_channel: usize,
+    reader: &Arc<CollectionReader>,
 ) {
     let user = Arc::new(tokio::sync::Mutex::new(user_rx));
     let bg = Arc::new(tokio::sync::Mutex::new(bg_rx));
@@ -118,8 +138,9 @@ fn spawn_worker_pool(
         let bg = Arc::clone(&bg);
         let ongoing = Arc::clone(ongoing);
         let event_tx = Arc::clone(event_tx);
+        let reader = Arc::clone(reader);
         tokio::spawn(async move {
-            worker_loop(channel, user, bg, ongoing, event_tx).await;
+            worker_loop(channel, user, bg, ongoing, event_tx, reader).await;
         });
     }
 }
@@ -131,6 +152,7 @@ async fn worker_loop(
     bg: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Job>>>,
     ongoing: Arc<Ongoing>,
     event_tx: Arc<Mutex<Vec<TaskEvent>>>,
+    reader: Arc<CollectionReader>,
 ) {
     loop {
         let Some(job) = next_job(&user, &bg).await else {
@@ -138,7 +160,7 @@ async fn worker_loop(
         };
         let id = job.id;
         mineral_log::debug!(target: "channel_fetch", task_id = ?id, kind = ?job.kind, "worker start job");
-        run_job(&channel, job, &event_tx).await;
+        run_job(&channel, job, &event_tx, &reader).await;
         ongoing.remove(id);
     }
 }
@@ -168,14 +190,22 @@ async fn next_job(
 /// 执行一个 job:已取消则直接 `Cancelled`,否则跑 [`execute`] 并把终态送回 `done_tx`。
 /// 搜索与艺人专辑页失败或取消时回带对应分页请求，所有终态另发 [`TaskEvent::FetchDone`]。
 /// 事件均在通知 `done_tx` 前写入 buffer。
-async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex<Vec<TaskEvent>>>) {
+async fn run_job(
+    channel: &Arc<dyn MusicChannel>,
+    job: Job,
+    published: &Arc<Mutex<Vec<TaskEvent>>>,
+    reader: &CollectionReader,
+) {
     let Job {
         id: _,
         kind,
         priority,
         cancel,
         done_tx,
+        cache,
+        read_cache,
     } = job;
+    let event_tx = Arc::new(Mutex::new(Vec::new()));
     let started = std::time::Instant::now();
     let outcome = if cancel.is_cancelled() {
         TaskOutcome::Cancelled
@@ -183,7 +213,7 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
         tokio::select! {
             biased;
             () = cancel.cancelled() => TaskOutcome::Cancelled,
-            out = execute(channel, &kind, event_tx) => out,
+            out = execute(channel, &kind, &event_tx, cache, reader) => out,
         }
     };
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -229,7 +259,27 @@ async fn run_job(channel: &Arc<dyn MusicChannel>, job: Job, event_tx: &Arc<Mutex
         outcome,
         latency_ms,
     });
-    let _ = done_tx.send(outcome);
+    // A refresh cancels under this same lock, including jobs whose results were already buffered.
+    let mut published = published.lock();
+    let mut staged = take(&mut *event_tx.lock());
+    if cancel.is_cancelled() {
+        staged.retain(|event| {
+            matches!(
+                event,
+                TaskEvent::FetchDone { .. }
+                    | TaskEvent::SearchPageFailed { .. }
+                    | TaskEvent::ArtistAlbumsPageFailed { .. }
+            )
+        });
+    } else if cache == CachePolicy::Reload && outcome == TaskOutcome::Ok {
+        read_cache.record_fresh_result(&kind, &staged);
+    }
+    published.extend(staged);
+    let _ = done_tx.send(if cancel.is_cancelled() {
+        TaskOutcome::Cancelled
+    } else {
+        outcome
+    });
 }
 
 /// 真正调 channel 的实现:按 kind 分派。事实结果包成 [`TaskEvent`] 写进事件 buffer;
@@ -238,9 +288,11 @@ async fn execute(
     channel: &Arc<dyn MusicChannel>,
     kind: &ChannelFetchKind,
     event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
+    cache: CachePolicy,
+    reader: &CollectionReader,
 ) -> TaskOutcome {
     match kind {
-        ChannelFetchKind::MyAlbums { source } => match channel.my_albums().await {
+        ChannelFetchKind::MyAlbums { source } => match channel.my_albums(cache).await {
             Ok(albums) => {
                 mineral_log::info!(target: "channel_fetch", ?source, albums = albums.len(), "saved album list fetched");
                 event_tx.lock().push(TaskEvent::AlbumsFetched {
@@ -254,7 +306,7 @@ async fn execute(
                 TaskOutcome::Failed
             }
         },
-        ChannelFetchKind::MyPlaylists { source } => match channel.my_playlists().await {
+        ChannelFetchKind::MyPlaylists { source } => match channel.my_playlists(cache).await {
             Ok(playlists) => {
                 event_tx.lock().push(TaskEvent::PlaylistsFetched {
                     source: *source,
@@ -274,7 +326,7 @@ async fn execute(
             }
         },
         ChannelFetchKind::PlaylistDetail { id, load } => {
-            match channel.playlist_detail(id, *load).await {
+            match reader.playlist(channel.as_ref(), id, *load, cache).await {
                 Ok(detail) => {
                     event_tx.lock().push(TaskEvent::PlaylistDetailFetched {
                         id: id.clone(),
@@ -462,25 +514,27 @@ async fn execute(
                 }
             }
         }
-        ChannelFetchKind::AlbumDetail { id } => match channel.album_detail(id).await {
-            Ok(album) => {
-                event_tx.lock().push(TaskEvent::AlbumDetailFetched {
-                    id: id.clone(),
-                    album: Box::new(album),
-                });
-                TaskOutcome::Ok
+        ChannelFetchKind::AlbumDetail { id } => {
+            match reader.album(channel.as_ref(), id, cache).await {
+                Ok(album) => {
+                    event_tx.lock().push(TaskEvent::AlbumDetailFetched {
+                        id: id.clone(),
+                        album: Box::new(album),
+                    });
+                    TaskOutcome::Ok
+                }
+                Err(e) => {
+                    mineral_log::warn!(
+                        target: "channel_fetch",
+                        source = ?id.namespace(),
+                        op = "album_detail",
+                        album_id = id.as_str(),
+                        error = mineral_log::chain(&e),
+                        "channel fetch failed"
+                    );
+                    TaskOutcome::Failed
+                }
             }
-            Err(e) => {
-                mineral_log::warn!(
-                    target: "channel_fetch",
-                    source = ?id.namespace(),
-                    op = "album_detail",
-                    album_id = id.as_str(),
-                    error = mineral_log::chain(&e),
-                    "channel fetch failed"
-                );
-                TaskOutcome::Failed
-            }
-        },
+        }
     }
 }

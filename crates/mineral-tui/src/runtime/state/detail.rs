@@ -6,8 +6,8 @@
 
 use mineral_channel_core::{ArtistSectionKind, ArtistSections, Page};
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, MediaUrl, Playlist, PlaylistEntry, PlaylistId, SearchKind,
-    Song, SourceKind,
+    Album, AlbumId, Artist, ArtistId, CollectionCategory, MediaUrl, Playlist, PlaylistEntry,
+    PlaylistId, RefreshScope, SearchKind, Song, SourceKind,
 };
 use mineral_task::SearchPayload;
 
@@ -17,7 +17,7 @@ use crate::runtime::scroll::list::ScrollList;
 use super::ArtistAlbums;
 
 /// 一帧详情要补拉的内容（携带目标 id，供派发与回包配对）。
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DetailFetch {
     /// 专辑/歌曲帧 → 同专辑曲目（`AlbumDetail` 任务）。
     AlbumDetail(AlbumId),
@@ -30,6 +30,16 @@ pub enum DetailFetch {
 }
 
 impl DetailFetch {
+    pub(crate) fn affected_by(&self, scope: &RefreshScope) -> bool {
+        match (scope, self) {
+            (RefreshScope::Collections(CollectionCategory::Playlists), Self::PlaylistDetail(_))
+            | (RefreshScope::Collections(CollectionCategory::Albums), Self::AlbumDetail(_)) => true,
+            (RefreshScope::Playlist(parent), Self::PlaylistDetail(id)) => parent == id,
+            (RefreshScope::Album(parent), Self::AlbumDetail(id)) => parent == id,
+            _ => false,
+        }
+    }
+
     /// 去重键（per 实体一份，跨类型不碰撞）：驻留派发用它防重复发同一实体的拉取。
     pub fn dedup_key(&self) -> String {
         match self {
@@ -700,6 +710,28 @@ pub struct DetailStack {
 }
 
 impl DetailStack {
+    /// Retained search frames must not keep detail data invalidated from the library page.
+    pub(crate) fn invalidate_collections(&mut self, scope: &RefreshScope) {
+        for frame in self
+            .frames
+            .iter_mut()
+            .chain(self.sweep_from.iter_mut().map(|(frame, _)| frame.as_mut()))
+        {
+            if frame
+                .entity
+                .fetch()
+                .is_some_and(|fetch| fetch.affected_by(scope))
+            {
+                frame.data = None;
+                frame.requested = false;
+                match &mut frame.entity {
+                    EntityRef::Album(album) => album.tracks.clear(),
+                    EntityRef::Playlist(playlist) => playlist.entries.clear(),
+                    _ => {}
+                }
+            }
+        }
+    }
     /// 面包屑取各层标题，正文只观察当前帧及尚未退场的旧端。
     pub(crate) fn dependencies(
         &self,

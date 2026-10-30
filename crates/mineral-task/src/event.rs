@@ -8,9 +8,11 @@ use mineral_model::{
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 
+use crate::ChannelFetchKind;
 use crate::kind::ChannelFetchKindTag;
 use crate::outcome::TaskOutcome;
 use crate::write::{PlaylistWriteOp, WriteError};
+use mineral_model::{CollectionCategory, RefreshScope};
 
 /// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
 ///
@@ -237,6 +239,36 @@ pub enum TaskEvent {
         /// 请求的专辑身份。
         id: AlbumId,
     },
+}
+
+impl TaskEvent {
+    /// Whether this buffered result belongs to the invalidated category or parent.
+    pub fn affected_by(&self, scope: &RefreshScope) -> bool {
+        match self {
+            Self::PlaylistsFetched { source, .. } => {
+                ChannelFetchKind::MyPlaylists { source: *source }.affected_by(scope)
+            }
+            Self::AlbumsFetched { source, .. } => {
+                ChannelFetchKind::MyAlbums { source: *source }.affected_by(scope)
+            }
+            Self::PlaylistDetailFetched { id, load, .. }
+            | Self::PlaylistDetailFailed { id, load } => ChannelFetchKind::PlaylistDetail {
+                id: id.clone(),
+                load: *load,
+            }
+            .affected_by(scope),
+            Self::AlbumDetailFetched { id, .. } | Self::AlbumDetailFailed { id } => {
+                ChannelFetchKind::AlbumDetail { id: id.clone() }.affected_by(scope)
+            }
+            Self::LibrarySnapshot { .. } => {
+                *scope == RefreshScope::Collections(CollectionCategory::Playlists)
+            }
+            Self::SavedAlbumsSnapshot { .. } => {
+                *scope == RefreshScope::Collections(CollectionCategory::Albums)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// 搜索结果载荷,变体与请求的 [`SearchKind`] 一致。

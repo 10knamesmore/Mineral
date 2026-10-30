@@ -329,6 +329,7 @@ impl Overlay for DownloadOverlay {
     fn on_action(&mut self, action: Action, ctx: &DownloadInput<'_>) -> Option<OverlayResponse> {
         self.list.clamp(ctx.downloads.len());
         match action {
+            Action::RefreshCollections => Some(OverlayResponse::Consumed),
             Action::MoveSelection(movement) => {
                 self.list.move_by(movement, ctx.downloads.len());
                 Some(OverlayResponse::Consumed)

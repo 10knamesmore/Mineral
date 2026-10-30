@@ -42,7 +42,7 @@ fn audit_request(req: &Request) -> TrackingDecision {
             NotAnEvent("session control: recorded in audio structured logs")
         }
         Request::SetVolume(..) => Recorded("volume_changes"),
-        Request::SubmitTask(..) => {
+        Request::SubmitTask(..) | Request::RefreshCollections(..) => {
             NotAnEvent("任务提交;取数事件在 task 终态记,见 audit_fetch_kind")
         }
         Request::PlaySong(..) => Recorded("plays"),

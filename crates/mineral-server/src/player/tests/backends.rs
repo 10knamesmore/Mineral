@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
+use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, Artist, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId, Song, SongId,
     SourceKind,
@@ -204,11 +205,19 @@ impl MusicChannel for RecordingChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_detail(&self, _ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {
+    async fn songs_detail(
+        &self,
+        _ids: &[SongId],
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn album_detail(&self, _id: &AlbumId) -> mineral_channel_core::Result<Album> {
+    async fn album_detail(
+        &self,
+        _id: &AlbumId,
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Album> {
         Err(Error::NotSupported)
     }
 
@@ -216,6 +225,7 @@ impl MusicChannel for RecordingChannel {
         &self,
         _id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> mineral_channel_core::Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
@@ -245,7 +255,10 @@ impl MusicChannel for RecordingChannel {
         self.liked_ids.clone().ok_or(Error::NotSupported)
     }
 
-    async fn my_playlists(&self) -> mineral_channel_core::Result<Vec<Playlist>> {
+    async fn my_playlists(
+        &self,
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Vec<Playlist>> {
         self.playlists.clone().ok_or(Error::NotSupported)
     }
 }

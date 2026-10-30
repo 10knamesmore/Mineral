@@ -194,7 +194,8 @@ async fn read_loop(
             match message {
                 SessionMessage::Requests(requests) => {
                     for request in requests {
-                        handle_request(request, client, out, &services.shutdown).await;
+                        handle_request(request, client, out, &services.shutdown, &subscriptions)
+                            .await;
                     }
                 }
                 SessionMessage::Subscribe(request) => {
@@ -223,6 +224,7 @@ async fn handle_request(
     client: &ClientHandle,
     out: &mpsc::Sender<SessionMessage>,
     shutdown: &Arc<Notify>,
+    subscriptions: &Subscriptions,
 ) {
     let id = request.id;
     if let Some(slow) = dispatch::async_request(&request.request) {
@@ -249,7 +251,11 @@ async fn handle_request(
         Request::QueueEdit { op } => dispatch::execute_queue_edit(client, op).await,
         other => {
             let is_shutdown = matches!(other, Request::Shutdown);
+            let invalidates_collections = matches!(other, Request::RefreshCollections(_));
             let result = dispatch::execute_sync(client, other);
+            if invalidates_collections {
+                subscriptions.flush_task_events().await;
+            }
             if is_shutdown {
                 // ack 先入队、再唤醒关停:给 writer 把应答写出去的机会。
                 let _ = out

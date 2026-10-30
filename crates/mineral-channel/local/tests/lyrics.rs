@@ -12,7 +12,7 @@ use lofty::{
 };
 use mineral_channel_core::{MusicChannel, PlaylistLoad};
 use mineral_channel_local::LocalLibrary;
-use mineral_model::{LineKind, LyricLine, Playlist, Song, Word};
+use mineral_model::{CachePolicy, LineKind, LyricLine, Playlist, Song, Word};
 use mineral_server::ServerStore;
 
 /// Opens the same public library boundary used by the daemon.
@@ -34,9 +34,9 @@ fn music_directory(directory: &Path) -> color_eyre::Result<PathBuf> {
 /// Loads complete playlists so all lyric requests use identities from a real scan.
 async fn playlists(library: &LocalLibrary) -> color_eyre::Result<Vec<Playlist>> {
     let mut result = Vec::<Playlist>::new();
-    for playlist in library.my_playlists().await? {
+    for playlist in library.my_playlists(CachePolicy::UseCache).await? {
         let detail = library
-            .playlist_detail(&playlist.id, PlaylistLoad::Complete)
+            .playlist_detail(&playlist.id, PlaylistLoad::Complete, CachePolicy::UseCache)
             .await?;
         assert!(detail.complete);
         assert!(detail.next_offset.is_none());

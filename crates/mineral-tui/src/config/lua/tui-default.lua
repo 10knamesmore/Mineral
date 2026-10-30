@@ -83,6 +83,7 @@ return {
     reorder_up = "<C-k>",
     jump_to_current = "c",
     download = "d",
+    refresh = "R",
     dismiss_notice = "x",
     open_action_menu = "o",
     open_copy_menu = "y",

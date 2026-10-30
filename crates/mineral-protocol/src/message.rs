@@ -3,7 +3,7 @@
 //! `Response` 的 variant 由调用方根据自己发出的 [`Request`] 决定预期;
 //! server 业务失败统一返回 [`crate::OperationResult::Failed`]。
 
-use mineral_model::{AlbumId, ArtistId, PlaylistId, Song, SongId};
+use mineral_model::{AlbumId, ArtistId, PlaylistId, RefreshScope, Song, SongId};
 use mineral_task::{Priority, TaskKind};
 use serde::{Deserialize, Serialize};
 use strum_macros::IntoStaticStr;
@@ -150,6 +150,9 @@ pub enum Request {
     // ---- 任务调度 ----
     /// 提交一个任务。返回 [`Response::Ok`]，不等待任务完成。
     SubmitTask(TaskKind, Priority),
+
+    /// Invalidate collection read state without fetching; the caller submits ordinary reads after success.
+    RefreshCollections(RefreshScope),
 
     // ---- Player 业务 ----(server 持权威 PlayerState)
     /// Selects one song as current playback. Returns [`Response::Ok`].

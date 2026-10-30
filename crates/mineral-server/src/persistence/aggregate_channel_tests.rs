@@ -2,7 +2,7 @@
 
 use crate::persistence::ServerStore;
 use mineral_channel_core::{Error, MusicChannel};
-use mineral_model::{SongId, SourceKind};
+use mineral_model::{CachePolicy, SongId, SourceKind};
 use mineral_test::{song, with_name};
 
 use mineral_channel_mineral::{MineralChannel, favorites_playlist_id};
@@ -34,7 +34,7 @@ async fn store_with_favorites() -> color_eyre::Result<(tempfile::TempDir, Server
 async fn my_playlists_is_single_synthetic() -> color_eyre::Result<()> {
     let (_dir, store) = store_with_favorites().await?;
     let ch = MineralChannel::new(Arc::new(store));
-    let lists = ch.my_playlists().await?;
+    let lists = ch.my_playlists(CachePolicy::UseCache).await?;
     assert_eq!(lists.len(), 1);
     let p = lists
         .first()
@@ -56,6 +56,7 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
         .playlist_detail(
             &favorites_playlist_id(),
             mineral_channel_core::PlaylistLoad::Complete,
+            CachePolicy::UseCache,
         )
         .await?
         .playlist;
@@ -89,8 +90,12 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
     let other = mineral_model::PlaylistId::new(SourceKind::MINERAL, "nope");
     assert!(
         matches!(
-            ch.playlist_detail(&other, mineral_channel_core::PlaylistLoad::Complete)
-                .await,
+            ch.playlist_detail(
+                &other,
+                mineral_channel_core::PlaylistLoad::Complete,
+                CachePolicy::UseCache
+            )
+            .await,
             Err(Error::NotFound)
         ),
         "未知 id 不臆造歌单"
@@ -106,6 +111,7 @@ async fn disabled_store_yields_empty_favorites() -> color_eyre::Result<()> {
         .playlist_detail(
             &favorites_playlist_id(),
             mineral_channel_core::PlaylistLoad::Complete,
+            CachePolicy::UseCache,
         )
         .await?
         .playlist;

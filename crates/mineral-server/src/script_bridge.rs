@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use mineral_model::SongId;
+use mineral_model::{CachePolicy, SongId};
 use mineral_playback::PlaybackRequest;
 use mineral_protocol::{DownloadTarget, Event};
 use mineral_script::mlua::Lua;
@@ -551,7 +551,11 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
                     return;
                 };
                 match channel
-                    .playlist_detail(&playlist, mineral_channel_core::PlaylistLoad::Complete)
+                    .playlist_detail(
+                        &playlist,
+                        mineral_channel_core::PlaylistLoad::Complete,
+                        CachePolicy::UseCache,
+                    )
                     .await
                 {
                     Ok(playlist) => {

@@ -3,7 +3,7 @@
 use futures_util::{StreamExt, stream};
 use mineral_channel_core::store::{CachedPlaylistEntry, NamespaceStore};
 use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
-use mineral_model::{PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{CachePolicy, PlaylistId, Song, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::Result;
@@ -40,6 +40,7 @@ impl PlaylistLoader {
         persist: Option<&dyn NamespaceStore>,
         id: &PlaylistId,
         intent: PlaylistLoad,
+        cache: CachePolicy,
     ) -> Result<PlaylistDetail> {
         let lock = {
             let mut active = self.active.lock().await;
@@ -53,7 +54,7 @@ impl PlaylistLoader {
             }
         };
         let _serial = lock.lock().await;
-        fetch(transport, persist, &self.config, id, intent).await
+        fetch(transport, persist, &self.config, id, intent, cache).await
     }
 }
 
@@ -64,11 +65,13 @@ async fn fetch(
     config: &PlaylistFetchConfig,
     id: &PlaylistId,
     intent: PlaylistLoad,
+    policy: CachePolicy,
 ) -> Result<PlaylistDetail> {
     let meta = match api::playlist::detail(transport, id, 0).await {
         Ok(result) => result.playlist,
         Err(error) => {
-            if intent == PlaylistLoad::Preview
+            if policy == CachePolicy::UseCache
+                && intent == PlaylistLoad::Preview
                 && let Some(store) = persist
                 && let Some(mut playlist) = cache::try_load_stale(store, id).await
             {
@@ -94,10 +97,12 @@ async fn fetch(
         .map(|track| track.id.to_string())
         .collect::<Vec<_>>();
     let cached = match persist {
-        Some(store) => cache::try_rebuild_if_current(store, id, meta.track_update_time, &order)
-            .await
-            .unwrap_or_default(),
-        None => Vec::new(),
+        Some(store) if policy == CachePolicy::UseCache => {
+            cache::try_rebuild_if_current(store, id, meta.track_update_time, &order)
+                .await
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
     };
     let mut songs = cached
         .into_iter()
@@ -139,6 +144,9 @@ async fn fetch(
             )
             .await
     {
+        if policy == CachePolicy::Reload {
+            return Err(error.into());
+        }
         mineral_log::warn!(target: "netease", playlist = %id, error = mineral_log::chain(&error), "写入歌单身份顺序失败");
     }
     let batches = missing
@@ -174,6 +182,9 @@ async fn fetch(
         if let Some(scope) = persist
             && let Err(error) = scope.upsert_meta_batch(&refs).await
         {
+            if policy == CachePolicy::Reload {
+                return Err(error.into());
+            }
             mineral_log::warn!(target: "netease", playlist = %id, batch, error = mineral_log::chain(&error), "缓存歌单歌曲详情失败");
         }
         songs.extend(fetched.into_iter().map(|song| (song.id.clone(), song)));

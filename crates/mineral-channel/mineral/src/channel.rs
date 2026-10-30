@@ -7,6 +7,7 @@ use mineral_channel_core::store::LibraryStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
 };
+use mineral_model::CachePolicy;
 use mineral_model::{Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind};
 
 /// `mineral:favorites` 聚合收藏歌单的 id。
@@ -101,11 +102,11 @@ impl MusicChannel for MineralChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_detail(&self, _ids: &[SongId]) -> Result<Vec<Song>> {
+    async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn my_playlists(&self) -> Result<Vec<Playlist>> {
+    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
         let mut playlists = vec![self.build_favorites(/*with_songs*/ false).await?];
         playlists.extend(
             self.library
@@ -122,6 +123,7 @@ impl MusicChannel for MineralChannel {
         &self,
         id: &PlaylistId,
         _load: mineral_channel_core::PlaylistLoad,
+        _cache: CachePolicy,
     ) -> Result<mineral_channel_core::PlaylistDetail> {
         if id.namespace() != SourceKind::MINERAL {
             return Err(Error::NotSupported);

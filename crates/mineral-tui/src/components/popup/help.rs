@@ -295,6 +295,7 @@ impl Overlay for HelpOverlay {
             // 其余(列表激活 / 下载 / 菜单 / 布局切换…)显式吞掉:cheatsheet 盖住
             // 主视图,不能让动作打在看不见的列表上。
             Action::ToggleFullscreen
+            | Action::RefreshCollections
             | Action::OpenSearchView
             | Action::OpenQueue
             | Action::OpenDownloads

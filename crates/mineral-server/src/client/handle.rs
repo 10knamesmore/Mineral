@@ -2,7 +2,7 @@
 
 use mineral_channel_core::ChannelCaps;
 use mineral_common::revision::Revision;
-use mineral_model::{Song, SongId, SourceKind};
+use mineral_model::{RefreshScope, Song, SongId, SourceKind};
 use mineral_protocol::{
     DownloadId, DownloadTarget, Event, PlayMode, PlayQueueError, PlayerSync, PlayerVersions,
     QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
@@ -506,6 +506,10 @@ impl ClientHandle {
     ///   - `priority`: 优先级
     pub(crate) fn submit_task(&self, kind: TaskKind, priority: Priority) {
         self.player.submit_task(kind, priority);
+    }
+
+    pub(crate) fn refresh_collections(&self, scope: &RefreshScope) {
+        self.player.refresh_collections(scope);
     }
 
     /// 提交单曲 / 歌单下载。

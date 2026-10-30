@@ -10,7 +10,7 @@ use mineral_protocol::{
     DownloadDetailDelta, PlayerVersions, SessionMessage, SubscriptionId, UpdateEnvelope,
     UpdatePayload, fragment_download_detail, fragment_player_update,
 };
-use tokio::sync::{Notify, broadcast, mpsc, watch};
+use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 
 use crate::client::ClientHandle;
 
@@ -210,6 +210,7 @@ pub(super) async fn pump_events(
     id: SubscriptionId,
     client: ClientHandle,
     out: mpsc::Sender<SessionMessage>,
+    mut flush: mpsc::UnboundedReceiver<oneshot::Sender<()>>,
 ) {
     let mut version = Revision::default();
     let replay = client.replay_frames(&[category]).await;
@@ -217,7 +218,26 @@ pub(super) async fn pump_events(
         return;
     }
     loop {
-        match rx.recv().await {
+        let received = tokio::select! {
+            Some(done) = flush.recv() => {
+                // Bound the drain to the backlog at the barrier, not newly arriving results.
+                for _ in 0..rx.len() {
+                    match rx.try_recv() {
+                        Ok(event) if event.subscription() == category => {
+                            if send_events(&[event], id, &mut version, &out).await.is_err() {
+                                return;
+                            }
+                        }
+                        Ok(_) | Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                        Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => break,
+                    }
+                }
+                let _ = done.send(());
+                continue;
+            }
+            received = rx.recv() => received,
+        };
+        match received {
             Ok(event) => {
                 if event.subscription() != category {
                     continue;

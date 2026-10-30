@@ -6,10 +6,14 @@
 use std::time::Instant;
 
 use mineral_client::operation::Outcome;
+use mineral_model::{CollectionCategory, RefreshScope};
 use mineral_protocol::{PlayerSync, QueueEditOutcome, QueueSync, SubscriptionTopic};
+use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::components::toast::notifications::{TextTint, tinted_text_item};
 use crate::runtime::backend::Completion;
+use crate::runtime::prefetch::submit_detail_tasks;
+use crate::runtime::state::{DetailFetch, LibraryUpdate};
 
 use super::App;
 
@@ -104,6 +108,45 @@ impl App {
             self.complete_queue_edit(outcome);
         }
         match completion {
+            Completion::Refresh { scope, outcome } => {
+                log_completion_failure(&outcome, "invalidate collection cache");
+                if outcome.is_success() {
+                    self.client.invalidate_collection_reads(&scope);
+                    self.invalidate_pending_collection_playback(&scope);
+                    let mut update = LibraryUpdate::default();
+                    update.record(&self.state);
+                    self.state.invalidate_collections(&scope);
+                    update.finish(&mut self.state);
+                    match scope {
+                        RefreshScope::Collections(category) => {
+                            for source in self.state.models.caps.keys().copied() {
+                                let kind = match category {
+                                    CollectionCategory::Playlists => {
+                                        ChannelFetchKind::MyPlaylists { source }
+                                    }
+                                    CollectionCategory::Albums => {
+                                        ChannelFetchKind::MyAlbums { source }
+                                    }
+                                };
+                                self.client
+                                    .submit_task(TaskKind::ChannelFetch(kind), Priority::User);
+                            }
+                        }
+                        RefreshScope::Playlist(id) => submit_detail_tasks(
+                            self.client.as_ref(),
+                            &mut self.state.models.library,
+                            DetailFetch::PlaylistDetail(id),
+                            Priority::User,
+                        ),
+                        RefreshScope::Album(id) => submit_detail_tasks(
+                            self.client.as_ref(),
+                            &mut self.state.models.library,
+                            DetailFetch::AlbumDetail(id),
+                            Priority::User,
+                        ),
+                    }
+                }
+            }
             Completion::Playlist { op, outcome } => {
                 use mineral_protocol::{FailureKind, PlaylistOp};
                 log_completion_failure(&outcome, "playlist operation");

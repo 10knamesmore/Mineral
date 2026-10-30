@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use mineral_channel_core::{
     ChannelCaps, Error, MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad,
 };
+use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind,
 };
@@ -55,11 +56,19 @@ impl MusicChannel for BareChannel {
         Err(Error::NotSupported)
     }
 
-    async fn songs_detail(&self, _ids: &[SongId]) -> mineral_channel_core::Result<Vec<Song>> {
+    async fn songs_detail(
+        &self,
+        _ids: &[SongId],
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
 
-    async fn album_detail(&self, _id: &AlbumId) -> mineral_channel_core::Result<Album> {
+    async fn album_detail(
+        &self,
+        _id: &AlbumId,
+        _cache: CachePolicy,
+    ) -> mineral_channel_core::Result<Album> {
         Err(Error::NotSupported)
     }
 
@@ -67,6 +76,7 @@ impl MusicChannel for BareChannel {
         &self,
         _id: &PlaylistId,
         _load: PlaylistLoad,
+        _cache: CachePolicy,
     ) -> mineral_channel_core::Result<PlaylistDetail> {
         Err(Error::NotSupported)
     }
