@@ -36,11 +36,12 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &SpectrumState, theme: &Th
 impl crate::components::lifecycle::Prepare for SpectrumState {
     type Input<'a> = ();
 
-    /// 根据本次布局设置采样分辨率；绘制只消费既有频谱状态。
+    /// 按面板内宽同步柱条状态，首帧与尺寸变化无需等待音频更新。
+    /// 转场内区为空时保留上一次柱条状态，继续为历史频谱供数。
     fn prepare(&mut self, area: Rect, (): (), _cx: &mut crate::components::frame::PrepareCx<'_>) {
         let inner = Block::new().borders(Borders::ALL).inner(area);
         if !inner.is_empty() {
-            self.target_bars = usize::from(inner.width).max(1);
+            self.resize_bars(usize::from(inner.width));
         }
     }
 }
