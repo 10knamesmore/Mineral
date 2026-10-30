@@ -25,7 +25,7 @@ pub enum Error {
     },
 
     /// Lua 虚拟机操作失败。
-    #[error("{operation} 失败")]
+    #[error("{operation} failed")]
     Lua {
         /// 虚拟机操作。
         operation: &'static str,
@@ -36,7 +36,7 @@ pub enum Error {
     },
 
     /// 内置默认表无法落成配置,属于程序包错误。
-    #[error("内置默认配置无法落型")]
+    #[error("invalid bundled default configuration")]
     DefaultConfig {
         /// 配置字段和分类。
         #[source]
@@ -44,7 +44,7 @@ pub enum Error {
     },
 
     /// 源码求值后的配置无法序列化或落型;不返回部分成功产物。
-    #[error("配置无效")]
+    #[error("invalid configuration")]
     InvalidConfig {
         /// 配置转换或落型失败的诊断。
         #[source]
@@ -60,7 +60,7 @@ impl From<mlua::Error> for Error {
     /// 保留底层 Lua 错误供调用方沿 source 链诊断。
     fn from(source: mlua::Error) -> Self {
         Self::Lua {
-            operation: "处理 Lua 配置",
+            operation: "process Lua configuration",
             source,
         }
     }

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 #[non_exhaustive]
 pub enum ConfigWarning {
     /// 读取用户配置失败；文件不存在不生成告警。
-    #[error("读取用户配置 {} 失败,已回落默认", .path.display())]
+    #[error("failed to read configuration {}; using defaults", .path.display())]
     Read {
         /// 读取失败的配置文件路径。
         path: PathBuf,
@@ -20,7 +20,7 @@ pub enum ConfigWarning {
     },
 
     /// 用户配置求值失败(语法错 / 运行期错 / 返回非表)。
-    #[error("用户配置 {} 求值失败,已回落默认", .path.display())]
+    #[error("failed to evaluate configuration {}; using defaults", .path.display())]
     Eval {
         /// 求值失败的配置文件路径。
         path: PathBuf,
@@ -31,7 +31,7 @@ pub enum ConfigWarning {
     },
 
     /// Lua 表无法转成配置树。
-    #[error("用户配置转成配置树失败,已回落默认")]
+    #[error("failed to serialize configuration; using defaults")]
     Serialize {
         /// Lua 值序列化失败的原始错误。
         #[source]
@@ -39,7 +39,7 @@ pub enum ConfigWarning {
     },
 
     /// 合并后的配置树无法落型。`path` 是出错字段路径,如 `audio.volume`。
-    #[error("配置{location}错误,已回落默认", location = warning_location(.path.as_deref()))]
+    #[error("invalid configuration{location}; using defaults", location = warning_location(.path.as_deref()))]
     Deserialize {
         /// 出错字段路径；顶层错误或无法定位字段时为 `None`。
         path: Option<String>,
@@ -53,7 +53,7 @@ pub enum ConfigWarning {
 /// 路径缺席时诊断配置整体,否则诊断具体字段。
 fn warning_location(path: Option<&str>) -> String {
     match path {
-        Some(path) => format!("字段 `{path}` "),
-        None => "类型".to_owned(),
+        Some(path) => format!(" field `{path}`"),
+        None => " type".to_owned(),
     }
 }

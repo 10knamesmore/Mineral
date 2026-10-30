@@ -9,11 +9,11 @@ use super::loader::tui_from_source;
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     /// 源码求值、合并或配置落型失败。
-    #[error("TUI 配置加载失败")]
+    #[error("failed to load TUI configuration")]
     Config(#[from] mineral_config::Error),
 
     /// API 安装或 setup 执行失败。
-    #[error("TUI 脚本执行失败")]
+    #[error("failed to execute TUI script")]
     Script(#[from] mineral_script::Error),
 }
 
