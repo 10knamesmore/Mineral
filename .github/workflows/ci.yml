@@ -33,6 +33,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: mineral-check
           workspaces: |
             . -> target
             tooling/lints -> target

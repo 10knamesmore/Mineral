@@ -53,6 +53,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: mineral-check
           workspaces: |
             . -> target
             tooling/lints -> target
@@ -63,11 +64,6 @@ jobs:
 
       - name: 安装 Dylint
         run: cargo install --locked --version 6.3.0 cargo-dylint dylint-link
-
-      - name: 完整检查
-        env:
-          CHECK_TOOLING: "1"
-        run: scripts/check.sh
 
       # —— 生成 CHANGELOG:只渲染上个 tag 之后的 feat/fix/perf,prepend,不动历史条目 ——
       - name: CHANGELOG
@@ -83,34 +79,32 @@ jobs:
           sed -i -E "s/^(version[[:space:]]*=[[:space:]]*\")[0-9]+\.[0-9]+\.[0-9]+(\")/\1${VERSION}\2/" Cargo.toml
           sed -i -E "/^mineral-/s/(version[[:space:]]*=[[:space:]]*\")[0-9]+\.[0-9]+\.[0-9]+(\")/\1${VERSION}\2/" Cargo.toml
           grep -E '^version' Cargo.toml
-          cargo check --workspace   # 仅同步 Cargo.lock 里 mineral* 版本,不动依赖 pin
+          cargo update --workspace
 
-      - name: 验证 crates.io 发布包
-        run: cargo publish --workspace --exclude mineral-test --registry crates-io --locked --dry-run --allow-dirty
+      - name: 完整检查
+        env:
+          CHECK_TOOLING: "1"
+        run: scripts/check.sh
 
-      # —— 发布 commit 落 dev ——
-      - name: commit + push dev
+      # main 只快进；dev、main 与本次 tag 一起推送，任一引用被拒绝则全部不更新。
+      - name: commit release + atomic push
         env:
           VERSION: ${{ inputs.version }}
+          HEADLINE: ${{ inputs.headline }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock CHANGELOG.md
           git commit -m "chore(release): ${VERSION}"
-          git push origin dev
-
-      # —— main 快进到 dev + 带注解 tag(铁律:ff-only,绝不 squash)——
-      - name: ff-merge main + tag
-        env:
-          VERSION: ${{ inputs.version }}
-          HEADLINE: ${{ inputs.headline }}
-        run: |
           git checkout main
           git merge --ff-only dev
           MSG="Release ${VERSION}"
           [ -n "$HEADLINE" ] && MSG="${MSG}:${HEADLINE}"
           git tag -a "v${VERSION}" -m "$MSG"
-          git push origin main --tags
+          git push --atomic origin \
+            refs/heads/dev:refs/heads/dev \
+            refs/heads/main:refs/heads/main \
+            "refs/tags/v${VERSION}:refs/tags/v${VERSION}"
 
       # —— GitHub Release:正文取 CHANGELOG 顶部那一版块 ——
       - name: GitHub Release
@@ -130,6 +124,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@v4
         with:
