@@ -1,4 +1,63 @@
 # Changelog
+## [0.6.0] — 2026-10-31
+
+### Features
+
+- Own Symphonia source and enable fragmented media seeking ([`494ccc9`](https://github.com/10knamesmore/Mineral/commit/494ccc99cffd817be4e4ce3bd9aaa39a1c6dc017))
+
+- Add interruptible decoder read control ([`c178fb3`](https://github.com/10knamesmore/Mineral/commit/c178fb38b2eb5f5136d53dd06b730ceb59c600c2))
+
+- Basic support for apple music ([`4446af0`](https://github.com/10knamesmore/Mineral/commit/4446af01fdb19d7b4720a906c716ea998e1ffc2e))
+
+- Start playback from progressively prepared segments ([`68c2084`](https://github.com/10knamesmore/Mineral/commit/68c208415edb4de60a41b087ca4d7a3a7f2021c8))
+
+- Improve interactive login and timeout handling ([`2c7b21e`](https://github.com/10knamesmore/Mineral/commit/2c7b21e857a7766289e53a106784e6b23e10b48f))
+
+- Support 128 kbps standard quality with CBCS playback ([`afad4b5`](https://github.com/10knamesmore/Mineral/commit/afad4b5f315b3738e334e78dc0b9b3bec0d6c3b4))
+
+- Read personal library playlists ([`2445d31`](https://github.com/10knamesmore/Mineral/commit/2445d31bb308f51c291d3e6d67f484f33f6ddaa2))
+
+- Search and read catalog playlists ([`c097e1b`](https://github.com/10knamesmore/Mineral/commit/c097e1bd265bd06d847a85d0cddcac1ac03062ff))
+
+- Unify entity share URLs across channels, storage, and TUI ([`75c86af`](https://github.com/10knamesmore/Mineral/commit/75c86afc6bb818bb3c48fa92280596a1b9d1a5f8))
+
+- Add scoped library and track refresh ([`1b996dc`](https://github.com/10knamesmore/Mineral/commit/1b996dc7cfaea1d0ec361de974fc8ea56c6535f2))
+
+- Follow terminal colors by default (#25) ([`379a922`](https://github.com/10knamesmore/Mineral/commit/379a922ff6de1fbb8be25ced7333f4858fd7f085))
+
+### Bug Fixes
+
+- Avoid full-library search rebuilds during navigation ([`1dc130c`](https://github.com/10knamesmore/Mineral/commit/1dc130c1a491266637ef947e38ec290c30e0e9f7))
+
+- Keep playback active after buffer underruns ([`ebae02f`](https://github.com/10knamesmore/Mineral/commit/ebae02f6c9200391076b20026bcf96bc1a1b02f6))
+
+- Extend gapless prefetch window to 20 seconds ([`7ff0450`](https://github.com/10knamesmore/Mineral/commit/7ff04504c74d12576fdf995d88377752e6ab8e4e))
+
+- Pass media length without seeking to EOF ([`054a213`](https://github.com/10knamesmore/Mineral/commit/054a21326dca991f5a6329942a7a5f67516e376e))
+
+- Avoid EOF seeks for FLAC and MP4 length queries ([`d076d65`](https://github.com/10knamesmore/Mineral/commit/d076d658184ee8ec4c7f25daadb664b2bd2c78b2))
+
+- Normalize fragment decode times to the track origin ([`067c4be`](https://github.com/10knamesmore/Mineral/commit/067c4beb79528ee8dc8fae9ed0885322679f1fa9))
+
+- Synchronize queue moves with committed revisions ([`f2582a9`](https://github.com/10knamesmore/Mineral/commit/f2582a9e114a05dc74514112fd87ed6089727216))
+
+- Upgrade Dylint to 6.3.0 ([`9ba027d`](https://github.com/10knamesmore/Mineral/commit/9ba027d14245d90f1f0a76c1233b8a40fe1330d8))
+
+- Size spectrum bars during layout preparation ([`30a26bc`](https://github.com/10knamesmore/Mineral/commit/30a26bcbcde0e3cc4a9f3268703462664d4961e6))
+
+- Enable protocol sink feature and always publish crates ([`b30ad68`](https://github.com/10knamesmore/Mineral/commit/b30ad6847ceb4b99e614b15b4e5e75a748eae818))
+
+- Release Kitty images through lifecycle events ([`cc6b91a`](https://github.com/10knamesmore/Mineral/commit/cc6b91aaddd66bd15bed47068c249179c623c3f5))
+
+- Publish refs atomically and reuse build caches ([`a9fab76`](https://github.com/10knamesmore/Mineral/commit/a9fab76c662aa5dda131497a0a47fb10845ff5da))
+
+### Performance
+
+- Avoid copying cover pixels for fingerprints ([`dd109fc`](https://github.com/10knamesmore/Mineral/commit/dd109fc66dbaa45a4ae766ce32fb9ef18e2664f0))
+
+- Avoid resending unchanged color channels ([`7b5cf5d`](https://github.com/10knamesmore/Mineral/commit/7b5cf5de33dec961e0cf3fa97a386ccde76588e6))
+
+- Use libjpeg-turbo for scaled JPEG decoding ([`37f13ae`](https://github.com/10knamesmore/Mineral/commit/37f13aee996d87a65dd654a59be7aa4b52e73160))
 ## [0.5.10] — 2026-10-18
 
 ### Features

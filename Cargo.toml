@@ -46,7 +46,7 @@ name = "mineral"
 libraries = [{ path = "tooling/lints" }]
 
 [workspace.package]
-version     = "0.5.10"
+version     = "0.6.0"
 edition     = "2024"
 license     = "MIT"
 repository  = "https://github.com/10knamesmore/Mineral"
@@ -78,33 +78,33 @@ lofty              = "0.22"
 symphonia          = { version = "0.6.1", default-features = false, features = ["isomp4", "all-meta"] }
 symphonia-core     = "0.6.1"
 mlua               = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
-mineral-audio           = { path = "crates/mineral-audio", version = "0.5.10" }
-mineral-cli             = { path = "crates/mineral-cli", version = "0.5.10" }
-mineral-common          = { path = "crates/mineral-common", version = "0.5.10" }
-mineral-log             = { path = "crates/mineral-log", version = "0.5.10" }
-mineral-task            = { path = "crates/mineral-task", version = "0.5.10" }
-mineral-tui             = { path = "crates/mineral-tui", version = "0.5.10", default-features = false }
-mineral-macros          = { path = "crates/mineral-macros", version = "0.5.10" }
-mineral-config-macros   = { path = "crates/mineral-config-macros", version = "0.5.10" }
-mineral-media           = { path = "crates/mineral-media", version = "0.5.10" }
-mineral-playback        = { path = "crates/mineral-playback", version = "0.5.10" }
-mineral-model           = { path = "crates/mineral-model", version = "0.5.10" }
-mineral-paths           = { path = "crates/mineral-paths", version = "0.5.10" }
-mineral-protocol        = { path = "crates/mineral-protocol", version = "0.5.10" }
-mineral-server          = { path = "crates/mineral-server", version = "0.5.10" }
-mineral-spectrum        = { path = "crates/mineral-spectrum", version = "0.5.10" }
+mineral-audio           = { path = "crates/mineral-audio", version = "0.6.0" }
+mineral-cli             = { path = "crates/mineral-cli", version = "0.6.0" }
+mineral-common          = { path = "crates/mineral-common", version = "0.6.0" }
+mineral-log             = { path = "crates/mineral-log", version = "0.6.0" }
+mineral-task            = { path = "crates/mineral-task", version = "0.6.0" }
+mineral-tui             = { path = "crates/mineral-tui", version = "0.6.0", default-features = false }
+mineral-macros          = { path = "crates/mineral-macros", version = "0.6.0" }
+mineral-config-macros   = { path = "crates/mineral-config-macros", version = "0.6.0" }
+mineral-media           = { path = "crates/mineral-media", version = "0.6.0" }
+mineral-playback        = { path = "crates/mineral-playback", version = "0.6.0" }
+mineral-model           = { path = "crates/mineral-model", version = "0.6.0" }
+mineral-paths           = { path = "crates/mineral-paths", version = "0.6.0" }
+mineral-protocol        = { path = "crates/mineral-protocol", version = "0.6.0" }
+mineral-server          = { path = "crates/mineral-server", version = "0.6.0" }
+mineral-spectrum        = { path = "crates/mineral-spectrum", version = "0.6.0" }
 mineral-test            = { path = "crates/mineral-test" }
-mineral-channel-core    = { path = "crates/mineral-channel/core", version = "0.5.10" }
-mineral-channel-netease = { path = "crates/mineral-channel/netease", version = "0.5.10" }
-mineral-channel-apple-music = { path = "crates/mineral-channel/apple-music", version = "0.5.10" }
-mineral-channel-bilibili = { path = "crates/mineral-channel/bilibili", version = "0.5.10" }
-mineral-channel-mineral = { path = "crates/mineral-channel/mineral", version = "0.5.10" }
-mineral-channel-local = { path = "crates/mineral-channel/local", version = "0.5.10" }
-mineral-client          = { path = "crates/mineral-client", version = "0.5.10" }
-mineral-persist         = { path = "crates/mineral-persist", version = "0.5.10" }
-mineral-config          = { path = "crates/mineral-config", version = "0.5.10" }
-mineral-script          = { path = "crates/mineral-script", version = "0.5.10" }
-mineral-stats           = { path = "crates/mineral-stats", version = "0.5.10" }
+mineral-channel-core    = { path = "crates/mineral-channel/core", version = "0.6.0" }
+mineral-channel-netease = { path = "crates/mineral-channel/netease", version = "0.6.0" }
+mineral-channel-apple-music = { path = "crates/mineral-channel/apple-music", version = "0.6.0" }
+mineral-channel-bilibili = { path = "crates/mineral-channel/bilibili", version = "0.6.0" }
+mineral-channel-mineral = { path = "crates/mineral-channel/mineral", version = "0.6.0" }
+mineral-channel-local = { path = "crates/mineral-channel/local", version = "0.6.0" }
+mineral-client          = { path = "crates/mineral-client", version = "0.6.0" }
+mineral-persist         = { path = "crates/mineral-persist", version = "0.6.0" }
+mineral-config          = { path = "crates/mineral-config", version = "0.6.0" }
+mineral-script          = { path = "crates/mineral-script", version = "0.6.0" }
+mineral-stats           = { path = "crates/mineral-stats", version = "0.6.0" }
 uuid               = { version = "1", features = ["v4"] }
 syn                = { version = "2", features = ["full"] }
 quote              = "1"
