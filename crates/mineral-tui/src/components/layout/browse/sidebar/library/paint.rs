@@ -696,6 +696,7 @@ mod tests {
         state.models.library.tracks.insert(
             PlaylistId::new(SourceKind::NETEASE, "p1"),
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default(),
                 entries: vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
                 complete: true,

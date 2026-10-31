@@ -94,9 +94,9 @@ impl AppState {
     }
 
     /// 将完整专辑应用到所有会话中匹配的保留帧和结果行。
-    pub(super) fn apply_album_detail(&mut self, id: &AlbumId, album: &Album) {
+    pub(super) fn apply_album_detail(&mut self, id: &AlbumId, album: &Album, fresh: bool) {
         for results in self.ui.channel_search.retained_results_mut() {
-            results.fill_album_detail(id, album);
+            results.fill_album_detail(id, album, fresh);
         }
     }
 }
@@ -418,6 +418,7 @@ mod tests {
             detailed.tracks =
                 mineral_model::AlbumTrack::enumerate(crate::test_support::endserenading(3));
             s.apply(&TaskEvent::AlbumDetailFetched {
+                fresh: true,
                 id: detailed.id.clone(),
                 album: Box::new(detailed.clone()),
             });
@@ -563,6 +564,7 @@ mod tests {
         mark_detail_requested(&mut s)?;
         album.tracks = AlbumTrack::enumerate(songs);
         s.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: album.id.clone(),
             album: Box::new(album.clone()),
         });
@@ -590,6 +592,7 @@ mod tests {
         mark_detail_requested(&mut s)?;
         album.description = "updated description".to_owned();
         s.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: album.id.clone(),
             album: Box::new(album.clone()),
         });
@@ -702,6 +705,7 @@ mod tests {
         s.ui.channel_search.select_kind(SearchKind::Song);
         playlist.entries = PlaylistEntry::enumerate(crate::test_support::endserenading(2));
         s.apply(&TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: playlist.id.clone(),
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
@@ -796,6 +800,7 @@ mod tests {
             has_more: None,
         });
         s.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: AlbumId::new(SourceKind::NETEASE, "OTHER"),
             album: Box::new(
                 mineral_model::Album::builder()

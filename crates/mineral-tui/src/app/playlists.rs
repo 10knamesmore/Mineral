@@ -196,6 +196,7 @@ mod tests {
         for data in [&playlist, &retained] {
             app.state
                 .apply(&mineral_task::TaskEvent::PlaylistDetailFetched {
+                    fresh: true,
                     id: data.id.clone(),
                     load: mineral_channel_core::PlaylistLoad::Complete,
                     detail: Box::new(mineral_channel_core::PlaylistDetail::complete(data.clone())),

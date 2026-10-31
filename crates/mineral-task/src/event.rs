@@ -59,6 +59,9 @@ pub enum TaskEvent {
         /// 本次请求的加载意图。
         load: mineral_channel_core::PlaylistLoad,
 
+        /// 有效缓存或远端结果为 true；false 仅供展示，刷新仍在进行。
+        fresh: bool,
+
         /// 元信息、曲目及完整性。
         detail: Box<mineral_channel_core::PlaylistDetail>,
     },
@@ -179,10 +182,13 @@ pub enum TaskEvent {
         page: Page,
     },
 
-    /// `AlbumDetail` 任务成功:专辑完整详情(元信息 + 曲目)已到。
+    /// 专辑完整详情快照(元信息 + 曲目)已到；fresh 表示本次读取已确认有效。
     AlbumDetailFetched {
         /// 专辑 id。
-        id: mineral_model::AlbumId,
+        id: AlbumId,
+
+        /// 有效缓存或远端结果为 true；false 仅供展示，刷新仍在进行。
+        fresh: bool,
 
         /// 完整专辑(含曲目)。
         album: Box<Album>,

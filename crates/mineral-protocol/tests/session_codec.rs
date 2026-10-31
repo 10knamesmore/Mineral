@@ -269,6 +269,7 @@ async fn task_events_round_trip() -> color_eyre::Result<()> {
         TaskEvent::PlaylistDetailFetched {
             id: PlaylistId::new(SourceKind::NETEASE, "p"),
             load: mineral_channel_core::PlaylistLoad::Complete,
+            fresh: true,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
                 mineral_model::Playlist::builder()
                     .id(PlaylistId::new(SourceKind::NETEASE, "p"))

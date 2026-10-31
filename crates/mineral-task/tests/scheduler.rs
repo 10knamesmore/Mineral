@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mineral_channel_core::collection::fresh_collection;
+use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
-    ChannelCaps, CollectionStream, Error, MusicChannel, Page, PageResult, Result,
+    ChannelCaps, CollectionStream, Error, FetchStream, MusicChannel, Page, PageResult,
+    PlaylistDetail, PlaylistLoad, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -90,22 +92,21 @@ impl MusicChannel for FakeChannel {
     async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
     }
-    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> Result<Album> {
-        Err(Error::NotSupported)
-    }
-    async fn playlist_detail(
-        &self,
-        id: &PlaylistId,
-        _load: mineral_channel_core::PlaylistLoad,
+    fn playlist_detail<'a>(
+        &'a self,
+        id: &'a PlaylistId,
+        _load: PlaylistLoad,
         _cache: CachePolicy,
-    ) -> Result<mineral_channel_core::PlaylistDetail> {
-        self.maybe_wait().await;
-        Ok(mineral_channel_core::PlaylistDetail::complete(
-            Playlist::builder()
-                .id(id.clone())
-                .name(String::new())
-                .build(),
-        ))
+    ) -> FetchStream<'a, PlaylistDetail> {
+        fresh_snapshot(async move {
+            self.maybe_wait().await;
+            Ok(PlaylistDetail::complete(
+                Playlist::builder()
+                    .id(id.clone())
+                    .name(String::new())
+                    .build(),
+            ))
+        })
     }
     async fn artist_albums(&self, _id: &ArtistId, _page: Page) -> Result<PageResult<Album>> {
         self.page_started.add_permits(1);
@@ -578,21 +579,6 @@ impl MusicChannel for WriteRecorder {
         Err(Error::NotSupported)
     }
     async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
-        Err(Error::NotSupported)
-    }
-    async fn album_detail(
-        &self,
-        _id: &mineral_model::AlbumId,
-        _cache: CachePolicy,
-    ) -> Result<mineral_model::Album> {
-        Err(Error::NotSupported)
-    }
-    async fn playlist_detail(
-        &self,
-        _id: &PlaylistId,
-        _load: mineral_channel_core::PlaylistLoad,
-        _cache: CachePolicy,
-    ) -> Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {

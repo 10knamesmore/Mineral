@@ -1,7 +1,7 @@
 //! 按远端歌单顺序重建已缓存的曲目；返回部分数据不代表歌单已经完整。
 //!
 //! 版本一致时复用 song_meta，缺失详情由歌单加载模块按请求意图补齐。
-//! 预览的轻请求失败时可以重建旧关系；完整请求不能用旧缓存冒充成功。
+//! 远端版本检查前可先展示旧关系；旧快照不代表本次加载已完成。
 
 use mineral_channel_core::store::{CachedPlaylistEntry, NamespaceStore};
 use mineral_model::{CollectionIndex, Playlist, PlaylistEntry, PlaylistId, SongId, SourceKind};
@@ -71,7 +71,7 @@ pub async fn try_rebuild_if_current(
     Some(entries)
 }
 
-/// 忽略版本的缓存重建,供远端(含轻请求)失败时降级用(旧数据胜过报错)。
+/// 忽略版本重建旧快照，供远端检查前展示。
 ///
 /// 按本地缓存自身的曲目顺序重建(此时拿不到远端顺序)。
 ///
@@ -99,6 +99,7 @@ pub async fn try_load_stale(persist: &dyn NamespaceStore, id: &PlaylistId) -> Op
                 .id(id.clone())
                 .name(entry.name.unwrap_or_default())
                 .web_url(entry.web_url)
+                .track_count(entry.entries.len() as u64)
                 .entries(entries)
                 .build(),
         )

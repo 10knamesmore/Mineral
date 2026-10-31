@@ -306,7 +306,7 @@ fn execute<'a>(
                 while let Some(snapshot) = snapshots.next().await {
                     yield TaskEvent::AlbumsFetched {
                         source: *source,
-                        albums: snapshot?.into_items(),
+                        albums: snapshot?.into_value(),
                     };
                 }
             }
@@ -315,17 +315,21 @@ fn execute<'a>(
                 while let Some(snapshot) = snapshots.next().await {
                     yield TaskEvent::PlaylistsFetched {
                         source: *source,
-                        playlists: snapshot?.into_items(),
+                        playlists: snapshot?.into_value(),
                     };
                 }
             }
             ChannelFetchKind::PlaylistDetail { id, load } => {
-                let detail = reader.playlist(channel, id, *load, cache).await?;
-                yield TaskEvent::PlaylistDetailFetched {
-                    id: id.clone(),
-                    load: *load,
-                    detail: Box::new(detail),
-                };
+                let mut snapshots = reader.playlist(channel, id, *load, cache);
+                while let Some(snapshot) = snapshots.next().await {
+                    let snapshot = snapshot?;
+                    yield TaskEvent::PlaylistDetailFetched {
+                        id: id.clone(),
+                        load: *load,
+                        fresh: snapshot.is_fresh(),
+                        detail: Box::new(snapshot.into_value()),
+                    };
+                }
             }
             ChannelFetchKind::Lyrics { song_id } => {
                 let lyrics = channel.lyrics(song_id).await?;
@@ -401,11 +405,15 @@ fn execute<'a>(
                 };
             }
             ChannelFetchKind::AlbumDetail { id } => {
-                let album = reader.album(channel, id, cache).await?;
-                yield TaskEvent::AlbumDetailFetched {
-                    id: id.clone(),
-                    album: Box::new(album),
-                };
+                let mut snapshots = reader.album(channel, id, cache);
+                while let Some(snapshot) = snapshots.next().await {
+                    let snapshot = snapshot?;
+                    yield TaskEvent::AlbumDetailFetched {
+                        id: id.clone(),
+                        fresh: snapshot.is_fresh(),
+                        album: Box::new(snapshot.into_value()),
+                    };
+                }
             }
         }
     })

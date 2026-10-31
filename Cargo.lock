@@ -3163,6 +3163,7 @@ name = "mineral-channel-apple-music"
 version = "0.6.0"
 dependencies = [
  "aes",
+ "async-stream",
  "async-trait",
  "base64",
  "byteorder",
@@ -3298,6 +3299,7 @@ name = "mineral-channel-netease"
 version = "0.6.0"
 dependencies = [
  "aes",
+ "async-stream",
  "async-trait",
  "base64",
  "cbc",

@@ -144,7 +144,7 @@ impl KindResults {
 
     /// 将专辑详情填入所有匹配的保留帧，并回填结果列同 ID 专辑的曲目数。
     /// 歌曲帧按所属专辑匹配；移动结果光标后已销毁的帧不再接收。
-    pub fn fill_album_detail(&mut self, id: &AlbumId, album: &Album) {
+    pub fn fill_album_detail(&mut self, id: &AlbumId, album: &Album, fresh: bool) {
         if let SearchPayload::Albums(albums) = &mut self.results {
             for listed in albums.iter_mut().filter(|a| a.id == *id) {
                 listed.track_count = album.track_count;
@@ -154,7 +154,7 @@ impl KindResults {
             .detail
             .matching_frames_mut(DetailFetch::AlbumDetail(id.clone()))
         {
-            frame.set_album_detail(Box::new(album.clone()));
+            frame.set_album_detail(Box::new(album.clone()), fresh);
         }
     }
 
@@ -163,12 +163,14 @@ impl KindResults {
         &mut self,
         id: &PlaylistId,
         entries: &[mineral_model::PlaylistEntry],
+        complete: bool,
+        fresh: bool,
     ) {
         for frame in self
             .detail
             .matching_frames_mut(DetailFetch::PlaylistDetail(id.clone()))
         {
-            frame.set_playlist_entries(entries.to_vec());
+            frame.set_playlist_entries(entries.to_vec(), complete, fresh);
         }
     }
 
@@ -420,7 +422,7 @@ mod tests {
             .name("album a1".to_owned())
             .track_count(Some(11))
             .build();
-        kr.fill_album_detail(&AlbumId::new(SourceKind::NETEASE, "a1"), &detailed);
+        kr.fill_album_detail(&AlbumId::new(SourceKind::NETEASE, "a1"), &detailed, true);
 
         let SearchPayload::Albums(after) = &kr.results else {
             color_eyre::eyre::bail!("应是 Albums 桶");

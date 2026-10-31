@@ -4,13 +4,9 @@
 //! 运行时防线。
 
 use async_trait::async_trait;
-use mineral_channel_core::{
-    ChannelCaps, Error, MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad,
-};
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
 use mineral_model::CachePolicy;
-use mineral_model::{
-    Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind,
-};
+use mineral_model::{Album, ArtistId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
 
 /// 只实现必需方法的最小桩 channel,所有可选能力全部走 trait 默认实现。
 struct BareChannel;
@@ -61,23 +57,6 @@ impl MusicChannel for BareChannel {
         _ids: &[SongId],
         _cache: CachePolicy,
     ) -> mineral_channel_core::Result<Vec<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn album_detail(
-        &self,
-        _id: &AlbumId,
-        _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<Album> {
-        Err(Error::NotSupported)
-    }
-
-    async fn playlist_detail(
-        &self,
-        _id: &PlaylistId,
-        _load: PlaylistLoad,
-        _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<PlaylistDetail> {
         Err(Error::NotSupported)
     }
 

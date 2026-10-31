@@ -7,8 +7,12 @@
 pub mod caps;
 /// Collection snapshots and cache-first producers.
 pub mod collection;
+pub use collection::CollectionStream;
 use collection::fresh_collection;
-pub use collection::{CollectionSnapshot, CollectionStream};
+/// Shared snapshot streams for lists and details.
+pub mod fetch;
+use fetch::fresh_snapshot;
+pub use fetch::{FetchSnapshot, FetchStream};
 /// channel 公共错误类型与 `Result` 别名。
 pub mod error;
 /// 列表分页参数与单页结果。
@@ -72,21 +76,23 @@ pub trait MusicChannel: Send + Sync {
     ///
     /// 返回**完整实体**而非裸曲目:上层要的是"这张专辑的完整视图",至于 channel 内部打几个
     /// 端点拼出来是实现细节。只要曲目的调用方从 `.tracks` 投影 `.song` 即可。
-    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> Result<Album> {
-        Err(Error::NotSupported)
+    /// 未过期缓存直接产出 Fresh；过期缓存可先产出 Cached，再刷新。Reload 只产出 Fresh。
+    fn album_detail<'a>(&'a self, _id: &'a AlbumId, _cache: CachePolicy) -> FetchStream<'a, Album> {
+        fresh_snapshot(async { Err(Error::NotSupported) })
     }
 
     /// 按加载意图获取歌单；预览可返回首批，完整加载须检查所有曲目。
     ///
     /// channel 决定远端批次并显式报告完整性。`CachePolicy::Reload` 禁止读取旧缓存或
     /// 失败后回退；加载范围仍由 `PlaylistLoad` 决定，完整请求失败不能返回首批。
-    async fn playlist_detail(
-        &self,
-        _id: &PlaylistId,
+    /// Cached 只供刷新期间展示；Fresh 表示本次加载意图已完成，不代表已加载整个歌单。
+    fn playlist_detail<'a>(
+        &'a self,
+        _id: &'a PlaylistId,
         _load: PlaylistLoad,
         _cache: CachePolicy,
-    ) -> Result<PlaylistDetail> {
-        Err(Error::NotSupported)
+    ) -> FetchStream<'a, PlaylistDetail> {
+        fresh_snapshot(async { Err(Error::NotSupported) })
     }
     /// 拉取艺人详情(可选)。
     async fn artist_detail(&self, _id: &ArtistId) -> Result<Artist> {

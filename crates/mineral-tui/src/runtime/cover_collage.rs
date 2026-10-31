@@ -304,6 +304,7 @@ mod tests {
         s.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default(),
                 entries: tracks,
                 complete: true,

@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::store::StoreError;
+
 /// 跨 channel 边界保留具体错误类型及因果链，不依赖具体适配器 crate。
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -66,3 +68,11 @@ pub enum Error {
 
 /// channel 操作的标准 `Result` 别名。
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<StoreError> for Error {
+    fn from(source: StoreError) -> Self {
+        Self::Storage {
+            source: Box::new(source),
+        }
+    }
+}

@@ -63,14 +63,14 @@ pub(crate) enum AlbumRequest {
 }
 
 impl LibraryData {
-    /// 未加载的详情可以首次提交或提升在途优先级；失败后等待新的导航。
+    /// 尚未确认有效的详情可以首次提交或提升在途优先级；失败后等待新的导航。
     pub(crate) fn needs_album(
         &self,
         id: &AlbumId,
         priority: Priority,
         changed_at: Instant,
     ) -> bool {
-        !self.album_tracks.contains_key(id)
+        !self.album_tracks.get(id).is_some_and(|tracks| tracks.fresh)
             && match self.albums_requested.get(id) {
                 None => true,
                 Some(AlbumRequest::Loading(submitted)) => priority > *submitted,
@@ -120,15 +120,16 @@ impl LibraryData {
         load: PlaylistLoad,
         retry_failed: bool,
     ) -> bool {
-        if self
-            .tracks
-            .get(id)
-            .is_some_and(|tracks| tracks.complete || load == PlaylistLoad::Preview)
-        {
+        if self.tracks.get(id).is_some_and(|tracks| {
+            tracks.fresh && (tracks.complete || load == PlaylistLoad::Preview)
+        }) {
             return false;
         }
         if let PlaylistLoad::More { offset } = load
-            && self.tracks.get(id).and_then(|tracks| tracks.next_offset) != Some(offset)
+            && !self
+                .tracks
+                .get(id)
+                .is_some_and(|tracks| tracks.fresh && tracks.next_offset == Some(offset))
         {
             return false;
         }
@@ -165,9 +166,11 @@ impl LibraryData {
             .finished(load, success);
     }
 
-    /// 整张操作只消费完整结果，空歌单同样可以是完整结果。
+    /// 整张操作只消费已确认有效的完整结果，空歌单同样可以满足条件。
     pub(crate) fn playlist_complete(&self, id: &PlaylistId) -> bool {
-        self.tracks.get(id).is_some_and(|tracks| tracks.complete)
+        self.tracks
+            .get(id)
+            .is_some_and(|tracks| tracks.complete && tracks.fresh)
     }
 
     /// 构造空数据域(全部缓存为空,等 server 事件增量填充)。

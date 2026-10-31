@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
+use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, MusicChannel, Page,
-    PageResult, PlaylistDetail, PlaylistLoad,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, FetchStream, MusicChannel,
+    Page, PageResult, PlaylistDetail, PlaylistLoad,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -128,21 +129,17 @@ impl MusicChannel for AppleMusicChannel {
         })
     }
 
-    async fn playlist_detail(
-        &self,
-        id: &PlaylistId,
+    fn playlist_detail<'a>(
+        &'a self,
+        id: &'a PlaylistId,
         load: PlaylistLoad,
         _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<PlaylistDetail> {
-        Ok(self.metadata.playlist_detail(id, load).await?)
+    ) -> FetchStream<'a, PlaylistDetail> {
+        fresh_snapshot(async move { Ok(self.metadata.playlist_detail(id, load).await?) })
     }
 
-    async fn album_detail(
-        &self,
-        id: &AlbumId,
-        cache: CachePolicy,
-    ) -> mineral_channel_core::Result<Album> {
-        Ok(self.metadata.album_detail(id, cache).await?)
+    fn album_detail<'a>(&'a self, id: &'a AlbumId, cache: CachePolicy) -> FetchStream<'a, Album> {
+        self.metadata.album_detail(id, cache)
     }
 
     async fn artist_detail(&self, id: &ArtistId) -> mineral_channel_core::Result<Artist> {

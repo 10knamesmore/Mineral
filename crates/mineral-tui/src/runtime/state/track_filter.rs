@@ -197,6 +197,7 @@ mod tests {
     /// 通过真实详情事件更新曲目，保持调用方已有的 relation 坐标。
     fn replace_tracks(state: &mut AppState, id: &PlaylistId, entries: Vec<PlaylistEntry>) {
         state.apply(&TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: id.clone(),
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(

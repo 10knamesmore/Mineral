@@ -553,6 +553,7 @@ async fn fetch_playlist(
                     && let mineral_task::TaskEvent::PlaylistDetailFetched {
                         id: fetched,
                         detail,
+                        fresh: true,
                         ..
                     } = *task
                     && &fetched == id

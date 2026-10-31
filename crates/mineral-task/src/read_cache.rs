@@ -44,8 +44,11 @@ impl ReadCache {
     /// Called for each successful Reload result under the publication lock, after checking cancellation.
     pub(crate) fn record_fresh_result(&self, kind: &ChannelFetchKind, event: &TaskEvent) {
         if matches!(kind, ChannelFetchKind::PlaylistDetail { .. })
-            && !matches!(event, TaskEvent::PlaylistDetailFetched { detail, .. } if detail.complete)
+            && !matches!(event, TaskEvent::PlaylistDetailFetched { detail, fresh: true, .. } if detail.complete)
         {
+            return;
+        }
+        if matches!(event, TaskEvent::AlbumDetailFetched { fresh: false, .. }) {
             return;
         }
         self.state.lock().reusable.insert(cache_key(kind));

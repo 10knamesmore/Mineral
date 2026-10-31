@@ -277,7 +277,7 @@ impl BrowsePage {
                 {
                     // 深度命中优先于历史位置；尚未加载到记忆曲目时延迟恢复。
                     if let Some(tracks) = target_id.tracks(model.library).filter(|tracks| {
-                        tracks.complete
+                        (tracks.complete && tracks.fresh)
                             || tracks.iter().any(|entry| entry.data.song.id == pos.song_id)
                     }) {
                         sel_track = pos.resolve(tracks);
@@ -1007,6 +1007,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default().next(),
                 entries: views,
                 complete: true,
@@ -1069,6 +1070,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default().next(),
                 entries: views,
                 complete: true,
@@ -1151,6 +1153,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             id.clone(),
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default(),
                 entries: crate::test_support::entry_views(vec![mineral_test::song("1")]),
                 complete: false,
@@ -1330,6 +1333,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid.clone(),
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default().next(),
                 entries: views,
                 complete: true,

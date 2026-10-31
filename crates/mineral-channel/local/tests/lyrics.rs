@@ -40,11 +40,14 @@ async fn playlists(library: &LocalLibrary) -> color_eyre::Result<Vec<Playlist>> 
         .try_next()
         .await?
         .ok_or_else(|| eyre!("expected local snapshot"))?
-        .into_items()
+        .into_value()
     {
         let detail = library
             .playlist_detail(&playlist.id, PlaylistLoad::Complete, CachePolicy::UseCache)
-            .await?;
+            .try_next()
+            .await?
+            .ok_or_else(|| eyre!("expected local detail snapshot"))?
+            .into_value();
         assert!(detail.complete);
         assert!(detail.next_offset.is_none());
         result.push(detail.playlist);

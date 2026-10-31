@@ -5,7 +5,7 @@ use mineral_common::revision::Revision;
 
 use crate::runtime::view_model::CollectionTrackView;
 
-/// 一张歌单已到达的曲目；像曲目列表一样读取，同时保留完整性。
+/// 歌单或专辑已到达的曲目，同时保留内容完整性与来源确认状态。
 #[derive(Clone, Debug)]
 pub struct CollectionTracks {
     /// 曲目内容最后一次更新的曲库版本；
@@ -14,8 +14,11 @@ pub struct CollectionTracks {
     /// 按歌单原始位置排列的已加载条目。
     pub entries: Vec<CollectionTrackView>,
 
-    /// channel 是否已检查整个歌单。
+    /// channel 是否已检查整个集合的内容。
     pub complete: bool,
+
+    /// channel 已确认当前快照有效；旧快照仅供展示，整张操作等待确认。
+    pub fresh: bool,
 
     /// 来源确认的下一批起点；和条目数量独立，保留缺失 metadata 的位置缺口。
     pub next_offset: Option<u64>,
@@ -146,6 +149,7 @@ mod tests {
         songs: &[&str],
     ) -> color_eyre::Result<TaskEvent> {
         Ok(TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: id.clone(),
             load,
             detail: Box::new(PlaylistDetail {

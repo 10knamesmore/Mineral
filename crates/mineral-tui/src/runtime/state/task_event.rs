@@ -59,19 +59,31 @@ impl AppState {
             TaskEvent::PlaylistsFetched { .. } | TaskEvent::AlbumsFetched { .. } => {}
             // 纯埋点信号,server 记录后不转发;client 永不收到,defensive:跳过。
             TaskEvent::FetchDone { .. } => {}
-            TaskEvent::PlaylistDetailFetched { id, load, detail } => {
-                self.models.library.finish_playlist(id, *load, true);
-                // 完整结果到达后，晚到的预览只能收束自身请求，不能降级数据。
-                if !detail.complete && self.models.library.playlist_complete(id) {
-                    return;
+            TaskEvent::PlaylistDetailFetched {
+                id,
+                load,
+                detail,
+                fresh,
+            } => {
+                if *fresh {
+                    self.models.library.finish_playlist(id, *load, true);
                 }
                 if let Some(existing) = self.models.library.tracks.get(id) {
+                    if existing.fresh && !*fresh {
+                        return;
+                    }
+                    // 已确认的完整结果保留；旧的完整快照仍可被当前有效结果替换。
+                    let replaces_stale_snapshot = *fresh && !existing.fresh;
+                    if !replaces_stale_snapshot && existing.complete && !detail.complete {
+                        return;
+                    }
                     if let PlaylistLoad::More { offset } = load
                         && existing.next_offset != Some(*offset)
                     {
                         return;
                     }
                     if *load == PlaylistLoad::Preview
+                        && !replaces_stale_snapshot
                         && !detail.complete
                         && existing
                             .next_offset
@@ -116,6 +128,11 @@ impl AppState {
                     .cloned()
                     .map(|data| self.decorate_entry(data))
                     .collect();
+                // More 的旧快照不能推进起点，否则同一请求的有效结果会被判为晚到页。
+                let next_offset = match load {
+                    PlaylistLoad::More { offset } if !*fresh => Some(*offset),
+                    _ => detail.next_offset,
+                };
                 self.models.library.tracks_generation =
                     self.models.library.tracks_generation.next();
                 self.models.library.tracks.insert(
@@ -124,7 +141,8 @@ impl AppState {
                         revision: self.models.library.tracks_generation,
                         entries: decorated,
                         complete: detail.complete,
-                        next_offset: detail.next_offset,
+                        fresh: *fresh,
+                        next_offset,
                     },
                 );
                 let position = selected_index.and_then(|index| {
@@ -137,10 +155,8 @@ impl AppState {
                 }
                 self.apply_pending_restore(&CollectionId::Playlist(id.clone()));
                 // 搜索页保留的歌单帧按 ID 更新，切 source / kind 后也能收到曲目。
-                if detail.complete {
-                    for results in self.ui.channel_search.retained_results_mut() {
-                        results.fill_playlist_entries(id, &playlist.entries);
-                    }
+                for results in self.ui.channel_search.retained_results_mut() {
+                    results.fill_playlist_entries(id, &playlist.entries, detail.complete, *fresh);
                 }
             }
             TaskEvent::PlaylistDetailFailed { id, load } => {
@@ -195,7 +211,17 @@ impl AppState {
             TaskEvent::ArtistAlbumsPageFailed { id, page } => {
                 self.apply_artist_albums_page_failed(id, *page);
             }
-            TaskEvent::AlbumDetailFetched { id, album } => {
+            TaskEvent::AlbumDetailFetched { id, album, fresh } => {
+                if !*fresh
+                    && self
+                        .models
+                        .library
+                        .album_tracks
+                        .get(id)
+                        .is_some_and(|tracks| tracks.fresh)
+                {
+                    return;
+                }
                 update.record(self);
                 let entries = album
                     .tracks
@@ -211,10 +237,13 @@ impl AppState {
                         revision: self.models.library.tracks_generation,
                         entries,
                         complete: true,
+                        fresh: *fresh,
                         next_offset: None,
                     },
                 );
-                self.models.library.albums_requested.remove(id);
+                if *fresh {
+                    self.models.library.albums_requested.remove(id);
+                }
                 if let Some(listed) = self
                     .models
                     .library
@@ -226,7 +255,7 @@ impl AppState {
                 }
                 self.ui.browse.invalidate_expansions();
                 self.apply_pending_restore(&CollectionId::Album(id.clone()));
-                self.apply_album_detail(id, album);
+                self.apply_album_detail(id, album, *fresh);
             }
             TaskEvent::AlbumDetailFailed { id } => {
                 self.models

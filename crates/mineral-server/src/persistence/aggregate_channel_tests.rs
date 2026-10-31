@@ -41,7 +41,7 @@ async fn my_playlists_is_single_synthetic() -> color_eyre::Result<()> {
         .try_next()
         .await?
         .ok_or_else(|| eyre!("expected Favorites list snapshot"))?
-        .into_items();
+        .into_value();
     assert_eq!(lists.len(), 1);
     let p = lists
         .first()
@@ -65,7 +65,10 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
             mineral_channel_core::PlaylistLoad::Complete,
             CachePolicy::UseCache,
         )
+        .try_next()
         .await?
+        .ok_or_else(|| eyre!("expected Favorites detail snapshot"))?
+        .into_value()
         .playlist;
     assert_eq!(p.track_count, 2);
     assert_eq!(p.entries.len(), 2, "detail 带全曲目,与 track_count 同口径");
@@ -102,6 +105,7 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
                 mineral_channel_core::PlaylistLoad::Complete,
                 CachePolicy::UseCache
             )
+            .try_next()
             .await,
             Err(Error::NotFound)
         ),
@@ -120,7 +124,10 @@ async fn disabled_store_yields_empty_favorites() -> color_eyre::Result<()> {
             mineral_channel_core::PlaylistLoad::Complete,
             CachePolicy::UseCache,
         )
+        .try_next()
         .await?
+        .ok_or_else(|| eyre!("expected Favorites detail snapshot"))?
+        .into_value()
         .playlist;
     assert_eq!(p.track_count, 0);
     assert!(p.entries.is_empty());

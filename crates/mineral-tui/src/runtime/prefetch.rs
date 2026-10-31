@@ -182,7 +182,13 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
     }
     if state.ui.browse.view == View::Tracks {
         let Some(id) = selected else { return };
-        let load = if let Some(tracks) = state.models.library.tracks.get(&id) {
+        let load = if let Some(tracks) = state
+            .models
+            .library
+            .tracks
+            .get(&id)
+            .filter(|tracks| tracks.fresh)
+        {
             let Some(offset) = tracks.next_offset else {
                 return;
             };
@@ -678,6 +684,7 @@ mod tests {
         next_offset: Option<u64>,
     ) {
         state.apply(&TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: id.clone(),
             load,
             detail: Box::new(mineral_channel_core::PlaylistDetail {
@@ -1095,6 +1102,7 @@ mod tests {
         state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default(),
                 entries: views,
                 complete: true,
@@ -1207,7 +1215,7 @@ mod tests {
                         .name("playlist".to_owned())
                         .build(),
                 ));
-                frame.set_playlist_entries(PlaylistEntry::enumerate(songs));
+                frame.set_playlist_entries(PlaylistEntry::enumerate(songs), true, true);
             }
             SearchKind::Album | SearchKind::Song => {
                 let mut album = Album::builder()
@@ -1225,7 +1233,7 @@ mod tests {
                     EntityRef::Song(Box::new(song))
                 };
                 album.tracks = AlbumTrack::enumerate(songs);
-                frame.set_album_detail(Box::new(album));
+                frame.set_album_detail(Box::new(album), true);
             }
             SearchKind::Artist => {
                 let mut artist = Artist::builder()

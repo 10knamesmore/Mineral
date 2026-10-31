@@ -2,9 +2,10 @@
 
 use async_trait::async_trait;
 use mineral_channel_core::collection::fresh_collection;
+use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
-    ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, PlaylistDetail,
-    PlaylistLoad, Result,
+    ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream, MusicChannel,
+    PlaylistDetail, PlaylistLoad, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -55,19 +56,21 @@ impl MusicChannel for LocalLibrary {
         })
     }
 
-    async fn playlist_detail(
-        &self,
-        id: &PlaylistId,
+    fn playlist_detail<'a>(
+        &'a self,
+        id: &'a PlaylistId,
         _load: PlaylistLoad,
         cache: CachePolicy,
-    ) -> Result<PlaylistDetail> {
-        let catalog = self.read_catalog(cache).await?;
-        let playlist = catalog
-            .playlists
-            .iter()
-            .find(|playlist| &playlist.id == id)
-            .ok_or(Error::NotFound)?;
-        Ok(PlaylistDetail::complete(catalog.playlist(playlist, true)))
+    ) -> FetchStream<'a, PlaylistDetail> {
+        fresh_snapshot(async move {
+            let catalog = self.read_catalog(cache).await?;
+            let playlist = catalog
+                .playlists
+                .iter()
+                .find(|playlist| &playlist.id == id)
+                .ok_or(Error::NotFound)?;
+            Ok(PlaylistDetail::complete(catalog.playlist(playlist, true)))
+        })
     }
 
     async fn lyrics(&self, id: &SongId) -> Result<Lyrics> {

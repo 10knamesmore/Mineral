@@ -3,8 +3,10 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use async_stream::try_stream;
 use chrono::{DateTime, TimeDelta, Utc};
 use mineral_channel_core::store::{AlbumCacheEntry, NamespaceStore};
+use mineral_channel_core::{FetchSnapshot, FetchStream};
 use mineral_model::{Album, AlbumId, AlbumRef, AlbumTrack, CachePolicy, CollectionIndex};
 use rustc_hash::FxHasher;
 
@@ -34,34 +36,40 @@ impl AlbumLoader {
     }
 
     /// Library and catalog IDs own separate snapshots, preserving saved track subsets.
-    async fn load(
-        &self,
-        metadata: &MetadataClient,
-        id: &AlbumId,
+    fn load<'a>(
+        &'a self,
+        metadata: &'a MetadataClient,
+        id: &'a AlbumId,
         cache: CachePolicy,
-    ) -> Result<Album> {
-        if cache == CachePolicy::UseCache
-            && let Some(store) = &self.persist
-            && let Some(entry) = store.get_album_cache(id).await?
-            && entry.expired_at > Utc::now()
-        {
+    ) -> FetchStream<'a, Album> {
+        Box::pin(try_stream! {
+            let cached = match (cache, self.persist.as_deref()) {
+                (CachePolicy::UseCache, Some(store)) => store.get_album_cache(id).await?,
+                _ => None,
+            };
+            if let Some(entry) = cached {
+                mineral_log::debug!(target: "apple_music", album = %id,
+                    expired_at = %entry.expired_at, "album cache loaded");
+                if entry.expired_at > Utc::now() {
+                    yield FetchSnapshot::Fresh(entry.album);
+                    return;
+                }
+                yield FetchSnapshot::Cached(entry.album);
+            }
+            let album = fetch_album(metadata, id).await?;
+            let loaded_at = Utc::now();
+            let entry = AlbumCacheEntry {
+                album,
+                expired_at: loaded_at + self.lifetime(id, loaded_at)?,
+            };
+            if let Some(store) = &self.persist {
+                store.put_album_cache(&entry).await?;
+            }
             mineral_log::debug!(target: "apple_music", album = %id,
-                expired_at = %entry.expired_at, "album cache hit");
-            return Ok(entry.album);
-        }
-        let album = fetch_album(metadata, id).await?;
-        let loaded_at = Utc::now();
-        let entry = AlbumCacheEntry {
-            album,
-            expired_at: loaded_at + self.lifetime(id, loaded_at)?,
-        };
-        if let Some(store) = &self.persist {
-            store.put_album_cache(&entry).await?;
-        }
-        mineral_log::debug!(target: "apple_music", album = %id,
-            tracks = entry.album.tracks.len(), expired_at = %entry.expired_at,
-            "album detail loaded");
-        Ok(entry.album)
+                tracks = entry.album.tracks.len(), expired_at = %entry.expired_at,
+                "album detail loaded");
+            yield FetchSnapshot::Fresh(entry.album);
+        })
     }
 
     /// Spread expirations within ±ttl_jitter using the album identity and fetch time.
@@ -76,9 +84,13 @@ impl AlbumLoader {
 }
 
 impl MetadataClient {
-    /// Return a complete album snapshot, loading missing track pages on a cache miss.
-    pub(crate) async fn album_detail(&self, id: &AlbumId, cache: CachePolicy) -> Result<Album> {
-        self.albums.load(self, id, cache).await
+    /// Publish cached details first; expired snapshots are followed by a complete source refresh.
+    pub(crate) fn album_detail<'a>(
+        &'a self,
+        id: &'a AlbumId,
+        cache: CachePolicy,
+    ) -> FetchStream<'a, Album> {
+        self.albums.load(self, id, cache)
     }
 }
 

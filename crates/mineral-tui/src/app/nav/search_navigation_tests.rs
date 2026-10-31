@@ -49,6 +49,7 @@ fn long_playlists() -> color_eyre::Result<(App, Arc<TestClient>)> {
     app.state.models.library.tracks.insert(
         id,
         CollectionTracks {
+            fresh: true,
             revision: Revision::default(),
             entries: entry_views(
                 (0..30)
@@ -182,6 +183,7 @@ fn clearing_track_filter_preserves_exact_occurrence() -> color_eyre::Result<()> 
     app.state.models.library.tracks.insert(
         id,
         CollectionTracks {
+            fresh: true,
             revision: app.state.models.library.tracks_generation.next(),
             entries: entry_views(entries),
             complete: true,
@@ -272,6 +274,7 @@ fn deep_search_updates_keep_selection_during_navigation() -> color_eyre::Result<
         app.state.models.library.tracks.insert(
             target.clone(),
             CollectionTracks {
+                fresh: true,
                 revision: app.state.models.library.tracks_generation.next(),
                 entries: entry_views(vec![with_name(song("spaced"), "a-b-c")]),
                 complete: true,
@@ -297,6 +300,7 @@ fn deep_search_updates_keep_selection_during_navigation() -> color_eyre::Result<
         frame(&app)?;
         let new_match = PlaylistId::new(SourceKind::NETEASE, "p00");
         app.state.apply(&TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: new_match.clone(),
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(

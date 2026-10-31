@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mineral_channel_core::collection::{fresh_collection, playlists_with_cache};
+use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, Page,
-    PageResult, Result,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
+    MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -210,11 +211,13 @@ impl MusicChannel for BilibiliChannel {
         Ok(out)
     }
 
-    async fn album_detail(&self, id: &AlbumId, _cache: CachePolicy) -> Result<Album> {
-        let info = api::view::video_info(&self.transport, id.as_str())
-            .await
-            .map_err(map_err)?;
-        convert::view_to_album(info).map_err(map_err)
+    fn album_detail<'a>(&'a self, id: &'a AlbumId, _cache: CachePolicy) -> FetchStream<'a, Album> {
+        fresh_snapshot(async move {
+            let info = api::view::video_info(&self.transport, id.as_str())
+                .await
+                .map_err(map_err)?;
+            convert::view_to_album(info).map_err(map_err)
+        })
     }
 
     async fn artist_detail(&self, id: &ArtistId) -> Result<Artist> {
@@ -240,60 +243,62 @@ impl MusicChannel for BilibiliChannel {
         convert::arc_videos_to_albums(result, page).map_err(map_err)
     }
 
-    async fn playlist_detail(
-        &self,
-        id: &PlaylistId,
-        _load: mineral_channel_core::PlaylistLoad,
+    fn playlist_detail<'a>(
+        &'a self,
+        id: &'a PlaylistId,
+        _load: PlaylistLoad,
         _cache: CachePolicy,
-    ) -> Result<mineral_channel_core::PlaylistDetail> {
-        // 自身内容业务码可降级为 unavailable 单行；解析、无效响应及全局故障
-        // 必须中止整夹，避免将系统性故障伪装成一批失效视频。
-        let fid = id.as_str();
-        let list = api::fav::all_resources(&self.transport, fid)
-            .await
-            .map_err(map_err)?;
-        let mut songs = Vec::<Song>::new();
-        for media in list.medias.unwrap_or_default() {
-            let Some(plan) = convert::plan_fav_entry(media).map_err(map_err)? else {
-                continue;
-            };
-            match plan {
-                convert::FavEntryPlan::Single(song) => songs.push(song),
-                convert::FavEntryPlan::Expand { bvid, fallback } => {
-                    match api::view::video_info(&self.transport, &bvid).await {
-                        Ok(info) => songs.extend(
-                            convert::view_to_album(info)
-                                .map_err(map_err)?
-                                .tracks
-                                .into_iter()
-                                .map(|track| track.song),
-                        ),
-                        Err(e) => {
-                            let err = map_err(e);
-                            if expansion_should_abort(&err) {
-                                return Err(err);
+    ) -> FetchStream<'a, PlaylistDetail> {
+        fresh_snapshot(async move {
+            // 自身内容业务码可降级为 unavailable 单行；解析、无效响应及全局故障
+            // 必须中止整夹，避免将系统性故障伪装成一批失效视频。
+            let fid = id.as_str();
+            let list = api::fav::all_resources(&self.transport, fid)
+                .await
+                .map_err(map_err)?;
+            let mut songs = Vec::<Song>::new();
+            for media in list.medias.unwrap_or_default() {
+                let Some(plan) = convert::plan_fav_entry(media).map_err(map_err)? else {
+                    continue;
+                };
+                match plan {
+                    convert::FavEntryPlan::Single(song) => songs.push(song),
+                    convert::FavEntryPlan::Expand { bvid, fallback } => {
+                        match api::view::video_info(&self.transport, &bvid).await {
+                            Ok(info) => songs.extend(
+                                convert::view_to_album(info)
+                                    .map_err(map_err)?
+                                    .tracks
+                                    .into_iter()
+                                    .map(|track| track.song),
+                            ),
+                            Err(e) => {
+                                let err = map_err(e);
+                                if expansion_should_abort(&err) {
+                                    return Err(err);
+                                }
+                                mineral_log::warn!(
+                                    target: "bilibili",
+                                    bvid,
+                                    error = mineral_log::chain(&err),
+                                    "多 P 收藏条目返回内容业务错误,降级为单行"
+                                );
+                                songs.push(fallback);
                             }
-                            mineral_log::warn!(
-                                target: "bilibili",
-                                bvid,
-                                error = mineral_log::chain(&err),
-                                "多 P 收藏条目返回内容业务错误,降级为单行"
-                            );
-                            songs.push(fallback);
                         }
                     }
                 }
             }
-        }
-        let playlist = match list.info {
-            Some(info) => convert::fav_list_to_playlist(fid, info, songs),
-            None => Playlist::builder()
-                .id(id.clone())
-                .name(fid.to_owned())
-                .entries(mineral_model::PlaylistEntry::enumerate(songs))
-                .build(),
-        };
-        Ok(mineral_channel_core::PlaylistDetail::complete(playlist))
+            let playlist = match list.info {
+                Some(info) => convert::fav_list_to_playlist(fid, info, songs),
+                None => Playlist::builder()
+                    .id(id.clone())
+                    .name(fid.to_owned())
+                    .entries(mineral_model::PlaylistEntry::enumerate(songs))
+                    .build(),
+            };
+            Ok(PlaylistDetail::complete(playlist))
+        })
     }
 
     fn my_playlists(&self, cache: CachePolicy) -> CollectionStream<'_, Playlist> {

@@ -1,5 +1,7 @@
 //! Song submission, deduplication, and playlist snapshot expansion.
 
+use mineral_channel_core::fetch::finish_fetch;
+use mineral_channel_core::{Error as ChannelError, PlaylistLoad};
 use mineral_model::{CachePolicy, Song};
 use mineral_protocol::{
     DownloadId, DownloadOrigin, DownloadStatus, DownloadTarget, PlaylistRef, SongDownloadView,
@@ -59,14 +61,14 @@ impl DownloadManager {
             .find(|channel| channel.source() == id.namespace())
             .cloned();
         let result = match channel {
-            Some(channel) => channel
-                .playlist_detail(
-                    &id,
-                    mineral_channel_core::PlaylistLoad::Complete,
-                    CachePolicy::UseCache,
-                )
-                .await
-                .map_err(ExpansionError::from),
+            Some(channel) => finish_fetch(channel.playlist_detail(
+                &id,
+                PlaylistLoad::Complete,
+                CachePolicy::UseCache,
+            ))
+            .await
+            .and_then(|result| result.ok_or(ChannelError::NotFound))
+            .map_err(ExpansionError::from),
             None => Err(ExpansionError::NoChannel),
         };
         match result {

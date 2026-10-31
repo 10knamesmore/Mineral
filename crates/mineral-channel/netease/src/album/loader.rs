@@ -1,8 +1,11 @@
-//! 在缓存缺失或到期时获取详情；缓存命中不占用远端请求额度。
+//! 有效缓存直接返回；过期缓存先展示，再从远端更新。
 
 use std::hash::{Hash, Hasher};
 
+use async_stream::try_stream;
 use chrono::{DateTime, TimeDelta, Utc};
+use futures_util::stream::BoxStream;
+use mineral_channel_core::FetchSnapshot;
 use mineral_channel_core::store::{AlbumCacheEntry, NamespaceStore};
 use mineral_model::{Album, AlbumId, CachePolicy};
 use rustc_hash::FxHasher;
@@ -31,57 +34,60 @@ impl AlbumLoader {
         }
     }
 
-    /// 缓存读写失败记录日志，仍返回成功取得的远端详情；远端失败不续期。
-    pub(crate) async fn load(
-        &self,
-        transport: &Transport,
-        policy: &RequestPolicy,
-        persist: Option<&dyn NamespaceStore>,
-        id: &AlbumId,
+    /// UseCache 的存储错误记日志后继续；Reload 写入失败透传，远端失败不续期。
+    pub(crate) fn load<'a>(
+        &'a self,
+        transport: &'a Transport,
+        policy: &'a RequestPolicy,
+        persist: Option<&'a dyn NamespaceStore>,
+        id: &'a AlbumId,
         cache: CachePolicy,
-    ) -> Result<Album> {
-        if cache == CachePolicy::UseCache
-            && let Some(store) = persist
-        {
-            match store.get_album_cache(id).await {
-                Ok(Some(entry)) if entry.expired_at > Utc::now() => {
-                    mineral_log::debug!(target: "channel_netease", album = %id,
-                        expired_at = %entry.expired_at, "album cache hit");
-                    return Ok(entry.album);
-                }
-                Ok(Some(entry)) => {
-                    mineral_log::debug!(target: "channel_netease", album = %id,
-                        expired_at = %entry.expired_at, "album cache expired");
-                }
-                Ok(None) => {
-                    mineral_log::debug!(target: "channel_netease", album = %id, "album cache miss");
-                }
-                Err(error) => {
-                    mineral_log::warn!(target: "channel_netease", album = %id,
-                        error = mineral_log::chain(&error), "album cache read failed");
+    ) -> BoxStream<'a, Result<FetchSnapshot<Album>>> {
+        Box::pin(try_stream! {
+            if let (CachePolicy::UseCache, Some(store)) = (cache, persist) {
+                match store.get_album_cache(id).await {
+                    Ok(Some(entry)) if entry.expired_at > Utc::now() => {
+                        mineral_log::debug!(target: "channel_netease", album = %id,
+                            expired_at = %entry.expired_at, "album cache hit");
+                        yield FetchSnapshot::Fresh(entry.album);
+                        return;
+                    }
+                    Ok(Some(entry)) => {
+                        mineral_log::debug!(target: "channel_netease", album = %id,
+                            expired_at = %entry.expired_at, "album cache expired");
+                        yield FetchSnapshot::Cached(entry.album);
+                    }
+                    Ok(None) => {
+                        mineral_log::debug!(target: "channel_netease", album = %id, "album cache miss");
+                    }
+                    Err(error) => {
+                        mineral_log::warn!(target: "channel_netease", album = %id,
+                            error = mineral_log::chain(&error), "album cache read failed");
+                    }
                 }
             }
-        }
-        let dto = api::album::detail(transport, policy, id).await?;
-        let loaded_at = Utc::now();
-        let lifetime = self.lifetime(id, loaded_at);
-        let entry = AlbumCacheEntry {
-            album: convert::album_detail_to_model(dto)?,
-            expired_at: loaded_at + lifetime,
-        };
-        if let Some(store) = persist
-            && let Err(error) = store.put_album_cache(&entry).await
-        {
-            if cache == CachePolicy::Reload {
-                return Err(error.into());
+            let dto = api::album::detail(transport, policy, id).await?;
+            let loaded_at = Utc::now();
+            let lifetime = self.lifetime(id, loaded_at);
+            let entry = AlbumCacheEntry {
+                album: convert::album_detail_to_model(dto)?,
+                expired_at: loaded_at + lifetime,
+            };
+            if let Some(store) = persist {
+                match store.put_album_cache(&entry).await {
+                    Ok(()) => {}
+                    Err(error) if cache == CachePolicy::Reload => Err(error)?,
+                    Err(error) => {
+                        mineral_log::warn!(target: "channel_netease", album = %id,
+                            error = mineral_log::chain(&error), "album cache write failed");
+                    }
+                }
             }
-            mineral_log::warn!(target: "channel_netease", album = %id,
-                error = mineral_log::chain(&error), "album cache write failed");
-        }
-        mineral_log::debug!(target: "channel_netease", album = %id,
-            tracks = entry.album.tracks.len(), expired_at = %entry.expired_at,
-            lifetime_ms = lifetime.num_milliseconds(), "album detail loaded");
-        Ok(entry.album)
+            mineral_log::debug!(target: "channel_netease", album = %id,
+                tracks = entry.album.tracks.len(), expired_at = %entry.expired_at,
+                lifetime_ms = lifetime.num_milliseconds(), "album detail loaded");
+            yield FetchSnapshot::Fresh(entry.album);
+        })
     }
 
     /// 抓取完成时计算一次偏移，生成随快照保存的过期时间。

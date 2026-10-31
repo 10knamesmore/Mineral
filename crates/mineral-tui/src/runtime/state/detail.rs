@@ -219,6 +219,9 @@ pub struct DetailFrame {
 
     /// 这一帧是否已派过 detail 拉取（防同帧重复派；新帧 / 移光标后复位为可再派）。
     requested: bool,
+
+    /// 当前集合详情已确认有效且内容完整；展示旧快照或首批曲目仍需加载完整详情。
+    collection_ready: bool,
 }
 
 impl DetailFrame {
@@ -294,6 +297,7 @@ impl DetailFrame {
             title: crate::runtime::marquee::Marquee::default(),
             desc_scroll: 0,
             requested: false,
+            collection_ready: false,
         }
     }
 
@@ -381,13 +385,13 @@ impl DetailFrame {
         }
     }
 
-    /// 未派过请求且数据未齐时需要预取；艺人详情与专辑列表必须分别到达。
+    /// 未派过请求且详情尚未确认有效时需要预取；艺人详情与专辑列表必须分别到达。
     /// 已请求的帧不逐 tick 重发，避免等待回包时重复提交。
     pub fn needs_fetch(&self) -> bool {
         let incomplete = match &self.data {
             None => true,
             Some(DetailData::Artist { detail, albums }) => detail.is_none() || albums.is_none(),
-            Some(DetailData::Album(_) | DetailData::PlaylistEntries(_)) => false,
+            Some(DetailData::Album(_) | DetailData::PlaylistEntries(_)) => !self.collection_ready,
         };
         !self.requested && incomplete
     }
@@ -601,14 +605,21 @@ impl DetailFrame {
     }
 
     /// 落 PlaylistEntry relation 数据（歌单帧）。
-    pub fn set_playlist_entries(&mut self, entries: Vec<PlaylistEntry>) {
+    pub fn set_playlist_entries(
+        &mut self,
+        entries: Vec<PlaylistEntry>,
+        complete: bool,
+        fresh: bool,
+    ) {
         self.data = Some(DetailData::PlaylistEntries(entries));
+        self.collection_ready = complete && fresh;
     }
 
-    /// 落专辑完整详情（album 帧 / song 帧）。song 帧首次到货时定位到这首歌在专辑中的位置；
-    /// 后续回包更新数据并保留用户的光标与视口。
-    pub fn set_album_detail(&mut self, album: Box<Album>) {
-        if self.data.is_none()
+    /// 落专辑详情（album 帧 / song 帧）。song 帧在首份有效结果中定位目标曲；
+    /// 旧快照只更新展示，后续有效结果保留用户的光标与视口。
+    pub fn set_album_detail(&mut self, album: Box<Album>, fresh: bool) {
+        if fresh
+            && !self.collection_ready
             && let EntityRef::Song(s) = &self.entity
             && let Some(idx) = album.tracks.iter().position(|track| track.song.id == s.id)
         {
@@ -616,6 +627,7 @@ impl DetailFrame {
             self.list.place(idx, 0);
         }
         self.data = Some(DetailData::Album(album));
+        self.collection_ready = fresh;
     }
 
     /// 落 artist 详情（热门曲那一路）；与 `albums` 那一路合并，先到的不被覆盖。
@@ -724,6 +736,7 @@ impl DetailStack {
             {
                 frame.data = None;
                 frame.requested = false;
+                frame.collection_ready = false;
                 match &mut frame.entity {
                     EntityRef::Album(album) => album.tracks.clear(),
                     EntityRef::Playlist(playlist) => playlist.entries.clear(),
@@ -1163,14 +1176,17 @@ mod tests {
         assert_eq!(before.track_count, Some(13));
 
         // fetch 到货:整份用详情(简介齐)。
-        frame.set_album_detail(Box::new(
-            Album::builder()
-                .id(AlbumId::new(SourceKind::NETEASE, "al"))
-                .name("CF".to_owned())
-                .track_count(Some(13))
-                .description("emo album".to_owned())
-                .build(),
-        ));
+        frame.set_album_detail(
+            Box::new(
+                Album::builder()
+                    .id(AlbumId::new(SourceKind::NETEASE, "al"))
+                    .name("CF".to_owned())
+                    .track_count(Some(13))
+                    .description("emo album".to_owned())
+                    .build(),
+            ),
+            true,
+        );
         let after = frame
             .album_meta()
             .ok_or_else(|| color_eyre::eyre::eyre!("album 帧应有 meta"))?;
@@ -1222,7 +1238,7 @@ mod tests {
     fn row_entity_album_track_follows_cursor() -> color_eyre::Result<()> {
         let mut frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
         assert!(frame.row_entity().is_none(), "数据未到 → None");
-        frame.set_album_detail(Box::new(album_with_tracks("al", 3)));
+        frame.set_album_detail(Box::new(album_with_tracks("al", 3)), true);
         frame.list_mut().set_sel(2);
         let Some(EntityRef::Song(s)) = frame.row_entity() else {
             color_eyre::eyre::bail!("专辑帧曲目行应取到 Song");
@@ -1237,10 +1253,11 @@ mod tests {
     #[test]
     fn row_entity_playlist_track() -> color_eyre::Result<()> {
         let mut frame = super::DetailFrame::new(EntityRef::Playlist(Box::new(playlist("pl"))));
-        frame.set_playlist_entries(mineral_model::PlaylistEntry::enumerate(vec![
-            song("s0", None),
-            song("s1", None),
-        ]));
+        frame.set_playlist_entries(
+            mineral_model::PlaylistEntry::enumerate(vec![song("s0", None), song("s1", None)]),
+            true,
+            true,
+        );
         frame.list_mut().set_sel(1);
         let Some(EntityRef::Song(s)) = frame.row_entity() else {
             color_eyre::eyre::bail!("歌单帧曲目行应取到 Song");
@@ -1284,7 +1301,7 @@ mod tests {
         use mineral_model::{Artist, ArtistId};
         let mut album_frame = super::DetailFrame::new(EntityRef::Album(Box::new(album("al"))));
         assert!(album_frame.song_list().is_empty(), "未到货 → 空");
-        album_frame.set_album_detail(Box::new(album_with_tracks("al", 4)));
+        album_frame.set_album_detail(Box::new(album_with_tracks("al", 4)), true);
         assert_eq!(album_frame.song_list().len(), 4, "专辑帧 = 全曲");
 
         let detail = Artist::builder()

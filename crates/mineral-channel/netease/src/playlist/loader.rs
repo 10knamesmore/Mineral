@@ -1,8 +1,10 @@
 //! 网易歌单按需加载：浏览逐批检查身份，整张操作分批补齐所有缺失详情。
 
+use async_stream::try_stream;
+use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, stream};
 use mineral_channel_core::store::{CachedPlaylistEntry, NamespaceStore};
-use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
+use mineral_channel_core::{FetchSnapshot, PlaylistDetail, PlaylistLoad};
 use mineral_model::{CachePolicy, PlaylistId, Song, SongId, SourceKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -33,28 +35,48 @@ impl PlaylistLoader {
         }
     }
 
-    /// 等待该歌单此前请求收束，再从已有缓存补齐本次意图所需的数据。
-    pub(crate) async fn load(
-        &self,
-        transport: &Transport,
-        persist: Option<&dyn NamespaceStore>,
-        id: &PlaylistId,
+    /// 先展示已有曲目，再串行检查远端版本并补齐本次意图所需的数据。
+    pub(crate) fn load<'a>(
+        &'a self,
+        transport: &'a Transport,
+        persist: Option<&'a dyn NamespaceStore>,
+        id: &'a PlaylistId,
         intent: PlaylistLoad,
         cache: CachePolicy,
-    ) -> Result<PlaylistDetail> {
-        let lock = {
-            let mut active = self.active.lock().await;
-            active.retain(|_, entry| entry.strong_count() > 0);
-            if let Some(lock) = active.get(id).and_then(Weak::upgrade) {
-                lock
-            } else {
-                let lock = Arc::new(Mutex::new(()));
-                active.insert(id.clone(), Arc::downgrade(&lock));
-                lock
+    ) -> BoxStream<'a, Result<FetchSnapshot<PlaylistDetail>>> {
+        Box::pin(try_stream! {
+            let cached = match (cache, persist, intent) {
+                (CachePolicy::UseCache, Some(store), PlaylistLoad::Preview | PlaylistLoad::Complete) => {
+                    cache::try_load_stale(store, id).await
+                }
+                _ => None,
+            };
+            if let Some(mut playlist) = cached {
+                if intent == PlaylistLoad::Preview {
+                    playlist.entries.retain(|entry| {
+                        entry.index.get() < self.config.batch_size().get() as u64
+                    });
+                }
+                yield FetchSnapshot::Cached(PlaylistDetail {
+                    playlist,
+                    complete: false,
+                    next_offset: None,
+                });
             }
-        };
-        let _serial = lock.lock().await;
-        fetch(transport, persist, &self.config, id, intent, cache).await
+            let lock = {
+                let mut active = self.active.lock().await;
+                active.retain(|_, entry| entry.strong_count() > 0);
+                if let Some(lock) = active.get(id).and_then(Weak::upgrade) {
+                    lock
+                } else {
+                    let lock = Arc::new(Mutex::new(()));
+                    active.insert(id.clone(), Arc::downgrade(&lock));
+                    lock
+                }
+            };
+            let _serial = lock.lock().await;
+            yield FetchSnapshot::Fresh(fetch(transport, persist, &self.config, id, intent, cache).await?);
+        })
     }
 }
 
@@ -67,30 +89,7 @@ async fn fetch(
     intent: PlaylistLoad,
     policy: CachePolicy,
 ) -> Result<PlaylistDetail> {
-    let meta = match api::playlist::detail(transport, id, 0).await {
-        Ok(result) => result.playlist,
-        Err(error) => {
-            if policy == CachePolicy::UseCache
-                && intent == PlaylistLoad::Preview
-                && let Some(store) = persist
-                && let Some(mut playlist) = cache::try_load_stale(store, id).await
-            {
-                mineral_log::warn!(target: "netease", playlist = %id, error = mineral_log::chain(&error),
-                    "歌单预览使用旧缓存，完整性未确认");
-                playlist.entries = playlist
-                    .entries
-                    .into_iter()
-                    .take_while(|entry| entry.index.get() < config.batch_size().get() as u64)
-                    .collect();
-                return Ok(PlaylistDetail {
-                    playlist,
-                    complete: false,
-                    next_offset: None,
-                });
-            }
-            return Err(error);
-        }
-    };
+    let meta = api::playlist::detail(transport, id, 0).await?.playlist;
     let order = meta
         .track_ids
         .iter()

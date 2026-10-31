@@ -369,6 +369,7 @@ mod tests {
         s.models.library.tracks.insert(
             id.clone(),
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision,
                 entries: views,
                 complete: true,

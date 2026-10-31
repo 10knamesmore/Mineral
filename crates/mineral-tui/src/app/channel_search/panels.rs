@@ -469,6 +469,7 @@ mod tests {
         let songs = crate::test_support::endserenading(4);
         let want = songs.get(2).map(|s| s.id.clone());
         app.state.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: AlbumId::new(SourceKind::NETEASE, "al1"),
             album: Box::new(
                 mineral_model::Album::builder()
@@ -529,6 +530,7 @@ mod tests {
             has_more: None,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: AlbumId::new(SourceKind::NETEASE, "al1"),
             album: Box::new(
                 Album::builder()
@@ -613,6 +615,7 @@ mod tests {
         let songs = crate::test_support::endserenading(3);
         let want = songs.get(1).map(|s| s.id.clone());
         app.state.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: AlbumId::new(SourceKind::NETEASE, "al1"),
             album: Box::new(
                 Album::builder()
@@ -675,6 +678,7 @@ mod tests {
             has_more: None,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: AlbumId::new(SourceKind::NETEASE, "al1"),
             album: Box::new(
                 mineral_model::Album::builder()
@@ -823,6 +827,7 @@ mod tests {
             has_more: None,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: AlbumId::new(SourceKind::NETEASE, "al1"),
             album: Box::new(
                 mineral_model::Album::builder()

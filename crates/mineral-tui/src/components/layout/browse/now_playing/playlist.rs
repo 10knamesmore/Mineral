@@ -138,6 +138,7 @@ mod tests {
         app.state.models.library.tracks.insert(
             pid,
             crate::runtime::state::CollectionTracks {
+                fresh: true,
                 revision: Revision::default(),
                 entries: entry_views(vec![entry]),
                 complete: true,

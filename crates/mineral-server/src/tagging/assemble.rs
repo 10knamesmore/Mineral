@@ -10,6 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use mineral_channel_core::fetch::finish_fetch;
 use mineral_channel_core::{Error as ChannelError, MusicChannel};
 use mineral_model::{CachePolicy, MediaUrl, Song};
 use parking_lot::Mutex;
@@ -97,11 +98,10 @@ async fn fetch_album(
     if let Some(hit) = cache.lock().get(&key) {
         return hit.clone();
     }
-    let result = match channel
-        .album_detail(&album_ref.id, CachePolicy::UseCache)
+    let result = match finish_fetch(channel.album_detail(&album_ref.id, CachePolicy::UseCache))
         .await
     {
-        Ok(album) => Some(AlbumTags {
+        Ok(Some(album)) => Some(AlbumTags {
             artists: album
                 .artists
                 .iter()
@@ -110,6 +110,7 @@ async fn fetch_album(
             year: publish_year(album.publish_time_ms).and_then(|y| u32::try_from(y).ok()),
             label: album.company.clone(),
         }),
+        Ok(None) => None,
         Err(e) => {
             mineral_log::warn!(target: "tagging", song_id = song.id.as_str(), error = mineral_log::chain(&e), "拉专辑详情失败,专辑字段缺省");
             None

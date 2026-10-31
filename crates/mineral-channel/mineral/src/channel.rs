@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mineral_channel_core::collection::fresh_collection;
+use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::LibraryStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, Page,
-    PageResult, Result,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
+    MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind};
@@ -120,28 +121,30 @@ impl MusicChannel for MineralChannel {
         })
     }
 
-    async fn playlist_detail(
-        &self,
-        id: &PlaylistId,
-        _load: mineral_channel_core::PlaylistLoad,
+    fn playlist_detail<'a>(
+        &'a self,
+        id: &'a PlaylistId,
+        _load: PlaylistLoad,
         _cache: CachePolicy,
-    ) -> Result<mineral_channel_core::PlaylistDetail> {
-        if id.namespace() != SourceKind::MINERAL {
-            return Err(Error::NotSupported);
-        }
-        if *id != favorites_playlist_id() {
-            return self
-                .library
-                .user_playlist(id)
+    ) -> FetchStream<'a, PlaylistDetail> {
+        fresh_snapshot(async move {
+            if id.namespace() != SourceKind::MINERAL {
+                return Err(Error::NotSupported);
+            }
+            if *id != favorites_playlist_id() {
+                return self
+                    .library
+                    .user_playlist(id)
+                    .await
+                    .map_err(|source| Error::Storage {
+                        source: Box::new(source),
+                    })?
+                    .map(PlaylistDetail::complete)
+                    .ok_or(Error::NotFound);
+            }
+            self.build_favorites(/*with_songs*/ true)
                 .await
-                .map_err(|source| Error::Storage {
-                    source: Box::new(source),
-                })?
-                .map(mineral_channel_core::PlaylistDetail::complete)
-                .ok_or(Error::NotFound);
-        }
-        self.build_favorites(/*with_songs*/ true)
-            .await
-            .map(mineral_channel_core::PlaylistDetail::complete)
+                .map(PlaylistDetail::complete)
+        })
     }
 }

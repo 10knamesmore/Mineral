@@ -8,10 +8,7 @@ use async_trait::async_trait;
 use mineral_channel_core::collection::fresh_collection;
 use mineral_channel_core::{ChannelCaps, CollectionStream, Error, MusicChannel, Page, PageResult};
 use mineral_model::CachePolicy;
-use mineral_model::{
-    Album, AlbumId, Artist, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId, Song, SongId,
-    SourceKind,
-};
+use mineral_model::{Album, Artist, Lyrics, PlaybackMediaInfo, Playlist, Song, SongId, SourceKind};
 use mineral_playback::{
     DirectMedia, MediaReader, OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRegistry,
     PlaybackRequest, PreparedPlayback,
@@ -211,23 +208,6 @@ impl MusicChannel for RecordingChannel {
         _ids: &[SongId],
         _cache: CachePolicy,
     ) -> mineral_channel_core::Result<Vec<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn album_detail(
-        &self,
-        _id: &AlbumId,
-        _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<Album> {
-        Err(Error::NotSupported)
-    }
-
-    async fn playlist_detail(
-        &self,
-        _id: &PlaylistId,
-        _load: mineral_channel_core::PlaylistLoad,
-        _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
 

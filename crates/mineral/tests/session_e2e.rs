@@ -608,7 +608,12 @@ async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
     wait_until("local playlist detail", || {
         for event in client.mirror().drain_events() {
             if let mineral_protocol::Event::Task(event) = event
-                && let mineral_task::TaskEvent::PlaylistDetailFetched { id, detail, .. } = *event
+                && let mineral_task::TaskEvent::PlaylistDetailFetched {
+                    id,
+                    detail,
+                    fresh: true,
+                    ..
+                } = *event
                 && id == playlist_id
             {
                 selected = detail
@@ -682,7 +687,12 @@ async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
     wait_until("reconnect reads the same local catalog", || {
         for event in other.mirror().drain_events() {
             if let mineral_protocol::Event::Task(event) = event
-                && let mineral_task::TaskEvent::PlaylistDetailFetched { id, detail, .. } = *event
+                && let mineral_task::TaskEvent::PlaylistDetailFetched {
+                    id,
+                    detail,
+                    fresh: true,
+                    ..
+                } = *event
                 && id == playlist_id
             {
                 reconnected_songs = Some(detail.playlist.entries);

@@ -3,7 +3,7 @@
 //! 实现 `App` 的播放控制、love 与下载；入口由 `App::dispatch` 调用。
 
 use mineral_model::{PlaylistEntry, RefreshScope, Song};
-use mineral_protocol::DownloadTarget;
+use mineral_protocol::{DownloadTarget, QueueContextWire};
 use mineral_task::{Priority, TaskEvent};
 
 use crate::app::App;
@@ -248,7 +248,7 @@ impl App {
         match container {
             ContainerRef::Playlist(p) => {
                 let views = self.state.models.library.tracks.get(&p.id)?;
-                if !views.complete {
+                if !self.state.models.library.playlist_complete(&p.id) {
                     return None;
                 }
                 Some(views.iter().map(|entry| entry.data.song.clone()).collect())
@@ -259,6 +259,7 @@ impl App {
                 .library
                 .album_tracks
                 .get(&album.id)
+                .filter(|tracks| tracks.fresh)
                 .map(|tracks| tracks.iter().map(|entry| entry.data.song.clone()).collect()),
             ContainerRef::Artist(_) => None,
         }
@@ -348,7 +349,6 @@ impl App {
     /// **事件载荷**(非 detail 帧——帧可能已切走)取曲目入队、清意图。artist 只认热门曲那路
     /// (`ArtistDetailFetched`),`ArtistAlbumsFetched` 是专辑壳、与播放无关,不响应。
     pub(crate) fn fulfill_pending_container(&mut self, ev: &TaskEvent) {
-        use mineral_protocol::QueueContextWire;
         if let TaskEvent::PlaylistDetailFailed {
             id,
             load: mineral_channel_core::PlaylistLoad::Complete,
@@ -373,7 +373,12 @@ impl App {
             }
             return;
         }
-        if let TaskEvent::PlaylistDetailFetched { id, detail, .. } = ev
+        if let TaskEvent::PlaylistDetailFetched {
+            id,
+            detail,
+            fresh: true,
+            ..
+        } = ev
             && detail.complete
             && self
                 .pending_playlist_play
@@ -400,7 +405,11 @@ impl App {
         }
         // 语境由到货事件的实体 id 直接定出(专辑 / 歌单 / artist),与登记意图时的容器同一身份。
         let (key, songs, context) = match ev {
-            TaskEvent::AlbumDetailFetched { id, album } => (
+            TaskEvent::AlbumDetailFetched {
+                id,
+                album,
+                fresh: true,
+            } => (
                 DetailFetch::AlbumDetail(id.clone()),
                 album
                     .tracks
@@ -412,7 +421,12 @@ impl App {
                     name: Some(album.name.clone()),
                 },
             ),
-            TaskEvent::PlaylistDetailFetched { id, detail, .. } if detail.complete => (
+            TaskEvent::PlaylistDetailFetched {
+                id,
+                detail,
+                fresh: true,
+                ..
+            } if detail.complete => (
                 DetailFetch::PlaylistDetail(id.clone()),
                 detail
                     .playlist
@@ -466,7 +480,6 @@ fn container_fetch(container: &ContainerRef) -> DetailFetch {
 /// 曲目已加载时立即入队走它;未加载走拉取,到货后由 [`App::fulfill_pending_container`] 按
 /// 事件 id 重新定出同一语境。
 fn container_context(container: &ContainerRef) -> mineral_protocol::QueueContextWire {
-    use mineral_protocol::QueueContextWire;
     match container {
         ContainerRef::Album(a) => QueueContextWire::Album {
             id: a.id.clone(),
@@ -514,6 +527,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let preview = TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: id.clone(),
             load: PlaylistLoad::Preview,
             detail: Box::new(PlaylistDetail {
@@ -547,6 +561,7 @@ mod tests {
             "首批不得入队"
         );
         let full = TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: id.clone(),
             load: PlaylistLoad::Complete,
             detail: Box::new(PlaylistDetail::complete(
@@ -615,6 +630,7 @@ mod tests {
             "已挂 pending 意图"
         );
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: album.id.clone(),
             album: Box::new(album.clone()),
         });
@@ -643,6 +659,7 @@ mod tests {
         app.pending_container
             .insert(DetailFetch::AlbumDetail(album.id.clone()), PlayMode::Append);
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: album.id.clone(),
             album: Box::new(album),
         });
@@ -731,6 +748,7 @@ mod tests {
             .insert(key1.clone(), PlayMode::Replace);
         let al2 = album_with_songs("al2", 2);
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: al2.id.clone(),
             album: Box::new(al2),
         });
@@ -811,6 +829,7 @@ mod tests {
             Box::new(shell),
         ))));
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: album.id.clone(),
             album: Box::new(album.clone()),
         });
@@ -854,6 +873,7 @@ mod tests {
             PlayMode::InsertNext,
         );
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: album.id.clone(),
             album: Box::new(album.clone()),
         });
@@ -897,6 +917,7 @@ mod tests {
             PlayMode::InsertNext,
         );
         app.fulfill_pending_container(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: album.id.clone(),
             album: Box::new(album),
         });

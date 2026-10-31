@@ -1435,6 +1435,7 @@ mod tests {
             has_more: None,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
+            fresh: true,
             id: AlbumId::new(SourceKind::NETEASE, "al1"),
             album: Box::new(
                 mineral_model::Album::builder()
@@ -1707,6 +1708,7 @@ mod tests {
             let mut detailed_album = album;
             detailed_album.tracks = mineral_model::AlbumTrack::enumerate(songs);
             app.state.apply(&TaskEvent::AlbumDetailFetched {
+                fresh: true,
                 id: detailed_album.id.clone(),
                 album: Box::new(detailed_album),
             });
@@ -1940,6 +1942,7 @@ mod tests {
             detailed_album.description = "line\n".repeat(40);
             detailed_album.tracks = mineral_model::AlbumTrack::enumerate(search_songs(3));
             app.state.apply(&TaskEvent::AlbumDetailFetched {
+                fresh: true,
                 id: detailed_album.id.clone(),
                 album: Box::new(detailed_album),
             });

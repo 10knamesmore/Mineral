@@ -4,14 +4,15 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use async_trait::async_trait;
+use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult,
-    Result as ChannelResult,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, FetchStream, MusicChannel, Page,
+    PageResult, Result as ChannelResult,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, AudioFormat, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId,
-    Song, SongId, SourceKind,
+    Album, AlbumId, Artist, ArtistId, AudioFormat, Lyrics, PlaybackMediaInfo, Playlist, Song,
+    SongId, SourceKind,
 };
 use mineral_playback::{
     DirectMedia, DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
@@ -54,19 +55,6 @@ impl MusicChannel for UrlChannel {
     }
 
     async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> ChannelResult<Vec<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> ChannelResult<Album> {
-        Err(Error::NotSupported)
-    }
-
-    async fn playlist_detail(
-        &self,
-        _id: &PlaylistId,
-        _load: mineral_channel_core::PlaylistLoad,
-        _cache: CachePolicy,
-    ) -> ChannelResult<mineral_channel_core::PlaylistDetail> {
         Err(Error::NotSupported)
     }
 
@@ -215,19 +203,12 @@ impl MusicChannel for CannedChannel {
             .collect())
     }
 
-    async fn album_detail(&self, _id: &AlbumId, _cache: CachePolicy) -> ChannelResult<Album> {
-        self.album_calls
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        self.album.clone().ok_or(Error::NotSupported)
-    }
-
-    async fn playlist_detail(
-        &self,
-        _id: &PlaylistId,
-        _load: mineral_channel_core::PlaylistLoad,
-        _cache: CachePolicy,
-    ) -> ChannelResult<mineral_channel_core::PlaylistDetail> {
-        Err(Error::NotSupported)
+    fn album_detail<'a>(&'a self, _id: &'a AlbumId, _cache: CachePolicy) -> FetchStream<'a, Album> {
+        fresh_snapshot(async {
+            self.album_calls
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.album.clone().ok_or(Error::NotSupported)
+        })
     }
 
     async fn lyrics(&self, _id: &SongId) -> ChannelResult<Lyrics> {

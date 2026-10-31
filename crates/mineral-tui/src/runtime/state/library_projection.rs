@@ -124,7 +124,7 @@ impl AppState {
         let Some(tracks) = pending.collection.tracks(&self.models.library) else {
             return;
         };
-        if !tracks.complete
+        if !(tracks.complete && tracks.fresh)
             && !tracks
                 .iter()
                 .any(|entry| entry.data.song.id == pending.pos.song_id)
@@ -463,6 +463,7 @@ mod tests {
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: pid,
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
@@ -517,6 +518,7 @@ mod tests {
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: pid,
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
@@ -572,6 +574,7 @@ mod tests {
                 .build(),
         );
         s.apply(&TaskEvent::PlaylistDetailFetched {
+            fresh: true,
             id: other,
             load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),

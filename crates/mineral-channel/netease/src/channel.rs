@@ -5,12 +5,13 @@
 //! 在其层,本文件只做编排与业务决策(如详情聚合多端点、歌单缓存)。
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use isahc::cookies::{Cookie, CookieJar};
 use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, Page,
-    PageResult, Result,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
+    MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -288,7 +289,7 @@ impl MusicChannel for NeteaseChannel {
             .map_err(map_err)
     }
 
-    async fn album_detail(&self, id: &AlbumId, cache: CachePolicy) -> Result<Album> {
+    fn album_detail<'a>(&'a self, id: &'a AlbumId, cache: CachePolicy) -> FetchStream<'a, Album> {
         self.album
             .load(
                 &self.transport,
@@ -297,21 +298,21 @@ impl MusicChannel for NeteaseChannel {
                 id,
                 cache,
             )
-            .await
-            .map_err(map_err)
+            .map(|result| result.map_err(map_err))
+            .boxed()
     }
 
     /// 预览或完整加载由歌单模块执行，远端请求失败映射为公共 channel 错误。
-    async fn playlist_detail(
-        &self,
-        id: &PlaylistId,
-        load: mineral_channel_core::PlaylistLoad,
+    fn playlist_detail<'a>(
+        &'a self,
+        id: &'a PlaylistId,
+        load: PlaylistLoad,
         cache: CachePolicy,
-    ) -> Result<mineral_channel_core::PlaylistDetail> {
+    ) -> FetchStream<'a, PlaylistDetail> {
         self.playlist
             .load(&self.transport, self.persist.as_deref(), id, load, cache)
-            .await
-            .map_err(map_err)
+            .map(|result| result.map_err(map_err))
+            .boxed()
     }
 
     async fn lyrics(&self, id: &SongId) -> Result<Lyrics> {
