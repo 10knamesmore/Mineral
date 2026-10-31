@@ -13,7 +13,8 @@ use qrcode::render::unicode;
 use crate::api::login::{login_qr_check, login_qr_get_key};
 use crate::api::user::account_uid;
 use crate::credential::{StoredNeteaseAuth, save};
-use crate::{Error, NeteaseChannel, NeteaseConfig};
+use crate::transport::Transport;
+use crate::{Error, NeteaseConfig};
 
 /// 网易云的根 URL,用于在 cookie jar 中按域名定位 MUSIC_U。
 const NETEASE_BASE_URL: &str = "https://music.163.com";
@@ -58,14 +59,14 @@ pub async fn run(cli: NeteaseCli, config: &NeteaseConfig) -> crate::Result<()> {
 
 /// `mineral channel netease login` 的主流程:取 unikey、终端渲染二维码、轮询状态、登录成功后写凭证。
 async fn run_login(config: &NeteaseConfig) -> crate::Result<()> {
-    let channel = NeteaseChannel::new(config, None)?;
-    let qr = login_qr_get_key(channel.transport()).await?;
+    let transport = Transport::new(config)?;
+    let qr = login_qr_get_key(&transport).await?;
     render_qr(&qr.url)?;
     eprintln!("Waiting for the NetEase app to scan and confirm...");
 
     let mut last_status: Option<i64> = None;
     loop {
-        let status = login_qr_check(channel.transport(), &qr.unikey).await?;
+        let status = login_qr_check(&transport, &qr.unikey).await?;
         if last_status != Some(status) {
             print_status_hint(status);
             last_status = Some(status);
@@ -79,12 +80,13 @@ async fn run_login(config: &NeteaseConfig) -> crate::Result<()> {
                 }
             }
             LOGIN_STATUS_SUCCESS => {
-                let music_u = extract_music_u(&channel)?;
-                let user_id = account_uid(channel.transport()).await.map_err(|source| {
-                    Error::LoginAccount {
-                        source: Box::new(source),
-                    }
-                })?;
+                let music_u = extract_music_u(&transport)?;
+                let user_id =
+                    account_uid(&transport)
+                        .await
+                        .map_err(|source| Error::LoginAccount {
+                            source: Box::new(source),
+                        })?;
                 let auth = StoredNeteaseAuth { music_u, user_id };
                 let path = save(&auth)?;
                 println!("Logged in. Credentials saved to {}", path.display());
@@ -118,9 +120,9 @@ fn print_status_hint(status: i64) {
     }
 }
 
-/// 从 channel 持有的 cookie jar 里按 `NETEASE_BASE_URL` 取出 `MUSIC_U` 的值。
-fn extract_music_u(channel: &NeteaseChannel) -> crate::Result<String> {
-    let jar = channel.transport().cookie_jar().ok_or(Error::InvalidData {
+/// 从登录 transport 的 cookie jar 中取出 `MUSIC_U`。
+fn extract_music_u(transport: &Transport) -> crate::Result<String> {
+    let jar = transport.cookie_jar().ok_or(Error::InvalidData {
         field: "QR login cookie jar",
     })?;
     let uri: Uri = NETEASE_BASE_URL.parse().map_err(|source| Error::Network {

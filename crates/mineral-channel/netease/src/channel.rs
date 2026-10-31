@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use isahc::cookies::{Cookie, CookieJar};
-use mineral_channel_core::collection::{albums_with_cache, fresh_collection, playlists_with_cache};
+use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, Page,
@@ -34,13 +34,13 @@ use crate::convert;
 use crate::request::RequestPolicies;
 use crate::transport::Transport;
 
-/// 网易云 channel 实例。
+/// 绑定登录凭证与用户身份的网易云 channel。
 pub struct NeteaseChannel {
     /// 网易云请求的 HTTP 通道(带 cookie jar、加密、UA 处理)。
     transport: Transport,
 
-    /// 当前实例绑定的登录用户 uid;`None` 时 `my_playlists` 返回 `NotSupported`。
-    user_id: Option<UserId>,
+    /// 当前实例绑定的登录用户 uid。
+    user_id: UserId,
 
     /// 本地持久化句柄;未提供时跳过缓存读写。
     persist: Option<Arc<dyn NamespaceStore>>,
@@ -56,44 +56,6 @@ pub struct NeteaseChannel {
 }
 
 impl NeteaseChannel {
-    /// 构造一个未登录的 channel(只能跑公开端点)。需要登录态请走 [`Self::with_cookie`] / [`Self::with_credential`]。
-    ///
-    /// # Params:
-    ///   - `config`: HTTP 客户端配置
-    ///   - `persist`: 持久化句柄;传 `None` 可跳过本地落盘
-    pub fn new(
-        config: &NeteaseConfig,
-        persist: Option<Arc<dyn NamespaceStore>>,
-    ) -> crate::Result<Self> {
-        Ok(Self {
-            transport: Transport::new(config)?,
-            user_id: None,
-            persist,
-            playlist: crate::playlist::PlaylistLoader::new(config.playlist_fetch()),
-            requests: RequestPolicies::new(config.requests()),
-            album: AlbumLoader::new(config.album_cache()),
-        })
-    }
-
-    /// 仅用 `MUSIC_U` cookie 构造 channel,不绑 uid。
-    ///
-    /// `music_u` 通常从浏览器 `Application → Cookies → music.163.com` 复制。
-    /// 这种 channel 能跑 search / 详情类端点,但 [`MusicChannel::my_playlists`]
-    /// 因为不知道 uid 会返回 [`mineral_channel_core::Error::NotSupported`];
-    /// 同时绑 uid 的入口走 [`Self::with_credential`]。
-    ///
-    /// # Params:
-    ///   - `config`: HTTP 客户端配置
-    ///   - `music_u`: 网易云核心登录 cookie 值
-    ///   - `persist`: 持久化句柄;传 `None` 可跳过本地落盘
-    pub fn with_cookie(
-        config: &NeteaseConfig,
-        music_u: &str,
-        persist: Option<Arc<dyn NamespaceStore>>,
-    ) -> crate::Result<Self> {
-        Self::build(config, music_u, None, persist)
-    }
-
     /// 同时注入 `MUSIC_U` 与登录用户 uid,得到一个有「我的歌单」上下文的 channel。
     ///
     /// # Params:
@@ -105,22 +67,6 @@ impl NeteaseChannel {
         config: &NeteaseConfig,
         music_u: &str,
         user_id: UserId,
-        persist: Option<Arc<dyn NamespaceStore>>,
-    ) -> crate::Result<Self> {
-        Self::build(config, music_u, Some(user_id), persist)
-    }
-
-    /// `with_cookie` / `with_credential` 的共享实现:把 `MUSIC_U` 塞进 jar,再套一层 [`Transport`]。
-    ///
-    /// # Params:
-    ///   - `config`: HTTP 客户端配置
-    ///   - `music_u`: 网易云核心登录 cookie 值
-    ///   - `user_id`: 可选的登录 uid
-    ///   - `persist`: 持久化句柄
-    fn build(
-        config: &NeteaseConfig,
-        music_u: &str,
-        user_id: Option<UserId>,
         persist: Option<Arc<dyn NamespaceStore>>,
     ) -> crate::Result<Self> {
         let jar = CookieJar::new();
@@ -151,12 +97,6 @@ impl NeteaseChannel {
             requests: RequestPolicies::new(config.requests()),
             album: AlbumLoader::new(config.album_cache()),
         })
-    }
-
-    /// 暴露内部 transport,给一些不在 `MusicChannel` 范围内的端点用
-    /// (例如二维码登录 GetKey/CheckQR、ping 等)。
-    pub fn transport(&self) -> &Transport {
-        &self.transport
     }
 }
 
@@ -393,16 +333,14 @@ impl MusicChannel for NeteaseChannel {
     }
 
     fn my_playlists(&self, cache: CachePolicy) -> CollectionStream<'_, Playlist> {
-        let Some(uid) = self.user_id.as_ref() else {
-            return fresh_collection(async { Err(Error::NotSupported) });
-        };
-        playlists_with_cache(self.persist.as_deref(), cache, self.user_playlists(uid))
+        playlists_with_cache(
+            self.persist.as_deref(),
+            cache,
+            self.user_playlists(&self.user_id),
+        )
     }
 
     fn my_albums(&self, cache: CachePolicy) -> CollectionStream<'_, Album> {
-        if self.user_id.is_none() {
-            return fresh_collection(async { Err(Error::NotSupported) });
-        }
         albums_with_cache(self.persist.as_deref(), cache, async {
             const PAGE_SIZE: usize = 50;
             let mut albums = Vec::new();
@@ -433,38 +371,24 @@ impl MusicChannel for NeteaseChannel {
 
     /// 拉网易云账号远端红心的歌曲 ID 集合(纯远端)。
     ///
-    /// 供 server 导入本地 persist(add-only)用。未登录 → [`Error::NotSupported`]:
-    /// 本地 favorited 集由 server 从 persist 读,不在此降级(本地为准的合并在 server 一侧)。
-    ///
-    /// # Return:
-    ///   远端红心 id 集;未登录 / 远端失败为 `Err`。
+    /// 供 server 导入本地 persist(add-only)用，本地收藏的读取与合并由 server 处理。
     async fn liked_song_ids(&self) -> Result<FxHashSet<SongId>> {
-        let Some(uid) = self.user_id.as_ref() else {
-            return Err(Error::NotSupported);
-        };
-        api::user::liked_song_ids(&self.transport, uid)
+        api::user::liked_song_ids(&self.transport, &self.user_id)
             .await
             .map_err(map_err)
     }
 
     /// 把一首歌的红心状态镜像到网易云远端(纯远端镜像)。
     ///
-    /// 本地 persist 由 server 统一写(事实来源),这里只同步远端;未登录无远端可打 →
-    /// [`Error::NotSupported`](server 视为该源无远端镜像,不影响本地已写)。
+    /// 本地 persist 由 server 统一写，这里只同步远端。
     async fn set_loved(&self, id: &SongId, loved: bool) -> Result<()> {
-        if self.user_id.is_none() {
-            return Err(Error::NotSupported);
-        }
         api::song::like_song(&self.transport, id, loved)
             .await
             .map_err(map_err)
     }
 
-    /// 远端真实累计播放次数:登录(有 uid)才查回忆坐标;未登录返回 [`Error::NotSupported`]。
+    /// 从回忆坐标查询当前账号的远端累计播放次数。
     async fn remote_play_count(&self, id: &SongId) -> Result<u32> {
-        if self.user_id.is_none() {
-            return Err(Error::NotSupported);
-        }
         api::song::remote_play_count(&self.transport, id)
             .await
             .map_err(map_err)
@@ -521,15 +445,8 @@ impl PlaybackProvider for NeteaseChannel {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use futures_util::TryStreamExt;
-    use mineral_channel_core::{Error, MusicChannel};
-    use mineral_model::{CachePolicy, SongId, SourceKind};
-
-    use crate::NeteaseChannel;
-    use crate::config::{AlbumCacheConfig, NeteaseConfig, RequestsConfig};
     use crate::error::ApiCodeError;
+    use mineral_channel_core::Error;
 
     /// 按 code 映射 API 错误，其余分类保留底层原因。
     #[test]
@@ -561,66 +478,6 @@ mod tests {
         let error = super::map_err(parse);
         assert!(matches!(&error, Error::Parse { .. }));
         assert!(std::error::Error::source(&error).is_some());
-        Ok(())
-    }
-
-    /// favorite 方法收窄为**纯远端**:匿名 channel(未登录)无远端可查/可打,
-    /// `liked_song_ids` 与 `set_loved` 都返回 [`Error::NotSupported`]。
-    ///
-    /// 本地 favorited 集与本地写入统一由 server 经 persist 负责(不在 channel 降级),
-    /// 故匿名 channel 不读本地 loved_ids。
-    #[tokio::test]
-    async fn favorite_methods_not_supported_when_anonymous() -> color_eyre::Result<()> {
-        let defaults = mineral_server::config::DaemonConfig::defaults()?;
-        let source = defaults.sources().netease();
-        let requests = source.requests();
-        let config = NeteaseConfig::builder()
-            .album_cache(
-                AlbumCacheConfig::builder()
-                    .ttl_days(*source.album_cache().ttl_days())
-                    .ttl_jitter_days(*source.album_cache().ttl_jitter_days())
-                    .build(),
-            )
-            .playlist_fetch(
-                crate::config::PlaylistFetchConfig::builder()
-                    .batch_size(std::num::NonZeroUsize::new(500).unwrap())
-                    .max_concurrent(std::num::NonZeroUsize::new(3).unwrap())
-                    .build(),
-            )
-            .requests(
-                RequestsConfig::builder()
-                    .album_detail_requests_per_second(*requests.album_detail_requests_per_second())
-                    .retry_delays(
-                        requests
-                            .retry_delays_ms()
-                            .iter()
-                            .map(|delay| Duration::from_millis(delay.get()))
-                            .collect(),
-                    )
-                    .build(),
-            )
-            .max_connections(0)
-            .proxy(None)
-            .timeout_secs(100)
-            .build();
-        let channel = NeteaseChannel::new(&config, None)?;
-
-        assert!(
-            matches!(channel.liked_song_ids().await, Err(Error::NotSupported)),
-            "匿名 liked_song_ids 应 NotSupported(纯远端,不降级本地)"
-        );
-        assert!(matches!(
-            channel.my_albums(CachePolicy::UseCache).try_next().await,
-            Err(Error::NotSupported)
-        ));
-        let id = SongId::new(SourceKind::NETEASE, "10001");
-        assert!(
-            matches!(
-                channel.set_loved(&id, /*loved*/ true).await,
-                Err(Error::NotSupported)
-            ),
-            "匿名 set_loved 应 NotSupported(纯远端镜像,不写本地)"
-        );
         Ok(())
     }
 }
