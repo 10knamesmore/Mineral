@@ -6,6 +6,11 @@ use base64::engine::general_purpose::STANDARD;
 use super::pixels::PixelFormat;
 use crate::image::graphics::TerminalRelay;
 
+/// 删除指定图片的全部 placement 和像素数据，不影响其他会话的图片。
+pub(super) fn delete_image(image_id: u32, relay: TerminalRelay) -> String {
+    relay.wrap(format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\"))
+}
+
 /// 构造 POSIX shared memory 图片传输命令。
 ///
 /// 图片数据只建立 image id，不绑定显示尺寸；virtual placement 在渲染时另行创建。

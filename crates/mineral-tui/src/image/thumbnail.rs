@@ -9,16 +9,17 @@ use ratatui::layout::Rect;
 
 use super::encode::EncodeRequest;
 use super::graphics::GraphicsProtocol;
+use super::kitty::KittyImageHandle;
 use super::{ImageEngine, ImageRenderPhase};
 
-/// 转场保留的行内图片输入；身份与尺寸固定，资源由准备入口保活。
+/// 转场保留的行内图片输入；共享引用使终端图片存活到快照释放。
 #[derive(Clone)]
 pub(crate) struct InlineImage {
     /// 编码成品的缓存身份。
     key: super::key::TerminalImageKey,
 
-    /// 已就绪的 Kitty 图片身份。
-    image_id: u32,
+    /// 已就绪的 Kitty 图片引用。
+    image: Arc<KittyImageHandle>,
 
     /// 占位字符的原始区域。
     area: Rect,
@@ -30,7 +31,7 @@ pub(crate) struct InlineImage {
 impl InlineImage {
     /// 把固定身份写入缓冲，不触发加载或协议发送。
     pub(crate) fn paint(&self, target: &mut Buffer) {
-        super::kitty::paint_inline(self.area, target, self.image_id);
+        super::kitty::paint_inline(self.area, target, self.image.id());
     }
 }
 
@@ -53,12 +54,12 @@ impl ImageEngine {
     /// 保留当前已就绪缩略图的呈现输入；未就绪图片不进入旧端快照。
     pub(crate) fn inline_image(&self, url: &MediaUrl, area: Rect) -> Option<InlineImage> {
         let key = self.thumbnail_preview_key(url);
-        let mut image_id = None;
+        let mut image = None;
         self.terminal_images
-            .render_if_ready(&key, |image| image_id = image.inline_id());
+            .render_if_ready(&key, |cached| image = cached.inline_handle());
         Some(InlineImage {
             key,
-            image_id: image_id?,
+            image: image?,
             area,
             generation: self.graphics_generation(),
         })

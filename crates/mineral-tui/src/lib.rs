@@ -28,9 +28,9 @@ use mineral_client::Client;
 use mineral_protocol::{Subscription, SubscriptionTopic};
 
 use app::App;
-use image::ImageEngine;
 use image::fetch::CoverFetcher;
 use image::graphics::TerminalGraphics;
+use image::{ImageEngine, KittyImageRegistry};
 use runtime::backend::{Backend, BackendBootstrap, ClientBackend, CompletionQueue};
 use runtime::ui::prefs::{UiPrefs, open_tui_store};
 use terminal::ColorReplies;
@@ -179,7 +179,9 @@ fn run_app(
             ColorReplies::default()
         }
     };
-    let graphics = TerminalGraphics::query();
+    let (kitty_images, kitty_image_events) = KittyImageRegistry::new();
+    let graphics = TerminalGraphics::query(kitty_image_events);
+    tui.manage_kitty_images(kitty_images);
     let images = ImageEngine::new(Arc::clone(&cfg), cover_fetcher, graphics);
     let mut app = App::new(
         backend,

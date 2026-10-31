@@ -1,18 +1,21 @@
 //! Kitty 终端图片成品：shared memory 资源、image id 与 Unicode placement。
 
+use std::sync::Arc;
+
 use image::DynamicImage;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::command::{create_virtual_placement, transmit_shared_memory};
+use super::lifetime::KittyImageHandle;
 use super::pixels::PixelData;
 use super::shared_memory::SharedMemory;
-use crate::image::graphics::TerminalRelay;
+use crate::image::graphics::{TerminalGraphics, TerminalRelay};
 
 /// 一张经 POSIX shared memory 发送一次、可按不同 placement 尺寸显示的 Kitty 图片。
 pub(crate) struct KittyImage {
-    /// 非零 Kitty image id。
-    image_id: u32,
+    /// 缓存成品与转场共享的终端图片引用。
+    handle: Arc<KittyImageHandle>,
 
     /// 首次 placement 前尚未写给终端的 shared memory 传输命令。
     transmission: Option<String>,
@@ -32,8 +35,7 @@ impl KittyImage {
     ///
     /// # Params:
     ///   - `source`: 已解码原图
-    ///   - `image_id`: 非零 Kitty image id
-    ///   - `relay`: 终端 relay 形态
+    ///   - `graphics`: image id 分配、传输形态与生命周期事件发送端
     ///
     /// # Return:
     ///   持有本次像素源的 Kitty 成品；主封面原样模式跨尺寸复用，截边／拉伸按目标尺寸缓存
@@ -42,9 +44,10 @@ impl KittyImage {
     ///   shared memory 创建或写入失败时返回错误
     pub(crate) fn encode(
         source: &DynamicImage,
-        image_id: u32,
-        relay: TerminalRelay,
+        graphics: &TerminalGraphics,
     ) -> Result<Self, super::shared_memory::Error> {
+        let image_id = graphics.allocate_kitty_image_id();
+        let relay = graphics.relay();
         let pixels = PixelData::from_image(source);
         let resource = SharedMemory::create(image_id, &pixels.bytes)?;
         let transmission = transmit_shared_memory(
@@ -59,7 +62,10 @@ impl KittyImage {
             pixel_format = ?pixels.format, payload_bytes = resource.resident_bytes(),
             "Kitty image prepared");
         Ok(Self {
-            image_id,
+            handle: Arc::new(KittyImageHandle::new(
+                image_id,
+                graphics.kitty_image_events(),
+            )),
             transmission: Some(transmission),
             placement: None,
             resource,
@@ -67,14 +73,14 @@ impl KittyImage {
         })
     }
 
-    /// 只读图片身份，用于保留转场输入中的缩略图占位。
-    pub(crate) fn id(&self) -> u32 {
-        self.image_id
+    /// 转场快照持有此引用，缓存项被替换或清空后仍能使用已上传图片。
+    pub(crate) fn handle(&self) -> Arc<KittyImageHandle> {
+        Arc::clone(&self.handle)
     }
 
     /// 只生成占位字符，上传与 placement 状态由输出提交维护。
     pub(crate) fn render_inline(&self, area: Rect, buffer: &mut Buffer) {
-        super::placement::render_inline(area, buffer, self.image_id);
+        super::placement::render_inline(area, buffer, self.handle.id());
     }
 
     /// 在实际输出前生成首次上传及尺寸变化所需的 placement 指令。
@@ -88,9 +94,14 @@ impl KittyImage {
             return None;
         }
         self.placement = Some(placement_id);
-        let mut command = self.transmission.take().unwrap_or_default();
+        let mut command = if let Some(transmission) = self.transmission.take() {
+            self.handle.uploaded(self.relay);
+            transmission
+        } else {
+            String::new()
+        };
         command.push_str(&create_virtual_placement(
-            self.image_id,
+            self.handle.id(),
             placement_id,
             cells,
             self.relay,
@@ -118,12 +129,12 @@ mod tests {
     use nix::sys::stat::{Mode, fstat};
 
     use super::KittyImage;
-    use crate::image::graphics::{TerminalGraphics, TerminalRelay};
+    use crate::image::graphics::TerminalGraphics;
 
     /// 终端声明的格式、shared memory 实际长度和缓存字节数必须一致。
     #[test]
     fn transmission_matches_shared_memory_layout() -> color_eyre::Result<()> {
-        let graphics = TerminalGraphics::fixed((8, 16));
+        let graphics = TerminalGraphics::fixed_kitty((8, 16));
         // RGB / RGBA payload 均按 64 KiB 对齐，避免 fstat 的页对齐长度混入像素记账断言。
         for (source, format, payload_bytes) in [
             (
@@ -142,11 +153,7 @@ mod tests {
                 256 * 256 * 4,
             ),
         ] {
-            let image = KittyImage::encode(
-                &source,
-                graphics.allocate_kitty_image_id(),
-                TerminalRelay::Direct,
-            )?;
+            let image = KittyImage::encode(&source, &graphics)?;
             let transmission = image
                 .transmission
                 .as_ref()

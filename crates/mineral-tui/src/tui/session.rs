@@ -20,6 +20,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 
+use crate::image::KittyImageRegistry;
 use crate::image::graphics::GraphicsProtocol;
 use crate::render::memo::Compositor;
 
@@ -43,6 +44,9 @@ pub struct Tui {
 
     /// 已连续省略的帧数，恢复提交时记录，避免逐帧日志。
     skipped_frames: u64,
+
+    /// TUI 独占的图片表与事件接收端；帧提交与退出时删除本会话的图片。
+    kitty_images: Option<KittyImageRegistry>,
 }
 
 impl Tui {
@@ -56,6 +60,7 @@ impl Tui {
             title_pushed: Arc::new(AtomicBool::new(false)),
             compositor: Compositor::default(),
             skipped_frames: 0,
+            kitty_images: None,
         })
     }
 
@@ -113,8 +118,23 @@ impl Tui {
     /// 退出 alternate screen + raw mode,并 pop 标题栈(若之前 push 过)。多次调用幂等。
     pub fn exit(&mut self) -> io::Result<()> {
         self.discard_pending_output();
+        let graphics_result = self.delete_kitty_images();
         restore_terminal(&self.title_pushed)?;
         self.terminal.show_cursor()?;
+        graphics_result
+    }
+
+    pub(crate) fn manage_kitty_images(&mut self, images: KittyImageRegistry) {
+        self.kitty_images = Some(images);
+    }
+
+    fn delete_kitty_images(&mut self) -> io::Result<()> {
+        if let Some(images) = &mut self.kitty_images {
+            let commands = images.take_all_deletions();
+            let output = self.terminal.backend_mut().writer_mut();
+            output.write_all(commands.as_bytes())?;
+            output.flush()?;
+        }
         Ok(())
     }
 
@@ -129,7 +149,7 @@ impl Tui {
         Ok(self.terminal.get_frame().area())
     }
 
-    /// 输入或合成变化才提交；图片指令独立检查，始终先于引用它的 cell 输出。
+    /// 输入或合成变化才提交；图片上传先于 cell 更新，失去引用的图片在更新后删除。
     pub(crate) fn present(
         &mut self,
         plan: crate::render::memo::FramePlan<'_>,
@@ -137,7 +157,12 @@ impl Tui {
         protocol: GraphicsProtocol,
     ) -> io::Result<()> {
         let area = self.terminal.get_frame().area();
-        if !self.compositor.needs_frame(&plan, area) && graphics.is_empty() {
+        let deletions = self
+            .kitty_images
+            .as_mut()
+            .map_or_else(String::new, KittyImageRegistry::take_pending_deletions);
+        if !self.compositor.needs_frame(&plan, area) && graphics.is_empty() && deletions.is_empty()
+        {
             if self.skipped_frames == 0 {
                 mineral_log::debug!(target: "tui::render", "visible components unchanged; suspend frame submissions");
             }
@@ -154,12 +179,16 @@ impl Tui {
             output.write_all(graphics.as_bytes())?;
             output.flush()?;
         }
-        if !update.is_empty() || !graphics.is_empty() {
+        if !update.is_empty() || !graphics.is_empty() || !deletions.is_empty() {
             write_cells(
                 self.terminal.backend_mut().writer_mut(),
                 self.compositor.updates(&update),
             )?;
             self.terminal.hide_cursor()?;
+            self.terminal
+                .backend_mut()
+                .writer_mut()
+                .write_all(deletions.as_bytes())?;
             ratatui::backend::Backend::flush(self.terminal.backend_mut())?;
         }
         if self.skipped_frames > 0 {

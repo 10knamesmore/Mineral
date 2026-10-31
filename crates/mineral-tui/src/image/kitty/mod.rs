@@ -2,12 +2,14 @@
 
 mod command;
 mod image;
+mod lifetime;
 mod pixels;
 mod placement;
 mod probe;
 pub(crate) mod shared_memory;
 
 pub(crate) use image::KittyImage;
+pub(crate) use lifetime::{KittyImageEvent, KittyImageHandle, KittyImageRegistry};
 pub(crate) use probe::probe_shared_memory;
 
 pub(super) use placement::render_inline as paint_inline;

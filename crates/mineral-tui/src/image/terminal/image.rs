@@ -1,5 +1,7 @@
 //! 图片引擎缓存的终端图片成品抽象。
 
+use std::sync::Arc;
+
 use crate::config::CoverCellFit;
 use image::DynamicImage;
 use ratatui::buffer::Buffer;
@@ -10,7 +12,7 @@ use super::iterm2::Iterm2Image;
 use super::sixel::SixelImage;
 use crate::image::graphics::{GraphicsProtocol, TerminalGraphics};
 use crate::image::key::PixelSize;
-use crate::image::kitty::KittyImage;
+use crate::image::kitty::{KittyImage, KittyImageHandle};
 use crate::image::resize::{scale_to_pixels, thumbnail};
 
 /// 终端协议图片编码失败。
@@ -110,8 +112,7 @@ impl TerminalImage {
                 });
                 Ok(Self::Kitty(KittyImage::encode(
                     fitted.as_ref().unwrap_or(source),
-                    graphics.allocate_kitty_image_id(),
-                    graphics.relay(),
+                    graphics,
                 )?))
             }
             GraphicsProtocol::Sixel => {
@@ -150,10 +151,10 @@ impl TerminalImage {
         }
     }
 
-    /// Kitty 行内成品的只读身份，其他协议不支持行内缩略图。
-    pub(crate) fn inline_id(&self) -> Option<u32> {
+    /// 为行内转场保留 Kitty 图片，其他协议不支持行内缩略图。
+    pub(crate) fn inline_handle(&self) -> Option<Arc<KittyImageHandle>> {
         match self {
-            Self::Kitty(image) => Some(image.id()),
+            Self::Kitty(image) => Some(image.handle()),
             _ => None,
         }
     }

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::Sender;
 
 use crate::config::CoverProtocolMode;
 use arc_swap::ArcSwap;
@@ -9,7 +10,9 @@ use mineral_common::revision::Revision;
 
 use super::protocol::{GraphicsProtocol, TerminalRelay};
 use super::query::DetectedGraphics;
-use crate::image::kitty::probe_shared_memory;
+#[cfg(test)]
+use crate::image::kitty::KittyImageRegistry;
+use crate::image::kitty::{KittyImageEvent, probe_shared_memory};
 
 /// 编码 worker 与图片引擎共享的当前 terminal backend。
 ///
@@ -68,6 +71,7 @@ impl TerminalBackend {
         if !graphics.apply_mode(mode) {
             return false;
         }
+        let _ = graphics.kitty_image_events.send(KittyImageEvent::RetireAll);
         self.replace(Arc::new(graphics));
         true
     }
@@ -143,11 +147,14 @@ pub(crate) struct TerminalGraphics {
 
     /// 当前 terminal backend 共享的 Kitty image id 分配器。
     next_image_id: Arc<AtomicU32>,
+
+    /// 所有 backend 代次向同一终端会话报告图片生命周期。
+    kitty_image_events: Sender<KittyImageEvent>,
 }
 
 impl TerminalGraphics {
     /// 从终端查询协议与 cell 像素尺寸。
-    pub(crate) fn query() -> Self {
+    pub(crate) fn query(kitty_image_events: Sender<KittyImageEvent>) -> Self {
         let relay = TerminalRelay::from_environment();
         relay.prepare();
         let detected = super::query::detect(relay);
@@ -173,6 +180,7 @@ impl TerminalGraphics {
             graphics_fallback_signal(),
             kitty_shared_memory,
             relay,
+            kitty_image_events,
         )
     }
 
@@ -182,24 +190,28 @@ impl TerminalGraphics {
     ///   - `cell_pixels`: 单个终端 cell 的像素宽高
     #[cfg(test)]
     pub(crate) fn fixed(cell_pixels: (u16, u16)) -> Self {
+        let (_, events) = KittyImageRegistry::new();
         Self::from_parts(
             GraphicsProtocol::Halfblocks,
             cell_pixels,
             None,
             false,
             TerminalRelay::from_environment(),
+            events,
         )
     }
 
     /// 构造无需终端探测、允许 shared memory 编码的 Kitty 测试能力。
     #[cfg(test)]
     pub(crate) fn fixed_kitty(cell_pixels: (u16, u16)) -> Self {
+        let (_, events) = KittyImageRegistry::new();
         Self::from_parts(
             GraphicsProtocol::Kitty,
             cell_pixels,
             None,
             true,
             TerminalRelay::Direct,
+            events,
         )
     }
 
@@ -216,6 +228,10 @@ impl TerminalGraphics {
     /// 返回图形控制序列的终端 relay 形态。
     pub(crate) const fn relay(&self) -> TerminalRelay {
         self.relay
+    }
+
+    pub(crate) fn kitty_image_events(&self) -> Sender<KittyImageEvent> {
+        self.kitty_image_events.clone()
     }
 
     /// 分配一个非零且在当前 terminal backend 内不复用的 Kitty image id。
@@ -285,6 +301,7 @@ impl TerminalGraphics {
         fallback_signal: Option<&'static str>,
         kitty_shared_memory: bool,
         relay: TerminalRelay,
+        kitty_image_events: Sender<KittyImageEvent>,
     ) -> Self {
         let random_id = rand::random::<u32>();
         let first_image_id = if random_id == 0 { 1 } else { random_id };
@@ -296,6 +313,7 @@ impl TerminalGraphics {
             kitty_shared_memory,
             relay,
             next_image_id: Arc::new(AtomicU32::new(first_image_id)),
+            kitty_image_events,
         }
     }
 }

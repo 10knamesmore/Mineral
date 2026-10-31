@@ -246,22 +246,17 @@ mod tests {
     #[test]
     fn two_3000px_kitty_covers_fit_128_mib() -> color_eyre::Result<()> {
         use crate::image::cache::TerminalImageCache;
-        use crate::image::graphics::TerminalRelay;
         use crate::image::kitty::KittyImage;
 
         let mut cache = TerminalImageCache::new(/*budget*/ 128 * 1024 * 1024);
-        let graphics = TerminalGraphics::fixed((8, 16));
+        let graphics = TerminalGraphics::fixed_kitty((8, 16));
         let source = image::DynamicImage::ImageRgb8(image::RgbImage::new(3000, 3000));
         let mut keys = Vec::new();
         for title in ["swiss-army-romance", "places-you-have-come-to-fear"] {
             let key = TerminalImageKey::source(ImageIdentity::Url(MediaUrl::remote(&format!(
                 "https://example.com/{title}.jpg"
             ))?));
-            let image = TerminalImage::Kitty(KittyImage::encode(
-                &source,
-                graphics.allocate_kitty_image_id(),
-                TerminalRelay::Direct,
-            )?);
+            let image = TerminalImage::Kitty(KittyImage::encode(&source, &graphics)?);
             let bytes = image.resident_bytes();
             assert!(
                 (27_000_000..28_000_000).contains(&bytes),

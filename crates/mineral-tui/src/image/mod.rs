@@ -29,6 +29,7 @@ pub(crate) use geometry::square_cells;
 pub(crate) use graphics::GraphicsProtocol;
 pub(crate) use hub::CoverTransition;
 pub use hub::ImageEngine;
+pub(crate) use kitty::KittyImageRegistry;
 pub(crate) use render::{BlendStyle, ImageContent, ImageRenderPhase};
 
 pub(crate) use thumbnail::InlineImage;
