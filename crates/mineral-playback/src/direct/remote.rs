@@ -1,400 +1,242 @@
-//! HTTP byte acquisition adapted to a synchronous buffered reader.
+//! HTTP acquisition for a track whose encoded bytes remain in memory.
 
-use std::io::{Read, Seek};
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::io;
+use std::ops::Range;
 
-use bytes::Bytes;
-use futures_util::{Stream, TryStreamExt};
-use rangemap::RangeSet;
 use reqwest::header::{self, HeaderValue};
-use stream_download::source::{DecodeError, SourceStream};
-use stream_download::storage::StorageProvider;
-use stream_download::storage::temp::TempStorageProvider;
-use stream_download::{
-    Settings, StreamDownload, StreamHandle, StreamInitializationError, StreamPhase, StreamState,
-};
+use reqwest::{Client, Response, StatusCode};
+use thiserror::Error;
+use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
-use super::storage::CaptureStorageProvider;
+use super::buffer::{DownloadBuffer, RemoteReader};
+use super::capture::capture;
 use crate::{
-    BufferedPrefix, CaptureReceipt, CaptureTarget, CapturedMedia, Error, MediaReader,
-    RemoteLocator, Result, TransferState,
+    CaptureReceipt, CaptureTarget, MediaReader, ReadControl, RemoteLocator,
+    Result as PlaybackResult, TransferState,
 };
 
-/// A buffered remote reader plus its transfer facts.
+/// Failures while acquiring and placing remote media bytes.
+#[derive(Debug, Error)]
+pub enum DownloadError {
+    /// Request construction, transport, status, or response-body failure.
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
+
+    /// The response does not describe the requested bytes of the same resource.
+    #[error(
+        "invalid media response from {url}: {status}, requested {requested:?}, Content-Range {content_range:?}"
+    )]
+    InvalidResponse {
+        /// Requested media URL.
+        url: Box<Url>,
+
+        /// Response status.
+        status: StatusCode,
+
+        /// Half-open range; None denotes the initial full-resource request.
+        requested: Option<Range<u64>>,
+
+        /// Server-provided range, if present.
+        content_range: Option<HeaderValue>,
+    },
+
+    /// The body did not match its declared byte count.
+    #[error("media response length mismatch: expected {expected}, received {received}")]
+    LengthMismatch {
+        /// Declared response byte count.
+        expected: u64,
+
+        /// Observed response byte count.
+        received: u64,
+    },
+
+    /// Received bytes could not be placed in the encoded-media buffer.
+    #[error("buffer media bytes")]
+    Buffer(#[from] io::Error),
+}
+
 pub(super) struct OpenedRemote {
-    /// Synchronous stream-download reader.
     pub(super) reader: Box<dyn MediaReader>,
 
-    /// Remote encoded byte length when known.
     pub(super) byte_len: Option<u64>,
 
-    /// Shared transfer progress.
     pub(super) transfer: TransferState,
 
-    /// Producer-owned capture completion when a target was requested.
+    pub(super) read_control: ReadControl,
+
     pub(super) capture: Option<CaptureReceipt>,
 }
 
-/// Type-erased stream-download reader with its producer lifecycle handles.
-struct BufferedRemote {
-    /// Synchronous reader backed by the selected storage provider.
-    reader: Box<dyn MediaReader>,
-
-    /// Completion signal from the stream-download producer.
-    completion: StreamHandle,
-
-    /// Cancellation handle for the producer task.
-    cancellation: CancellationToken,
-}
-
-impl DecodeError for Error {}
-
-/// A reopenable HTTP source consumed by stream-download.
-struct RemoteStream {
-    /// Direct remote access description.
+struct HttpMedia {
     locator: RemoteLocator,
 
-    /// Reusable HTTP client carrying required default headers.
-    client: reqwest::Client,
-
-    /// Current response byte stream.
-    stream: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send + Sync>>,
-
-    /// Full resource byte length when known.
-    content_length: Option<u64>,
+    client: Client,
 }
 
-impl RemoteStream {
-    /// Opens an HTTP response range.
-    ///
-    /// # Params:
-    ///   - `client`: Reusable configured HTTP client.
-    ///   - `locator`: Remote access description.
-    ///   - `start`: Inclusive range start.
-    ///   - `end`: Inclusive range end when bounded.
-    ///
-    /// # Return:
-    ///   Response stream and full resource length when available.
-    async fn open_range(
-        client: &reqwest::Client,
-        locator: &RemoteLocator,
-        start: u64,
-        end: Option<u64>,
-    ) -> Result<(
-        Pin<Box<dyn Stream<Item = Result<Bytes>> + Send + Sync>>,
-        Option<u64>,
-    )> {
-        let mut request = client.get(locator.url().clone());
-        let ranged = start > 0 || end.is_some();
-        if ranged {
+impl HttpMedia {
+    async fn open_response(
+        &self,
+        range: Option<Range<u64>>,
+        length: Option<u64>,
+    ) -> Result<Response, DownloadError> {
+        let mut request = self.client.get(self.locator.url().clone());
+        for (name, value) in self.locator.headers() {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        if let Some(range) = &range {
+            // Internal ranges are half-open; HTTP's last byte is inclusive.
             request = request.header(
                 header::RANGE,
-                format!(
-                    "bytes={start}-{}",
-                    end.map(|value| value.to_string()).unwrap_or_default()
-                ),
+                format!("bytes={}-{}", range.start, range.end - 1),
             );
         }
-        let response = request.send().await.map_err(|source| Error::HttpRequest {
-            url: locator.url().clone(),
-            source,
-        })?;
+        let response = request.send().await?.error_for_status()?;
         let status = response.status();
-        let response = response
-            .error_for_status()
-            .map_err(|source| Error::HttpStatus {
-                url: locator.url().clone(),
-                status,
-                source,
-            })?;
-        let content_length = if ranged {
-            response
-                .headers()
-                .get(header::CONTENT_RANGE)
-                .and_then(parse_content_range_total)
-        } else {
-            response.content_length()
+        let content_range = response.headers().get(header::CONTENT_RANGE);
+        let valid = match &range {
+            Some(requested) => {
+                status == StatusCode::PARTIAL_CONTENT
+                    && content_range.and_then(parse_content_range).is_some_and(
+                        |(received, total)| received == *requested && Some(total) == length,
+                    )
+            }
+            None => status == StatusCode::OK,
         };
-        let url = locator.url().clone();
-        let stream = response
-            .bytes_stream()
-            .map_err(move |source| Error::HttpBody {
-                url: url.clone(),
-                source,
+        if !valid {
+            return Err(DownloadError::InvalidResponse {
+                url: Box::new(self.locator.url().clone()),
+                status,
+                requested: range,
+                content_range: content_range.cloned(),
             });
-        Ok((Box::pin(stream), content_length))
-    }
-}
-
-impl SourceStream for RemoteStream {
-    type Params = RemoteLocator;
-
-    type StreamCreationError = Error;
-
-    async fn create(locator: Self::Params) -> std::result::Result<Self, Self::StreamCreationError> {
-        let client = client_with_headers(locator.headers())?;
-        let (stream, content_length) = Self::open_range(&client, &locator, 0, None).await?;
-        Ok(Self {
-            locator,
-            client,
-            stream,
-            content_length,
-        })
-    }
-
-    fn content_length(&self) -> Option<u64> {
-        self.content_length
-    }
-
-    async fn seek_range(&mut self, start: u64, end: Option<u64>) -> std::io::Result<()> {
-        if Some(start) == self.content_length {
-            self.stream = Box::pin(futures_util::stream::empty());
-            return Ok(());
         }
-        let (stream, content_length) = Self::open_range(&self.client, &self.locator, start, end)
-            .await
-            .map_err(std::io::Error::other)?;
-        self.stream = stream;
-        if self.content_length.is_none() {
-            self.content_length = content_length;
-        }
-        Ok(())
-    }
-
-    async fn reconnect(&mut self, current_position: u64) -> std::io::Result<()> {
-        self.seek_range(current_position, None).await
-    }
-
-    fn supports_seek(&self) -> bool {
-        true
+        Ok(response)
     }
 }
 
-impl Stream for RemoteStream {
-    type Item = Result<Bytes>;
-
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.stream.as_mut().poll_next(context)
-    }
-}
-
-/// Opens a remote locator into a buffered synchronous reader.
-///
-/// # Params:
-///   - `locator`: Remote access description.
-///   - `prefetch_bytes`: Bytes to prepare before returning.
-///   - `capture_target`: Optional persistent destination for the prepared media.
-///   - `cancellation`: Playback-instance cancellation root.
-///
-/// # Return:
-///   Buffered reader, length, and transfer state.
 pub(super) async fn open_remote(
     locator: RemoteLocator,
     prefetch_bytes: u64,
-    capture_target: Option<CaptureTarget>,
+    target: Option<CaptureTarget>,
     cancellation: CancellationToken,
-) -> Result<OpenedRemote> {
-    let stream = RemoteStream::create(locator).await?;
-    let byte_len = stream.content_length();
-    let transfer = TransferState::new(byte_len);
-    let (buffered, capture) = match capture_target {
-        Some(target) => {
-            let buffered = buffer_with_storage(
-                stream,
-                CaptureStorageProvider::new(target.path().to_path_buf()),
-                prefetch_bytes,
-                &transfer,
-            )
-            .await?;
-            let receipt = CaptureReceipt::new({
-                let completion = buffered.completion.clone();
-                let transfer = transfer.clone();
-                async move {
-                    completion.wait_for_completion().await;
-                    let path = target.path().to_path_buf();
-                    let result = verify_capture(path.clone(), byte_len, &transfer).await;
-                    if result.is_err()
-                        && let Err(error) = tokio::fs::remove_file(&path).await
-                        && error.kind() != std::io::ErrorKind::NotFound
-                    {
-                        mineral_log::warn!(
-                            target: "playback",
-                            path = %path.display(),
-                            error = mineral_log::chain(&error),
-                            "清理未完成 capture 失败"
-                        );
-                    }
-                    result
-                }
-            });
-            (buffered, Some(receipt))
-        }
-        None => (
-            buffer_with_storage(
-                stream,
-                TempStorageProvider::new(),
-                prefetch_bytes,
-                &transfer,
-            )
-            .await?,
-            None,
-        ),
+) -> PlaybackResult<OpenedRemote> {
+    let http = HttpMedia {
+        client: Client::builder().build().map_err(DownloadError::from)?,
+        locator,
     };
-    let BufferedRemote {
-        reader,
-        cancellation: producer_cancellation,
-        ..
-    } = buffered;
-    let producer_finished = producer_cancellation.clone();
-    tokio::spawn(async move {
-        tokio::select! {
+    let response = http.open_response(None, None).await?;
+    let byte_len = response.content_length();
+    let cancellation = cancellation.child_token();
+    let lifetime = cancellation.clone().drop_guard();
+    let buffer = DownloadBuffer::new(byte_len, cancellation.clone());
+    let producer = buffer.clone();
+    spawn(async move {
+        select! {
             biased;
-            () = cancellation.cancelled() => producer_cancellation.cancel(),
-            () = producer_finished.cancelled() => {}
+            () = producer.cancellation.cancelled() => {}
+            result = download(&http, response, &producer) => producer.finish(result),
         }
     });
+    buffer.startup(prefetch_bytes).await?;
+    let read_control = ReadControl::new(cancellation);
+    let capture = target.map(|target| capture(buffer.clone(), target));
     Ok(OpenedRemote {
-        reader,
-        byte_len,
-        transfer,
+        byte_len: buffer.length(),
+        transfer: buffer.transfer.clone(),
+        reader: Box::new(RemoteReader::new(buffer, read_control.clone(), lifetime)),
+        read_control,
         capture,
     })
 }
 
-/// Starts stream-download with one concrete storage provider.
-///
-/// # Params:
-///   - `stream`: Reopenable remote byte source.
-///   - `storage`: Temporary or persistent producer storage.
-///   - `prefetch_bytes`: Bytes to prepare before returning.
-///   - `transfer`: Shared producer progress.
-///
-/// # Return:
-///   Type-erased reader plus producer completion and cancellation handles.
-async fn buffer_with_storage<P>(
-    stream: RemoteStream,
-    storage: P,
-    prefetch_bytes: u64,
-    transfer: &TransferState,
-) -> Result<BufferedRemote>
-where
-    P: StorageProvider + 'static,
-    P::Reader: Read + Seek + Send + Sync + 'static,
-{
-    let observed = transfer.clone();
-    let mut available = RangeSet::<u64>::new();
-    let settings = Settings::default()
-        .prefetch_bytes(prefetch_bytes)
-        .on_progress(move |stream: &RemoteStream, state: StreamState, _cancel| {
-            if !state.current_chunk.is_empty() {
-                available.insert(state.current_chunk);
-            }
-            observed.set_downloaded(available.iter().map(|range| range.end - range.start).sum());
-            if let Some(total) = stream.content_length
-                && let Some(prefix) = available.get(&0)
-            {
-                observed.set_buffered(BufferedPrefix::Bytes {
-                    end: prefix.end,
-                    total,
-                });
-            }
-            if state.phase == StreamPhase::Complete {
-                observed.mark_complete();
-            }
-        });
-    let reader = StreamDownload::from_stream(stream, storage, settings)
-        .await
-        .map_err(|error| match error {
-            StreamInitializationError::StorageCreationFailure(source) => {
-                Error::BufferStorage { source }
-            }
-            StreamInitializationError::StreamCreationFailure(source) => source,
-        })?;
-    Ok(BufferedRemote {
-        completion: reader.handle(),
-        cancellation: reader.get_cancellation_token(),
-        reader: Box::new(reader),
-    })
-}
-
-/// Verifies that stream-download reached its successful terminal phase and filled the target.
-///
-/// # Params:
-///   - `path`: Persistent capture path.
-///   - `expected_len`: Full encoded byte length when known.
-///   - `transfer`: Producer progress containing the successful terminal phase.
-///
-/// # Return:
-///   Verified capture and its byte length.
-///
-/// # Error:
-///   Returns when the producer stopped early, metadata is unavailable, or the file is truncated.
-async fn verify_capture(
-    path: PathBuf,
-    expected_len: Option<u64>,
-    transfer: &TransferState,
-) -> Result<CapturedMedia> {
-    if !transfer.snapshot().complete {
-        return Err(Error::CaptureIncomplete);
-    }
-    let bytes = tokio::fs::metadata(&path)
-        .await
-        .map_err(|source| Error::CaptureMetadata {
-            path: path.clone(),
-            source,
-        })?
-        .len();
-    if let Some(expected) = expected_len
-        && bytes < expected
-    {
-        return Err(Error::CaptureTruncated {
-            path,
-            bytes,
-            expected,
-        });
-    }
-    Ok(CapturedMedia::new(path, bytes))
-}
-
-/// Builds an HTTP client carrying direct-media request headers.
-///
-/// # Params:
-///   - `headers`: Request header name/value pairs.
-///
-/// # Return:
-///   A reusable configured client.
-fn client_with_headers(headers: &[(String, String)]) -> Result<reqwest::Client> {
-    use reqwest::header::{HeaderMap, HeaderName};
-
-    let mut map = HeaderMap::new();
-    for (name, value) in headers {
-        match (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) {
-            (Ok(name), Ok(value)) => {
-                map.append(name, value);
-            }
-            _ => {
-                mineral_log::warn!(target: "playback", header = %name, "skip invalid media header")
+/// One response is active at a time. A new missing read interrupts it; otherwise acquisition
+/// continues through its gap, then fills the earliest remaining gap for capture.
+async fn download(
+    http: &HttpMedia,
+    mut response: Response,
+    buffer: &DownloadBuffer,
+) -> Result<(), DownloadError> {
+    let mut start = 0;
+    let mut end = buffer.length();
+    while let Some(mut range) = receive(http, &mut response, start, end, buffer).await? {
+        drop(response);
+        loop {
+            select! {
+                biased;
+                () = buffer.demand_changed.notified() => {
+                    if let Some(requested) = buffer.requested_gap() {
+                        range = requested;
+                    }
+                }
+                opened = http.open_response(Some(range.clone()), buffer.length()) => {
+                    response = opened?;
+                    start = range.start;
+                    end = Some(range.end);
+                    break;
+                }
             }
         }
     }
-    reqwest::Client::builder()
-        .default_headers(map)
-        .build()
-        .map_err(|source| Error::HttpClient { source })
+    Ok(())
 }
 
-/// Parses the total length from a Content-Range response header.
-///
-/// # Params:
-///   - `value`: Content-Range header value.
-fn parse_content_range_total(value: &HeaderValue) -> Option<u64> {
-    let value = value.to_str().ok()?;
-    let (_, total) = value.rsplit_once('/')?;
-    total.trim().parse().ok()
+async fn receive(
+    http: &HttpMedia,
+    response: &mut Response,
+    start: u64,
+    end: Option<u64>,
+    buffer: &DownloadBuffer,
+) -> Result<Option<Range<u64>>, DownloadError> {
+    let mut position = start;
+    loop {
+        let chunk = select! {
+            biased;
+            () = buffer.demand_changed.notified() => {
+                if let Some(range) = buffer.requested_gap()
+                    && range.start != position
+                {
+                    return Ok(Some(range));
+                }
+                continue;
+            }
+            chunk = response.chunk() => chunk.map_err(|error| error.with_url(http.locator.url().clone()))?,
+        };
+        let Some(bytes) = chunk else {
+            if let Some(end) = end {
+                if position != end {
+                    return Err(DownloadError::LengthMismatch {
+                        expected: end - start,
+                        received: position - start,
+                    });
+                }
+            } else {
+                buffer.set_length(position);
+            }
+            return Ok(buffer.next_gap());
+        };
+        let next = position
+            .checked_add(u64::try_from(bytes.len()).map_err(io::Error::other)?)
+            .ok_or(io::ErrorKind::InvalidData)
+            .map_err(io::Error::from)?;
+        if let Some(end) = end
+            && next > end
+        {
+            return Err(DownloadError::LengthMismatch {
+                expected: end - start,
+                received: next - start,
+            });
+        }
+        position = buffer.store_chunk(position, bytes)?;
+    }
+}
+
+fn parse_content_range(value: &HeaderValue) -> Option<(Range<u64>, u64)> {
+    let value = value.to_str().ok()?.strip_prefix("bytes ")?;
+    let (bounds, total) = value.split_once('/')?;
+    let (start, last) = bounds.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = last.parse::<u64>().ok()?.checked_add(1)?;
+    Some((start..end, total.parse().ok()?))
 }

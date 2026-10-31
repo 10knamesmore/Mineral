@@ -91,12 +91,13 @@ impl DirectPreparedPlayback {
         let capture = opened.capture;
         let byte_len = opened.byte_len;
         let media = OpenedMedia::new(
-            Box::new(CancellationReader::new(opened.reader, cancellation.clone())),
+            opened.reader,
             byte_len,
             self.media.info().clone(),
             Some(opened.transfer),
             cancellation,
-        );
+        )
+        .with_read_control(opened.read_control);
         Ok(if let Some(capture) = capture {
             media.with_capture(capture)
         } else {

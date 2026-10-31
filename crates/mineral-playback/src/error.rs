@@ -1,10 +1,12 @@
 //! Playback resolution, media opening, and capture failures.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use mineral_model::SourceKind;
 use thiserror::Error;
-use url::Url;
+
+use crate::direct::{CaptureError, DownloadError};
 
 /// Failures at the playback provider and decoder-ready media boundary.
 #[derive(Debug, Error)]
@@ -24,7 +26,7 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    /// The playback instance was cancelled before opening completed.
+    /// The playback or download instance was cancelled.
     #[error("playback instance cancelled")]
     Cancelled,
 
@@ -46,83 +48,27 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// An HTTP media request failed before receiving a response.
-    #[error("request media {url}")]
-    HttpRequest {
-        /// Requested media URL.
-        url: Url,
-
-        /// HTTP failure.
-        #[source]
-        source: reqwest::Error,
+    /// Acquisition failed; readers and capture retain the same original cause.
+    #[error("download media")]
+    Download {
+        /// Acquisition failure.
+        #[from]
+        source: Arc<DownloadError>,
     },
 
-    /// The HTTP server returned a non-success status.
-    #[error("media response {url} returned {status}")]
-    HttpStatus {
-        /// Requested media URL.
-        url: Url,
-
-        /// HTTP status code.
-        status: reqwest::StatusCode,
-
-        /// HTTP response failure.
-        #[source]
-        source: reqwest::Error,
+    /// Writing or publishing the completed in-memory capture failed.
+    #[error("capture media")]
+    Capture {
+        /// Capture output failure.
+        #[from]
+        source: CaptureError,
     },
+}
 
-    /// Reading the HTTP response body failed.
-    #[error("read media response body {url}")]
-    HttpBody {
-        /// Requested media URL.
-        url: Url,
-
-        /// HTTP body stream failure.
-        #[source]
-        source: reqwest::Error,
-    },
-
-    /// Building the reusable media client failed.
-    #[error("build media client")]
-    HttpClient {
-        /// HTTP client construction failure.
-        #[source]
-        source: reqwest::Error,
-    },
-
-    /// Creating stream-download storage failed.
-    #[error("create media buffer")]
-    BufferStorage {
-        /// Storage creation failure.
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// The capture producer stopped before reaching completion.
-    #[error("capture producer ended before download completed")]
-    CaptureIncomplete,
-
-    /// Capture file metadata could not be read.
-    #[error("read capture metadata {}", path.display())]
-    CaptureMetadata {
-        /// Capture file path.
-        path: PathBuf,
-
-        /// Filesystem failure.
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// The capture file has fewer bytes than the declared media length.
-    #[error("capture truncated at {}: {bytes} / {expected} bytes", path.display())]
-    CaptureTruncated {
-        /// Capture file path.
-        path: PathBuf,
-
-        /// Available encoded bytes.
-        bytes: u64,
-
-        /// Expected encoded bytes.
-        expected: u64,
-    },
+impl From<DownloadError> for Error {
+    fn from(source: DownloadError) -> Self {
+        Self::Download {
+            source: Arc::new(source),
+        }
+    }
 }

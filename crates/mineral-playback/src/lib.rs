@@ -6,7 +6,7 @@ mod media;
 mod provider;
 mod registry;
 
-pub use direct::DirectPreparedPlayback;
+pub use direct::{CaptureError, DirectPreparedPlayback, DownloadError};
 pub use error::Error;
 /// Result of a playback operation.
 pub type Result<T> = std::result::Result<T, Error>;
