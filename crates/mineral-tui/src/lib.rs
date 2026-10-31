@@ -22,6 +22,7 @@ pub mod config;
 pub use persistence::Error as StoreError;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use mineral_client::Client;
 use mineral_protocol::{Subscription, SubscriptionTopic};
@@ -32,6 +33,7 @@ use image::fetch::CoverFetcher;
 use image::graphics::TerminalGraphics;
 use runtime::backend::{Backend, BackendBootstrap, ClientBackend, CompletionQueue};
 use runtime::ui::prefs::{UiPrefs, open_tui_store};
+use terminal::ColorReplies;
 use tui::Tui;
 
 /// 启动和运行终端客户端时的失败。
@@ -158,6 +160,7 @@ fn run_app(
     startup: runtime::tui_script::TuiStartup,
 ) -> Result<()> {
     let cfg = Arc::clone(&startup.config);
+    let timeout = Duration::from_millis(*cfg.theme().query_timeout_ms());
     let mut tui = Tui::new()?;
     tui.enter()?;
     // 标题栈 push 与配置开关对称;禁用时不 push,退出也无需 pop。运行时热重载从禁用→
@@ -165,11 +168,27 @@ fn run_app(
     if *cfg.window_title().enabled() {
         tui.push_title_stack()?;
     }
-    // 图片能力探测必须在进 alternate screen 之后、读 events 之前执行，因为底层会临时
-    // 往 stdio 写探测 escape 序列并读取响应。
+    // Color and graphics probes share stdin with keyboard events and run before the event loop.
+    let color_replies = match ColorReplies::query(timeout) {
+        Ok(replies) => replies,
+        Err(error) => {
+            mineral_log::warn!(
+                error = mineral_log::chain(&error),
+                "terminal color query failed; using theme_defaults"
+            );
+            ColorReplies::default()
+        }
+    };
     let graphics = TerminalGraphics::query();
     let images = ImageEngine::new(Arc::clone(&cfg), cover_fetcher, graphics);
-    let mut app = App::new(backend, images, tui.launch_cursor(), cfg, ui_prefs);
+    let mut app = App::new(
+        backend,
+        images,
+        tui.launch_cursor(),
+        cfg,
+        ui_prefs,
+        color_replies,
+    );
     app.apply_tui_startup(startup);
     let result = app.run(&mut tui);
     tui.exit()?;

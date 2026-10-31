@@ -3,12 +3,11 @@
 -- 终端色槽，名称或编号 0-15
 ---@alias mineral.AnsiSlot "black"|"red"|"green"|"yellow"|"blue"|"magenta"|"cyan"|"white"|"bright_black"|"bright_red"|"bright_green"|"bright_yellow"|"bright_blue"|"bright_magenta"|"bright_cyan"|"bright_white"|integer
 
--- 颜色："#rrggbb"、{ hex = "#rrggbb" }、{ ansi = "blue" } 或 { reset = true }
--- ansi 跟随终端配色，reset 使用终端默认色。
----@alias mineral.ColorValue string|{ hex: string }|{ ansi: mineral.AnsiSlot }|{ reset: boolean }
+-- A #rrggbb string, "reset", or a color intent from mineral.terminal / mineral.color.
+---@alias mineral.ColorValue string|mineral.ColorIntent
 
--- 具体色或主题色引用，如 "peach" 或 { token = "peach" }
----@alias mineral.ColorRef mineral.ColorValue|{ token: string }
+-- A color value or a theme token name, such as "peach".
+---@alias mineral.ColorRef mineral.ColorValue
 
 -- 单键或键数组，如 "<Space>" 或 { "n", "j" }；数组整体替换，空数组解绑。
 --

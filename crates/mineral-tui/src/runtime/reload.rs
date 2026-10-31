@@ -9,6 +9,8 @@
 
 use std::sync::Arc;
 
+use crate::image::colors::derive_accents;
+use crate::render::theme::Theme;
 use crate::runtime::state::LibraryUpdate;
 
 impl crate::app::App {
@@ -31,7 +33,7 @@ impl crate::app::App {
         let anim = cfg.animation();
         let tick_ms = *anim.frame_tick_ms();
         // 固化型(重建即换,无运行态):主题色 token / 窗口标题模板 / keymap 查表。
-        self.theme_base = crate::render::theme::Theme::from_config(cfg.theme());
+        self.theme_base = Theme::from_config(&cfg, &self.terminal_colors);
         self.window_title = crate::runtime::window_title::WindowTitle::new(cfg.window_title());
         self.keymap = crate::runtime::keymap::Keymap::from_config(cfg.keys(), cfg.behavior());
         self.notice_hint = Self::compose_notice_hint(&self.keymap);
@@ -50,7 +52,13 @@ impl crate::app::App {
                 .spectrum_cover
                 .as_ref()
                 .and_then(|url| self.state.resources.images.palettes.get(url))
-                .map(crate::image::colors::derive_accents)
+                .map(|palette| {
+                    derive_accents(
+                        palette,
+                        self.theme_base.background_rgb(),
+                        *dynamic.minimum_contrast(),
+                    )
+                })
         });
         self.accent_fade
             .set_target(accent_target.flatten(), &self.theme_base);

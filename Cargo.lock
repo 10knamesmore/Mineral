@@ -3574,6 +3574,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "rustc-hash 2.1.2",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
@@ -3756,6 +3757,7 @@ dependencies = [
  "typed-builder",
  "unicode-width 0.2.0",
  "url",
+ "vte",
 ]
 
 [[package]]
@@ -7048,6 +7050,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
 ]
 
 [[package]]

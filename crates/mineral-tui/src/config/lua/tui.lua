@@ -1,6 +1,16 @@
 ---@type mineral.TuiConfig
 return {
-  -- theme = { accent = "#f38ba8" },
+  -- Default colors follow the terminal; missing replies use theme_defaults.
+  -- theme_defaults accepts fixed #rrggbb colors only.
+  -- theme_defaults = { background = "#1e1e2e" },
+  -- theme = {
+  --   accent = mineral.terminal.ansi.blue,
+  --   surface0 = mineral.color.mix(
+  --     mineral.terminal.background,
+  --     mineral.terminal.foreground,
+  --     0.10
+  --   ),
+  -- },
   -- keys = { play_pause = "x" },
   -- copy = {
   --   templates = {

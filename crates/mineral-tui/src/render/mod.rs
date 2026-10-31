@@ -12,3 +12,4 @@ pub mod cursor;
 pub(crate) mod memo;
 pub mod palette;
 pub mod theme;
+pub(crate) mod theme_palette;

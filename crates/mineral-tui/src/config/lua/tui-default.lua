@@ -2,8 +2,35 @@ local KB = 1024
 local MB = KB * 1024
 local GB = MB * 1024
 
+local foreground = mineral.terminal.foreground
+local background = mineral.terminal.background
+local ansi = mineral.terminal.ansi
+local mix = mineral.color.mix
+
 ---@type mineral.TuiConfig
 return {
+  theme_defaults = {
+    foreground = "#cdd6f4",
+    background = "#1e1e2e",
+    ansi = {
+      "#45475a",
+      "#f38ba8",
+      "#a6e3a1",
+      "#f9e2af",
+      "#89b4fa",
+      "#cba6f7",
+      "#94e2d5",
+      "#bac2de",
+      "#585b70",
+      "#f38ba8",
+      "#a6e3a1",
+      "#f9e2af",
+      "#89b4fa",
+      "#cba6f7",
+      "#94e2d5",
+      "#a6adc8",
+    },
+  },
   source_colors = {
     am = "#FA243C",
     netease = "#9D2928",
@@ -19,20 +46,21 @@ return {
   },
   theme = {
     background = "base",
-    base = "#1e1e2e",
-    mantle = "#181825",
-    crust = "#11111b",
-    surface0 = "#313244",
-    surface1 = "#45475a",
-    overlay = "#6c7086",
-    subtext = "#a6adc8",
-    text = "#cdd6f4",
-    accent = "#cba6f7",
-    accent_2 = "#74c7ec",
-    red = "#f38ba8",
-    yellow = "#f9e2af",
-    green = "#a6e3a1",
-    peach = "#fab387",
+    query_timeout_ms = 300,
+    base = background,
+    mantle = mix(background, foreground, 0.03),
+    crust = mix(background, foreground, 0.05),
+    surface0 = mix(background, foreground, 0.10),
+    surface1 = mix(background, foreground, 0.22),
+    overlay = mix(background, foreground, 0.45),
+    subtext = mix(background, foreground, 0.78),
+    text = foreground,
+    accent = ansi.magenta,
+    accent_2 = ansi.cyan,
+    red = ansi.red,
+    yellow = ansi.yellow,
+    green = ansi.green,
+    peach = ansi.yellow,
     search_hit = {
       color = "peach",
       modifiers = { "bold", "underline", "italic" },
@@ -40,6 +68,7 @@ return {
     dynamic = {
       enabled = true,
       fade_ms = 3000,
+      minimum_contrast = 4.5,
     },
     text_alpha = {
       strong = 0.78,

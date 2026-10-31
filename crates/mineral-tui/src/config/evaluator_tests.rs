@@ -45,7 +45,7 @@ fn hosts_are_separate_and_setup_receives_tui_api() -> color_eyre::Result<()> {
     let loaded = evaluate_tui(
         &setup_source(
             r#"
-            assert(_G.mineral == nil)
+            assert(type(_G.mineral) == "userdata")
             assert(require("mineral.tui") == mineral)
             assert(type(mineral.ui.toast) == "function")
             assert(type(mineral.config.override) == "function")

@@ -7,7 +7,9 @@
 use image::DynamicImage;
 use kmeans_colors::{Sort, get_kmeans};
 use palette::cast::from_component_slice;
+use palette::color_difference::Wcag21RelativeContrast;
 use palette::convert::FromColorUnclamped;
+use palette::white_point::D65;
 use palette::{FromColor, IntoColor, Lab, Lch, Srgb};
 
 use crate::render::accent::AccentPair;
@@ -82,12 +84,6 @@ pub fn extract_palette(
     CoverPalette::new(swatches)
 }
 
-/// accent 派生色的明度 clamp 下限(Lab L):再低在深色背景上晦暗难辨。
-const ACCENT_L_MIN: f32 = 55.0;
-
-/// accent 派生色的明度 clamp 上限(Lab L):再高泛白失彩,强调感消失。
-const ACCENT_L_MAX: f32 = 78.0;
-
 /// accent 派生色的彩度下限:近灰封面(黑白 / 低饱和)派生出的强调色提到此彩度,
 /// 保留一丝可辨的色相倾向而不至于像禁用态的灰。
 const ACCENT_CHROMA_MIN: f32 = 16.0;
@@ -95,28 +91,28 @@ const ACCENT_CHROMA_MIN: f32 = 16.0;
 /// 主 / 副强调色的最小色相距离(度):色板里拉不开就由主色旋转派生副色。
 const HUE_SEPARATION_DEG: f32 = 50.0;
 
-/// 从封面色板派生一对强调色(主 = 最鲜艳簇,副 = 与主色相拉开的次鲜艳簇)。
+/// Derives primary and secondary accents from the most chromatic cover colors.
 ///
-/// 两色都经可读性整形:Lab 明度 clamp 进 [`ACCENT_L_MIN`]..=[`ACCENT_L_MAX`]、
-/// 彩度保底 [`ACCENT_CHROMA_MIN`]、出 sRGB 色域则保明度/色相收彩度。色板内
-/// 无色相距离 ≥ [`HUE_SEPARATION_DEG`] 的候选(单色 / 同色系封面)时,副色由
-/// 主色旋转 [`HUE_SEPARATION_DEG`] 派生,保持同源和谐。纯函数、确定性,
-/// 每次封面切换在 app 层调用一次(6 色以内,开销可忽略)。
+/// The secondary accent uses a distinct hue when available, or rotates the primary hue.
+/// Each color keeps its lightness if it meets the requested WCAG contrast against
+/// `background`; otherwise its Lab lightness moves toward the higher-contrast black
+/// or white endpoint. Gamut mapping preserves hue and reduces chroma as needed.
 ///
-/// # Params:
-///   - `palette`: 封面色板(恒非空)
-///
-/// # Return:
-///   派生的强调色对。
-pub fn derive_accents(palette: &CoverPalette) -> AccentPair {
-    // 色板恒非空(CoverPalette::new 保证),fallback 仅兜类型穷尽:中性紫灰。
-    let fallback = Lch::new(65.0, 20.0, 300.0);
+/// `palette` is nonempty. `minimum_contrast` comes from the caller's settings and
+/// must be finite and at least 1. If the requested ratio is unattainable against
+/// this background, the result is the higher-contrast black or white endpoint.
+pub fn derive_accents(
+    palette: &CoverPalette,
+    background: Rgb,
+    minimum_contrast: f32,
+) -> AccentPair {
     let lchs: Vec<Lch> = palette.swatches().iter().map(|c| lch_of(*c)).collect();
     let seed = lchs
         .iter()
         .copied()
-        .reduce(|a, b| if b.chroma > a.chroma { b } else { a })
-        .unwrap_or(fallback);
+        .fold(lch_of(palette.sample_rgb(0)), |a, b| {
+            if b.chroma > a.chroma { b } else { a }
+        });
     let second = lchs
         .iter()
         .copied()
@@ -130,18 +126,54 @@ pub fn derive_accents(palette: &CoverPalette) -> AccentPair {
             )
         });
     AccentPair {
-        accent: readable_rgb(seed),
-        accent_2: readable_rgb(second),
+        accent: readable_rgb(seed, background, minimum_contrast),
+        accent_2: readable_rgb(second, background, minimum_contrast),
     }
 }
 
-/// 把一个 Lch 候选整形成可读的强调色:明度 clamp + 彩度保底 + 色域内收。
-fn readable_rgb(lch: Lch) -> Rgb {
-    rgb_in_gamut(
-        lch.l.clamp(ACCENT_L_MIN, ACCENT_L_MAX),
-        lch.chroma.max(ACCENT_CHROMA_MIN),
-        lch.hue.into_positive_degrees(),
-    )
+/// Adjusts lightness only when the gamut-mapped, quantized color lacks contrast.
+fn readable_rgb(lch: Lch, background: Rgb, minimum_contrast: f32) -> Rgb {
+    let background = srgb_of(background);
+    let chroma = lch.chroma.max(ACCENT_CHROMA_MIN);
+    let hue = lch.hue.into_positive_degrees();
+    let original = rgb_in_gamut(lch.l, chroma, hue);
+    if srgb_of(original).relative_contrast(background) >= minimum_contrast {
+        return original;
+    }
+
+    let black = Rgb::new(0, 0, 0);
+    let white = Rgb::new(255, 255, 255);
+    let (mut readable_lightness, mut readable) = if srgb_of(black).relative_contrast(background)
+        >= srgb_of(white).relative_contrast(background)
+    {
+        (Lch::<D65>::min_l(), black)
+    } else {
+        (Lch::<D65>::max_l(), white)
+    };
+    if srgb_of(readable).relative_contrast(background) < minimum_contrast {
+        return readable;
+    }
+    let mut unreadable_lightness = lch.l;
+
+    // Keep the passing endpoint while narrowing the lightness interval. Stop
+    // when f32 cannot represent another midpoint; no visual threshold is needed.
+    loop {
+        let lightness = (unreadable_lightness + readable_lightness) * 0.5;
+        if lightness == unreadable_lightness || lightness == readable_lightness {
+            return readable;
+        }
+        let candidate = rgb_in_gamut(lightness, chroma, hue);
+        if srgb_of(candidate).relative_contrast(background) >= minimum_contrast {
+            readable_lightness = lightness;
+            readable = candidate;
+        } else {
+            unreadable_lightness = lightness;
+        }
+    }
+}
+
+fn srgb_of(color: Rgb) -> Srgb<f32> {
+    Srgb::new(color.r, color.g, color.b).into_format()
 }
 
 /// 保明度 / 色相、逐步收彩度直到落进 sRGB 色域(经典 gamut mapping)。

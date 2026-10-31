@@ -91,15 +91,16 @@ pub fn from_source<T: DeserializeOwned>(
     from_lua_table(merged).map_err(|warning| Error::InvalidConfig { warning })
 }
 
-/// 只求值宿主内置默认;函数摘取后同时返回强类型配置与数据树。
+/// Evaluates bundled defaults in the host's VM, with its Lua value constructors installed.
+/// Returns the typed configuration and data tree after callback extraction.
 pub fn defaults<T: DeserializeOwned>(
+    lua: &Lua,
     source: &str,
     name: &str,
     prepare: fn(&Lua, &Table) -> mlua::Result<()>,
 ) -> Result<(T, serde_json::Value)> {
-    let lua = Lua::new();
-    let default = eval_default(&lua, source, name)?;
-    finalize_default(&lua, default, prepare)
+    let default = eval_default(lua, source, name)?;
+    finalize_default(lua, default, prepare)
 }
 
 /// 默认表无法落型属于程序包错误,不作为用户文件告警。
