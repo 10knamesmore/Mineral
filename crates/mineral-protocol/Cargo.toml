@@ -25,7 +25,7 @@ strum_macros   = { workspace = true }
 thiserror      = { workspace = true }
 tokio          = { workspace = true }
 tokio-util     = { workspace = true }
-futures-util   = { workspace = true }
+futures-util   = { workspace = true, features = ["sink"] }
 typed-builder  = { workspace = true }
 async-trait    = { workspace = true }
 

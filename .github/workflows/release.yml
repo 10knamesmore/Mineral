@@ -11,11 +11,6 @@ on:
         description: "tag / Release 标题的一句话(可空)"
         required: false
         type: string
-      publish_crates:
-        description: "release to crates.io"
-        required: true
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -132,7 +127,6 @@ jobs:
   crates-publish:
     name: publish to crates.io
     needs: release
-    if: ${{ inputs.publish_crates }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
