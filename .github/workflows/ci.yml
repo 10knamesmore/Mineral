@@ -19,10 +19,10 @@ jobs:
       # ALSA 开发头文件是**编译期**依赖:rodio/cpal 经 alsa-sys → pkg-config 链接
       # libasound,缺它 build 直接挂。AudioMode::Auto 在无输出设备时使用 null backend,
       # 因此 job 不需要运行期音频 sink。
-      - name: 安装 ALSA 开发库
+      - name: 安装构建依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev
+          sudo apt-get install -y libasound2-dev cmake nasm
 
       - name: 安装最新 stable
         run: rustup toolchain install stable --component rustfmt --component clippy --no-self-update

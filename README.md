@@ -70,11 +70,11 @@ cargo install --locked --git https://github.com/10knamesmore/Mineral mineral
 <details>
 <summary><b>源码构建依赖</b></summary>
 
-| 平台            | 依赖                                               |
-| --------------- | -------------------------------------------------- |
-| Arch Linux      | `pacman -S alsa-lib openssl pkgconf`               |
-| Debian / Ubuntu | `apt install libasound2-dev libssl-dev pkg-config` |
-| macOS           | 无额外依赖(音频走 CoreAudio)                       |
+| 平台            | 依赖                                                        |
+| --------------- | ----------------------------------------------------------- |
+| Arch Linux      | `pacman -S alsa-lib openssl pkgconf cmake nasm`                |
+| Debian / Ubuntu | `apt install libasound2-dev libssl-dev pkg-config cmake nasm` |
+| macOS           | `brew install cmake`；Intel Mac 另需 `brew install nasm`      |
 
 ```bash
 git clone https://github.com/10knamesmore/Mineral && cd Mineral

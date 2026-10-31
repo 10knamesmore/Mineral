@@ -1,12 +1,13 @@
 //! 按固定像素目标解码封面；JPEG 保留满足两轴需求的最小 IDCT 档位。
 
-use std::io::Cursor;
-
 use image::{DynamicImage, GrayImage, ImageFormat, RgbImage};
-use jpeg_decoder::{CodingProcess, Decoder, ImageInfo, PixelFormat};
+use turbojpeg::{
+    Colorspace, DecompressHeader, Decompressor, Image as JpegOutput, PixelFormat, ScalingFactor,
+};
 
 use super::key::PixelSize;
 use super::resize::{self, thumbnail_exact};
+use crate::config::CoverDecodePixelsConfig;
 
 /// 封面像素解码失败。
 #[derive(Debug, thiserror::Error)]
@@ -20,23 +21,15 @@ pub(super) enum Error {
 
     /// JPEG 头或像素解码失败。
     #[error("decode JPEG cover")]
-    Jpeg(#[from] jpeg_decoder::Error),
+    Jpeg(#[from] turbojpeg::Error),
 
     /// 图片尺寸无法转换为目标整数类型。
     #[error("convert cover dimensions")]
     Dimensions(#[from] std::num::TryFromIntError),
 
-    /// JPEG 解码器没有给出头信息。
-    #[error("JPEG header missing after read_info")]
-    MissingJpegHeader,
-
     /// JPEG 像素数据与解码后的尺寸不一致。
     #[error("JPEG pixels do not match decoded dimensions")]
     InvalidJpegPixels,
-
-    /// 缩小解码不支持该 JPEG 像素格式。
-    #[error("scaled JPEG requires RGB or grayscale")]
-    UnsupportedJpegPixels,
 }
 
 /// 按配置准备显示像素，保持比例且不放大；无缩小解码能力的格式先完整解码再缩小。
@@ -49,13 +42,13 @@ pub(super) enum Error {
 ///   达到目标或原始分辨率的图片；无效图片返回解码错误
 pub(super) fn display(
     bytes: &[u8],
-    target: &crate::config::CoverDecodePixelsConfig,
+    target: &CoverDecodePixelsConfig,
 ) -> Result<DynamicImage, Error> {
     let required = PixelSize::new(target.width().get(), target.height().get());
     if image::guess_format(bytes)? == ImageFormat::Jpeg {
         let (decoder, info) = open_jpeg(bytes)?;
         if supports_scaling(info) {
-            return decode_jpeg(decoder, info, required);
+            return decode_jpeg(bytes, decoder, info, required);
         }
     }
     let image = image::load_from_memory(bytes)?;
@@ -100,67 +93,82 @@ pub(super) fn preview(bytes: &[u8], cells: (u16, u16)) -> Result<DynamicImage, E
         return image::load_from_memory(bytes).map_err(Error::from);
     }
     decode_jpeg(
+        bytes,
         decoder,
         info,
         PixelSize::new(u32::from(cells.0) * 2, u32::from(cells.1) * 4),
     )
 }
 
-/// 读取内存图片字节的 JPEG 解码器。
-type JpegDecoder<'bytes> = Decoder<Cursor<&'bytes [u8]>>;
-
 /// 读取 JPEG 头，不分配完整像素。
-fn open_jpeg(bytes: &[u8]) -> Result<(JpegDecoder<'_>, ImageInfo), Error> {
-    let mut decoder = JpegDecoder::new(Cursor::new(bytes));
-    decoder.read_info()?;
-    let info = decoder.info().ok_or(Error::MissingJpegHeader)?;
-    Ok((decoder, info))
+fn open_jpeg(bytes: &[u8]) -> Result<(Decompressor, DecompressHeader), Error> {
+    let mut decoder = Decompressor::new()?;
+    let header = decoder.read_header(bytes)?;
+    Ok((decoder, header))
 }
 
 /// RGB 和灰度 DCT 图片可直接缩小解码，其余 JPEG 保留通用解码器的色彩处理。
-fn supports_scaling(info: ImageInfo) -> bool {
-    info.coding_process != CodingProcess::Lossless
-        && matches!(info.pixel_format, PixelFormat::L8 | PixelFormat::RGB24)
+fn supports_scaling(header: DecompressHeader) -> bool {
+    !header.is_lossless
+        && matches!(
+            header.colorspace,
+            Colorspace::RGB | Colorspace::YCbCr | Colorspace::Gray
+        )
 }
 
 /// 保留满足两轴像素需求的最小 JPEG IDCT 档位，不再生成精确尺寸的滤波缓冲。
 fn decode_jpeg(
-    mut decoder: JpegDecoder<'_>,
-    info: ImageInfo,
+    bytes: &[u8],
+    mut decoder: Decompressor,
+    header: DecompressHeader,
     required: PixelSize,
 ) -> Result<DynamicImage, Error> {
-    let scaled = scaled_dimensions((info.width, info.height), required);
-    // scale 在任意一轴满足请求时停止；短轴为 1 时多个倍率取整相同，至少请求 2 让另一轴决定倍率。
-    let requested = (scaled.0.max(2), scaled.1.max(2));
-    let (width, height) = decoder.scale(requested.0, requested.1)?;
-    let pixels = decoder.decode()?;
-    mineral_log::debug!(target: "cover", source_width = info.width, source_height = info.height,
-        decoded_width = width, decoded_height = height, decoded_bytes = pixels.len(),
+    let source = (u32::try_from(header.width)?, u32::try_from(header.height)?);
+    let scaling = scaling_factor(source, required);
+    decoder.set_scaling_factor(scaling)?;
+    let scaled = header.scaled(scaling);
+    let width = u32::try_from(scaled.width)?;
+    let height = u32::try_from(scaled.height)?;
+    let format = if header.colorspace == Colorspace::Gray {
+        PixelFormat::GRAY
+    } else {
+        PixelFormat::RGB
+    };
+    let mut output = JpegOutput {
+        pixels: vec![0; scaled.width * scaled.height * format.size()],
+        width: scaled.width,
+        pitch: scaled.width * format.size(),
+        height: scaled.height,
+        format,
+    };
+    decoder.decompress(bytes, output.as_deref_mut())?;
+    mineral_log::debug!(target: "cover", source_width = source.0, source_height = source.1,
+        decoded_width = width, decoded_height = height, decoded_bytes = output.pixels.len(),
         "JPEG cover decoded");
-    let width = u32::from(width);
-    let height = u32::from(height);
-    match info.pixel_format {
-        PixelFormat::L8 => GrayImage::from_raw(width, height, pixels).map(DynamicImage::ImageLuma8),
-        PixelFormat::RGB24 => {
-            RgbImage::from_raw(width, height, pixels).map(DynamicImage::ImageRgb8)
-        }
-        PixelFormat::L16 | PixelFormat::CMYK32 => return Err(Error::UnsupportedJpegPixels),
+    if format == PixelFormat::GRAY {
+        GrayImage::from_raw(width, height, output.pixels).map(DynamicImage::ImageLuma8)
+    } else {
+        RgbImage::from_raw(width, height, output.pixels).map(DynamicImage::ImageRgb8)
     }
     .ok_or(Error::InvalidJpegPixels)
 }
 
 /// 选择两轴均满足采样网格的最大 JPEG 缩小倍率；原图较小时保留原尺寸。
-fn scaled_dimensions(source: (u16, u16), required: PixelSize) -> (u16, u16) {
-    let required_width = required.width().min(u32::from(source.0));
-    let required_height = required.height().min(u32::from(source.1));
-    for divisor in [8, 4, 2] {
+fn scaling_factor(source: (u32, u32), required: PixelSize) -> ScalingFactor {
+    let required_width = required.width().min(source.0);
+    let required_height = required.height().min(source.1);
+    for (divisor, scaling) in [
+        (8, ScalingFactor::ONE_EIGHTH),
+        (4, ScalingFactor::ONE_QUARTER),
+        (2, ScalingFactor::ONE_HALF),
+    ] {
         let width = source.0.div_ceil(divisor);
         let height = source.1.div_ceil(divisor);
-        if u32::from(width) >= required_width && u32::from(height) >= required_height {
-            return (width, height);
+        if width >= required_width && height >= required_height {
+            return scaling;
         }
     }
-    source
+    ScalingFactor::ONE
 }
 
 #[cfg(test)]
@@ -235,16 +243,16 @@ mod tests {
             assert_eq!(decoded.dimensions(), expected);
         }
         assert_eq!(
-            super::scaled_dimensions(
+            super::scaling_factor(
                 (8300, 8300),
                 PixelSize::new(/*width*/ 1024, /*height*/ 1024)
-            ),
-            (1038, 1038)
+            )
+            .scale(8300),
+            1038
         );
-        assert_eq!(
-            super::scaled_dimensions((4000, 2000), PixelSize::new(/*width*/ 800, /*height*/ 300)),
-            (1000, 500)
-        );
+        let scaling =
+            super::scaling_factor((4000, 2000), PixelSize::new(/*width*/ 800, /*height*/ 300));
+        assert_eq!((scaling.scale(4000), scaling.scale(2000)), (1000, 500));
         Ok(())
     }
 

@@ -8,7 +8,7 @@ url="https://github.com/10knamesmore/Mineral"
 license=('MIT')
 options=(!lto !debug)
 depends=('alsa-lib' 'openssl' 'zlib' 'gcc-libs')
-makedepends=('cargo')
+makedepends=('cargo' 'cmake' 'nasm')
 # 同版本重打包(hotfix)的 patch 列表。仓库里恒为空,不要手工填:
 # aur-publish 工作流按 dispatch 输入的 commit SHA 现场生成 patch 并注入此数组,
 # release.yml 正式发版渲染时强制清空(新 tag 已含修复,残留 patch 会二次 apply 失败)。
