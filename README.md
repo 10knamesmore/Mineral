@@ -11,7 +11,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square&logo=rust)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-blueviolet?style=flat-square)
 
-名字取自 [Mineral](<https://en.wikipedia.org/wiki/Mineral_(band)>) —— 90 年代得州的 emo / post-rock 乐队。
+名字取自 [Mineral](<https://en.wikipedia.org/wiki/Mineral_(band)>) —— 90s emo / post hardcore 乐队。
 
 <img src="https://raw.githubusercontent.com/10knamesmore/Mineral/main/assets/screenshot-library.png" alt="Mineral 曲库视图:歌单 / 封面 / 歌词 / 频谱" width="800"/>
 
