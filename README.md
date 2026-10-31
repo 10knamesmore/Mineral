@@ -197,6 +197,12 @@ cargo dylint --all -- --locked --workspace --all-targets  # custom lint
 cargo run --release                      # run TUI
 ```
 
+## 图形界面客户端 (GUI)
+
+得益于 Client / Daemon 分离架构，除了内置的 TUI 客户端外，还可以使用桌面图形客户端（与 TUI 共享同一个后台 `mineral` daemon、播放队列与配置）：
+
+- **[mineral-gui](https://github.com/WeissHymmnos/mineral-gui)** — 基于 Qt 6 / GTK 4 的跨平台桌面客户端，支持专辑封面动态取色、逐字歌词滚动、频谱可视化、迷你播放器以及完整的 `daemon.lua` 图形化配置（提供 Linux `.rpm` / `.deb`、macOS `.dmg` 与 Windows 发行包）。
+
 ## 致谢
 
 感谢以下项目带来的启发与参考:
