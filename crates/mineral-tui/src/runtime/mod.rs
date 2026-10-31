@@ -3,6 +3,7 @@
 pub mod action;
 pub(crate) mod backend;
 pub(crate) mod collection;
+pub(crate) mod cover_collage;
 pub mod daemon;
 pub mod deep_search;
 pub mod filter;

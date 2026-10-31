@@ -7,24 +7,25 @@ use std::sync::Arc;
 
 use crate::config::CoverCellFit;
 use image::{DynamicImage, RgbaImage};
-use mineral_common::revision::Revision;
 use mineral_model::MediaUrl;
 use mineral_model::SourceKind;
-use mineral_protocol::AdvanceKind;
 use ratatui::layout::Rect;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::oneshot;
 
-use super::cache::{CoverCache, TerminalImageCache};
-use super::graphics::{TerminalBackend, TerminalGraphics};
-use super::key::{ImageIdentity, PixelSize, TerminalImageKey};
+use super::cache::{CoverCache, ImageCache};
+use super::graphics::{GraphicsProtocol, TerminalGraphics, window_cell_pixels};
+use super::halfblock::HalfblockImage;
 #[cfg(test)]
-use super::terminal::TerminalImage;
+use super::key::PixelSize;
+use super::key::{ImageIdentity, PreviewTarget, TerminalImageKey};
+use super::prepared_image::PreparedImage;
 use crate::image::CoverFingerprint;
-use crate::image::encode::{CoverEncoder, EncodeRequest, EncodeResult};
+use crate::image::encode::{
+    CoverEncoder, EncodeCompletion, EncodeError, EncodeIdentity, EncodeInput, EncodeRequest,
+};
 use crate::image::fetch::{CoverCompletion, CoverFetcher, CoverRequestKind, OriginalImageError};
-use crate::render::anim::{Transition, ticks16_from_ms};
-use crate::render::palette::CoverPalette;
+use crate::image::resize;
 
 /// 图片下载与终端成品编码 worker 的进程内句柄。
 struct ImageWorkers {
@@ -35,92 +36,21 @@ struct ImageWorkers {
     encoder: CoverEncoder,
 }
 
-/// 一种已在稳定布局中出现的 preview 目标尺寸。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct PreviewTarget {
-    /// 目标 cell 宽高。
-    cells: (u16, u16),
-
-    /// 目标像素尺寸；普通 preview 来自 cell 几何，行内封面使用低清采样上限。
-    pixels: PixelSize,
-
-    /// 是否供行内封面编码读取像素，其缓存键与屏上的 halfblock preview 隔离。
-    thumbnail: bool,
-}
-
-impl PreviewTarget {
-    /// 从目标区域与终端 cell 像素尺寸构造 preview 几何。
-    fn from_area(area: Rect, cell_pixels: (u16, u16)) -> Self {
-        let cells = (area.width, area.height);
-        Self {
-            cells,
-            pixels: PixelSize::from_cells(cells, cell_pixels),
-            thumbnail: false,
-        }
-    }
-
-    /// 行内封面等比采样到 32×32 以内,不补边、不保留完整解码图。
-    fn thumbnail() -> Self {
-        Self {
-            cells: (32, 16),
-            pixels: PixelSize::new(32, 32),
-            thumbnail: true,
-        }
-    }
-
-    /// 为图片身份构造 preview 缓存键。
-    fn key(self, identity: ImageIdentity, cell_fit: CoverCellFit) -> TerminalImageKey {
-        if self.thumbnail {
-            TerminalImageKey::thumbnail(identity, self.pixels)
-        } else {
-            TerminalImageKey::rasterized(identity, self.pixels, cell_fit)
-        }
-    }
-}
-
-/// 一段进行中的全屏切歌封面转场:新旧两图按样式逐帧合成 halfblock,推满落定回
-/// 终端图协议高清。转场窗口恰好盖住新图的离线编码期,落定无占位闪。
-#[derive(Clone, PartialEq)]
-pub struct CoverTransition {
-    /// 退场封面(切歌前封面区显示的图)。
-    pub from_url: MediaUrl,
-
-    /// 进场封面(在播新图)。
-    pub to_url: MediaUrl,
-
-    /// 进场档位:server 报告的当前曲进入档位(`Prev` 反向位移,不镜像内容);`None` = 尚未收到 /
-    /// 无在播曲,与 `Next` / `RandomAccess` 一样按「下一首」动效渲染。
-    pub advance: Option<AdvanceKind>,
-
-    /// 转场进程(推满即落定;时长 = `cover_transition.duration_ms`)。
-    pub anim: Transition,
-}
-
-/// 负责图片请求生命周期、终端成品缓存、渲染政策与 worker/backend 生命周期的中央引擎。
+/// 负责图片请求生命周期、终端成品缓存、渲染政策与 worker 的中央引擎。
 /// preview 与 decode 候选的缓存、失败和在途判断均在此收敛。
 pub struct ImageEngine {
     /// 与应用状态共享的当前配置，整棵替换后所有现读政策立即生效。
     cfg: Arc<crate::config::TuiConfig>,
 
-    /// 图片引擎与编码 worker 共享的唯一 terminal backend。
-    terminal_backend: TerminalBackend,
+    /// 图片引擎与编码 worker 共享的本次会话输出能力。
+    graphics: Arc<TerminalGraphics>,
+
+    /// 主循环维护的字符像素宽高；编码请求携带提交时的目标尺寸。
+    cell_pixels: (u16, u16),
 
     /// 已拉好的封面原始图(字节预算 LRU;越 `cover.cache.image` 逐出最久未用)。
     /// 逐出时联动清理高清终端成品与色板；行内缩略图保留自己的小像素资源。
     pub cache: CoverCache,
-
-    /// 已取色的封面色板(URL → 频谱 2D 色场的重点色,Lab 明度升序)。
-    /// 缺 key = 没取到色(取色失败 / 还没回传)。session 内一直留,顺手缓存复用。
-    pub palettes: FxHashMap<MediaUrl, CoverPalette>,
-
-    /// 上次已应用到频谱的封面 key(频谱当前色场对应哪张封面)。
-    /// `None` = 频谱在 hue 漂移(无封面 / 取色未就绪)。`sync_cover_palette` 身份判定用。
-    pub spectrum_cover: Option<MediaUrl>,
-
-    /// 当前播放封面的色板拷贝，与 `spectrum_cover` 同处维护，供配置重载时重设氛围背景。
-    /// 不依赖原图 LRU 的派生色板表，浏览其他封面导致缓存逐出时仍保留当前歌曲配色。
-    /// `None` 表示取色失败或无封面。
-    pub current_palette: Option<CoverPalette>,
 
     /// 正在执行的 preview 或 decode URL；只表达真实 in-flight。
     pending: FxHashSet<MediaUrl>,
@@ -143,13 +73,13 @@ pub struct ImageEngine {
     /// 本进程按需 decode 失败的 URL；失败后继续显示 preview，preview 也没有才为空白。
     decode_failures: FxHashSet<MediaUrl>,
 
-    /// 协议无关的真实封面低清 preview 缓存；协议切换和完整 decoded LRU 逐出都不清理。
-    pub preview_images: TerminalImageCache,
+    /// 真实封面低清 preview 缓存；完整 decoded LRU 逐出时不清理。
+    pub preview_images: ImageCache<HalfblockImage>,
 
     /// 终端图片成品缓存(字节预算 LRU;越 `cover.cache.protocol` 逐出最久未渲染)。
     /// 成品保留协议渲染状态与资源，render 命中后无需每帧重编；逐出的图片滚回时
     /// 后台重编，其间使用 halfblock。
-    pub terminal_images: TerminalImageCache,
+    pub terminal_images: ImageCache<PreparedImage>,
 
     /// 本次准备要求的行内图片 placement；输出提交时生成协议指令。
     pub(super) graphics_placements: Vec<(TerminalImageKey, ratatui::layout::Rect)>,
@@ -157,20 +87,11 @@ pub struct ImageEngine {
     /// 由图片引擎独占的下载与终端成品编码 worker。
     workers: ImageWorkers,
 
-    /// 在飞终端图片键集合，准备阶段据此合并编码需求。
-    pub encode_pending: FxHashSet<TerminalImageKey>,
+    /// 真实在飞的内容版本与采样目标；相同 URL 的旧、新内容可以同时在飞。
+    pub(crate) encode_pending: FxHashSet<EncodeIdentity>,
 
-    /// 进行中的全屏切歌封面转场；`None` 表示稳态。
-    /// 触发、推进与收尾都由 [`Self::tick`] 统一处理，渲染处只读。
-    pub transition: Option<CoverTransition>,
-
-    /// 全屏封面区当前实际显示的封面(转场 from 的身份依据)。与在播封面 diff 出
-    /// 切歌瞬间;非全屏稳态时只跟随不触发。
-    pub displayed_cover: Option<MediaUrl>,
-
-    /// 歌单拼贴合成键 → 上次合成时的就绪成员数。成员图逐张到货时渐进式重拼；
-    /// decode 失败成员不阻塞已就绪图片合成。
-    pub(crate) collage_ready: FxHashMap<MediaUrl, usize>,
+    /// 同一内容与目标失败后不再提交；新内容或新目标不受旧失败影响。
+    encode_failures: FxHashMap<EncodeIdentity, EncodeError>,
 }
 
 impl ImageEngine {
@@ -180,88 +101,74 @@ impl ImageEngine {
     ///   - `cfg`: 与应用状态共享的当前配置
     ///   - `fetcher`: 图片下载、解码与取色 worker
     ///   - `graphics`: 启动期协商出的终端图片能力
+    ///   - `cell_pixels`: 启动时查询的字符像素宽高
     pub(crate) fn new(
         cfg: Arc<crate::config::TuiConfig>,
         fetcher: CoverFetcher,
         graphics: TerminalGraphics,
+        cell_pixels: (u16, u16),
     ) -> Self {
-        let mode = *cfg.cover().protocol();
         let encode_workers = *cfg.cover().encode_workers();
-        let terminal_backend = TerminalBackend::new(graphics, mode);
-        let encoder = CoverEncoder::spawn(encode_workers, &terminal_backend);
-        Self::from_parts(cfg, fetcher, encoder, terminal_backend)
+        let graphics = Arc::new(graphics);
+        let encoder = CoverEncoder::spawn(encode_workers, &graphics);
+        Self::from_parts(cfg, fetcher, encoder, graphics, cell_pixels)
     }
 
     /// 构造不启动 worker 的测试图片引擎。
     #[cfg(test)]
     pub(crate) fn disabled(cfg: Arc<crate::config::TuiConfig>) -> Self {
-        let terminal_backend = TerminalBackend::fixed((8, 16));
         Self::from_parts(
             cfg,
             CoverFetcher::disabled(),
             CoverEncoder::disabled(),
-            terminal_backend,
+            Arc::new(TerminalGraphics::fixed()),
+            (8, 16),
         )
     }
 
     /// 构造支持 Kitty 的测试引擎；不启动 worker，也不探测真实终端。
     #[cfg(test)]
     pub(crate) fn disabled_kitty(cfg: Arc<crate::config::TuiConfig>) -> Self {
-        let backend = TerminalBackend::new(
-            TerminalGraphics::fixed_kitty((8, 16)),
-            crate::config::CoverProtocolMode::Kitty,
-        );
         Self::from_parts(
             cfg,
             CoverFetcher::disabled(),
             CoverEncoder::disabled(),
-            backend,
+            Arc::new(TerminalGraphics::fixed_kitty()),
+            (8, 16),
         )
     }
 
     /// 插入一张真实 Kitty 缩略图，供列表布局与终端输出测试使用。
     #[cfg(test)]
     pub(crate) fn insert_test_thumbnail(&mut self, url: &MediaUrl) -> color_eyre::Result<()> {
-        let pixels = PreviewTarget::thumbnail().pixels;
         let key = self.thumbnail_preview_key(url);
         let source = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
             32,
             32,
             image::Rgb([180, 80, 40]),
         ));
-        let graphics = self
-            .terminal_backend
-            .graphics_for(self.graphics_generation())
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing test terminal backend"))?;
-        let image = TerminalImage::encode(
-            &source,
-            Some(pixels),
-            (1, 1),
-            CoverCellFit::Contain,
-            &graphics,
-        )?;
+        let image = PreparedImage::encode(&source, &key, &self.graphics)?;
         let bytes = image.resident_bytes();
         self.terminal_images.insert(&key, image, bytes);
         Ok(())
     }
 
-    /// 从已经确定的 worker 与 backend 构造图片引擎状态。
+    /// 从已经确定的 worker、会话输出能力与显示尺寸构造图片引擎。
     fn from_parts(
         cfg: Arc<crate::config::TuiConfig>,
         fetcher: CoverFetcher,
         encoder: CoverEncoder,
-        terminal_backend: TerminalBackend,
+        graphics: Arc<TerminalGraphics>,
+        cell_pixels: (u16, u16),
     ) -> Self {
         let image_budget = *cfg.cover().cache().image();
         let preview_budget = *cfg.cover().cache().preview();
         let protocol_budget = *cfg.cover().cache().protocol();
         Self {
             cfg,
-            terminal_backend,
+            graphics,
+            cell_pixels,
             cache: CoverCache::new(image_budget),
-            palettes: FxHashMap::default(),
-            spectrum_cover: None,
-            current_palette: None,
             pending: FxHashSet::default(),
             source_by_url: FxHashMap::default(),
             preview_failures: FxHashSet::default(),
@@ -269,14 +176,12 @@ impl ImageEngine {
             preview_targets: Vec::new(),
             decode_demand: FxHashSet::default(),
             decode_failures: FxHashSet::default(),
-            preview_images: TerminalImageCache::new(preview_budget),
-            terminal_images: TerminalImageCache::new(protocol_budget),
+            preview_images: ImageCache::new(preview_budget),
+            terminal_images: ImageCache::new(protocol_budget),
             graphics_placements: Vec::new(),
             workers: ImageWorkers { fetcher, encoder },
             encode_pending: FxHashSet::default(),
-            transition: None,
-            displayed_cover: None,
-            collage_ready: FxHashMap::default(),
+            encode_failures: FxHashMap::default(),
         }
     }
 
@@ -292,12 +197,34 @@ impl ImageEngine {
     /// 向 worker 投递一次终端图片编码请求。
     ///
     /// # Params:
-    ///   - `request`: 已解码图片、终端成品键与 backend generation
+    ///   - `request`: 已解码图片、终端成品键与目标区域
     pub(crate) fn request_encode(&mut self, request: EncodeRequest) {
+        let identity = &request.identity;
+        if !self.should_encode(identity) {
+            return;
+        }
+        self.encode_pending.insert(identity.clone());
         self.workers.encoder.request(request);
     }
 
-    /// 应用新配置；格边适配由缓存键隔离，预算变化保留内容，协议变化替换 terminal backend。
+    pub(super) fn should_encode(&self, identity: &EncodeIdentity) -> bool {
+        !self.terminal_images.contains(&identity.key)
+            && !self.encode_pending.contains(identity)
+            && !self.encode_failures.contains_key(identity)
+    }
+
+    /// 行内图优先读取独立 preview；高清成品只读取完整解码图。
+    pub(super) fn encode_input(&self, key: &TerminalImageKey) -> Option<EncodeInput> {
+        if matches!(key, TerminalImageKey::Thumbnail { .. })
+            && let Some(revision) = self.preview_images.revision(key)
+        {
+            return Some(EncodeInput::Preview(revision));
+        }
+        let ImageIdentity::Url(url) = key.identity();
+        self.cache.revision(url).map(EncodeInput::Decoded)
+    }
+
+    /// 应用格边适配与缓存预算；图片协议只在启动时选择，修改后需重启。
     ///
     /// # Params:
     ///   - `cfg`: 新的有效配置
@@ -306,23 +233,40 @@ impl ImageEngine {
         let preview_budget = *cfg.cover().cache().preview();
         let protocol_budget = *cfg.cover().cache().protocol();
         let cell_fit = *cfg.cover().cell_fit();
+        if cfg.cover().protocol() != self.cfg.cover().protocol() {
+            mineral_log::info!(
+                target: "cover",
+                requested = ?cfg.cover().protocol(),
+                active = ?self.graphics.protocol(),
+                "cover.protocol 已变更，重启 TUI 后生效"
+            );
+        }
         if self.cell_fit() != cell_fit {
             mineral_log::debug!(target: "cover", previous = ?self.cell_fit(), ?cell_fit,
                 "cover cell fit changed; decoded images and cached variants retained");
+            self.observed_preview_targets = self
+                .observed_preview_targets
+                .drain()
+                .map(|target| target.with_cell_fit(cell_fit))
+                .collect();
+            for target in &mut self.preview_targets {
+                *target = target.with_cell_fit(cell_fit);
+            }
         }
         self.cfg = cfg;
         self.set_budgets(image_budget, preview_budget, protocol_budget);
-        self.apply_graphics_mode();
     }
 
     /// 刷新终端 cell 像素尺寸；尺寸变化由终端成品键自然产生 miss。
     pub(crate) fn refresh_cell_pixels(&mut self) {
-        let _ = self.terminal_backend.refresh_cell_pixels();
+        if let Some(cell_pixels) = window_cell_pixels() {
+            self.cell_pixels = cell_pixels;
+        }
     }
 
     /// 返回当前单个终端 cell 的像素宽高。
     pub(crate) fn cell_pixels(&self) -> (u16, u16) {
-        self.terminal_backend.cell_pixels()
+        self.cell_pixels
     }
 
     /// 现读主封面的格边适配策略；worker 使用请求键中固定的策略。
@@ -330,19 +274,9 @@ impl ImageEngine {
         *self.cfg.cover().cell_fit()
     }
 
-    /// 返回当前 terminal backend generation。
-    pub(crate) fn graphics_generation(&self) -> Revision {
-        self.terminal_backend.generation()
-    }
-
-    /// 返回 cover transition 的 zoom 缩放倍数。
-    pub(crate) fn transition_zoom_scale(&self) -> f32 {
-        *self.cfg.cover_transition().zoom().scale()
-    }
-
     /// 返回当前生效的终端图协议。
-    pub(crate) fn graphics_protocol(&self) -> crate::image::graphics::GraphicsProtocol {
-        self.terminal_backend.protocol()
+    pub(crate) fn graphics_protocol(&self) -> GraphicsProtocol {
+        self.graphics.protocol()
     }
 
     /// 插入一条测试用终端图片成品。
@@ -350,30 +284,16 @@ impl ImageEngine {
     pub(crate) fn insert_test_terminal_image(&mut self, url: &MediaUrl, cells: (u16, u16)) {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
-            crate::image::key::PixelSize::from_cells(cells, self.cell_pixels()),
+            PixelSize::from_cells(cells, self.cell_pixels()),
+            cells,
             self.cell_fit(),
         );
         self.terminal_images
-            .insert(&key, TerminalImage::test_halfblocks(), /*bytes*/ 1);
-    }
-
-    /// 将配置的协议模式应用到当前终端能力。
-    fn apply_graphics_mode(&mut self) {
-        let mode = *self.cfg.cover().protocol();
-        if self.terminal_backend.apply_mode(mode) {
-            self.clear_terminal_state();
-        }
-    }
-
-    /// 清空 terminal backend 的全部协议相关状态。
-    fn clear_terminal_state(&mut self) {
-        self.terminal_images.clear();
-        self.encode_pending.clear();
-        self.graphics_placements.clear();
+            .insert(&key, PreparedImage::test_halfblock(), /*bytes*/ 1);
     }
 
     /// 现调三层 RAM 缓存预算(配置热更):缩小立即逐出直到回落、**不清缓存**;
-    /// 原图侧被逐出项的高清协议成品、色板与频谱标记照常联动清理，保留行内缩略图。
+    /// 原图侧被逐出项的高清成品联动清理，保留行内缩略图。
     ///
     /// # Params:
     ///   - `image_budget`: 原图缓存新预算(配置 `cover.cache.image`)
@@ -396,14 +316,21 @@ impl ImageEngine {
     /// 塞入一张本地合成图(歌单拼贴),与 fetch 回填同规则:清掉该 key 旧协议(下次渲染
     /// 按新图重建),被逐出项的派生物联动清理。拼贴图小、且只在重拼时合成一次,
     /// 指纹就地算。
-    pub(crate) fn insert_synthesized(&mut self, url: &MediaUrl, image: Arc<DynamicImage>) {
-        let fingerprint = CoverFingerprint::of(&image);
-        let evicted = self.cache.insert(url, image, fingerprint);
-        self.terminal_images
-            .remove(&ImageIdentity::Url(url.clone()));
+    pub(crate) fn insert_synthesized(
+        &mut self,
+        url: &MediaUrl,
+        image: Arc<DynamicImage>,
+    ) -> Result<(), resize::Error> {
+        let fingerprint = CoverFingerprint::of(&image)?;
+        let evicted = self.cache.insert(url, image, fingerprint, None);
+        let identity = ImageIdentity::Url(url.clone());
+        // 合成图覆盖内容时旧 preview 也失效；普通 decoded 逐出仍保留独立缩略图。
+        self.preview_images.remove(&identity);
+        self.terminal_images.remove(&identity);
         for u in evicted {
             self.discard_derived(&u);
         }
+        Ok(())
     }
 
     /// 消费 preview 与 decode completion，并结束对应 in-flight。
@@ -456,6 +383,9 @@ impl ImageEngine {
             bytes = ready.bytes,
             "cover preview ready"
         );
+        if matches!(ready.key, TerminalImageKey::Thumbnail { .. }) {
+            self.terminal_images.remove_key(&ready.key);
+        }
         self.preview_images
             .insert(&ready.key, ready.image, ready.bytes);
     }
@@ -468,12 +398,9 @@ impl ImageEngine {
         self.pending.remove(&ready.url);
         self.decode_demand.remove(&ready.url);
         self.decode_failures.remove(&ready.url);
-        if let Some(palette) = ready.palette {
-            self.palettes.insert(ready.url.clone(), palette);
-        }
         let evicted = self
             .cache
-            .insert(&ready.url, ready.image, ready.fingerprint);
+            .insert(&ready.url, ready.image, ready.fingerprint, ready.palette);
         self.terminal_images
             .remove_decoded(&ImageIdentity::Url(ready.url.clone()));
         for url in evicted {
@@ -481,18 +408,13 @@ impl ImageEngine {
         }
     }
 
-    /// 原图逐出后清理高清成品与色板，保留拥有独立小像素资源的行内封面。
-    /// 若它正是频谱当前色场来源，一并解除标记，让下一拍重新同步色场。
+    /// 原图逐出后清理高清成品，保留拥有独立小像素资源的行内封面。
     fn discard_derived(&mut self, url: &MediaUrl) {
         self.terminal_images
             .remove_decoded(&ImageIdentity::Url(url.clone()));
-        self.palettes.remove(url);
-        if self.spectrum_cover.as_ref() == Some(url) {
-            self.spectrum_cover = None;
-        }
     }
 
-    /// 把编码 worker 就绪的终端图片装回缓存；旧 generation 的结果直接丢弃。
+    /// 把编码 worker 就绪的终端图片装回缓存。
     fn drain_ready_terminal_images(&mut self) {
         let ready_images = self.workers.encoder.drain_ready();
         for result in ready_images {
@@ -500,22 +422,11 @@ impl ImageEngine {
         }
     }
 
-    /// 推进图片 worker 回填、终端成品安装与全屏切图转场。
-    ///
-    /// # Params:
-    ///   - `current_cover`: 当前播放图片身份
-    ///   - `advance`: 当前曲的进入档位(server 事实;`None` = 尚未收到 / 无在播曲)
-    ///   - `fullscreen_stable`: 全屏布局是否已经稳定
-    pub(crate) fn tick(
-        &mut self,
-        current_cover: Option<MediaUrl>,
-        advance: Option<AdvanceKind>,
-        fullscreen_stable: bool,
-    ) {
+    /// 消费图片 worker 完成事件并提交待解码需求。
+    pub(crate) fn tick(&mut self) {
         self.drain_cover_completions();
         self.schedule_decode_demand();
         self.drain_ready_terminal_images();
-        self.sync_transition(current_cover, advance, fullscreen_stable);
     }
 
     /// 开始收集本次显示所需的协议 placement，尚不向终端发送。
@@ -545,15 +456,7 @@ impl ImageEngine {
             .observed_preview_targets
             .drain()
             .collect::<Vec<PreviewTarget>>();
-        self.preview_targets.sort_by_key(|target| {
-            (
-                target.cells.0,
-                target.cells.1,
-                target.pixels.width(),
-                target.pixels.height(),
-                target.thumbnail,
-            )
-        });
+        self.preview_targets.sort_by_key(|target| target.sort_key());
     }
 
     /// 记录稳定布局实际使用的 preview 尺寸，供下一拍半径预取复用。
@@ -564,8 +467,11 @@ impl ImageEngine {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        self.observed_preview_targets
-            .insert(PreviewTarget::from_area(area, self.cell_pixels()));
+        self.observed_preview_targets.insert(PreviewTarget::cover(
+            (area.width, area.height),
+            self.cell_pixels(),
+            self.cell_fit(),
+        ));
     }
 
     /// 记录行内封面的低清采样上限；实际 URL 仍由配置半径内的 prefetch 候选决定。
@@ -576,7 +482,7 @@ impl ImageEngine {
 
     /// 返回行内封面复用的低清 preview 键。
     pub(super) fn thumbnail_preview_key(&self, url: &MediaUrl) -> TerminalImageKey {
-        PreviewTarget::thumbnail().key(ImageIdentity::Url(url.clone()), CoverCellFit::Contain)
+        PreviewTarget::thumbnail().key(ImageIdentity::Url(url.clone()))
     }
 
     /// 为 URL 与目标区域构造 preview 缓存键。
@@ -585,8 +491,12 @@ impl ImageEngine {
     ///   - `url`: 图片源 URL
     ///   - `area`: preview 的目标 cell 区域
     pub(crate) fn preview_key(&self, url: &MediaUrl, area: Rect) -> TerminalImageKey {
-        PreviewTarget::from_area(area, self.cell_pixels())
-            .key(ImageIdentity::Url(url.clone()), self.cell_fit())
+        PreviewTarget::cover(
+            (area.width, area.height),
+            self.cell_pixels(),
+            self.cell_fit(),
+        )
+        .key(ImageIdentity::Url(url.clone()))
     }
 
     /// 返回图片与尺寸是否仍需要生成 preview。
@@ -636,7 +546,7 @@ impl ImageEngine {
                 continue;
             }
             for target in &targets {
-                let key = target.key(ImageIdentity::Url(url.clone()), self.cell_fit());
+                let key = target.key(ImageIdentity::Url(url.clone()));
                 if !self.should_prepare_preview(&url, &key) {
                     continue;
                 }
@@ -645,18 +555,14 @@ impl ImageEngine {
                     target: "prefetch",
                     url = %url,
                     ?source,
-                    cell_width = target.cells.0,
-                    cell_height = target.cells.1,
-                    pixel_width = target.pixels.width(),
-                    pixel_height = target.pixels.height(),
+                    cell_width = target.cells().0,
+                    cell_height = target.cells().1,
+                    pixel_width = target.pixels().width(),
+                    pixel_height = target.pixels().height(),
                     cell_fit = ?key.cell_fit(),
                     "generate cover preview"
                 );
-                if !self
-                    .workers
-                    .fetcher
-                    .preview(source, url.clone(), key, target.cells)
-                {
+                if !self.workers.fetcher.preview(source, url.clone(), *target) {
                     self.pending.remove(&url);
                     self.preview_failures.insert(url.clone());
                 }
@@ -705,66 +611,26 @@ impl ImageEngine {
         }
     }
 
-    /// 推进或创建全屏切图转场。
-    ///
-    /// # Params:
-    ///   - `current_cover`: 当前播放图片身份
-    ///   - `advance`: 当前曲的进入档位(`Prev` 反转向,其余按下一首)
-    ///   - `fullscreen_stable`: 全屏布局是否已经稳定
-    pub(crate) fn sync_transition(
-        &mut self,
-        current_cover: Option<MediaUrl>,
-        advance: Option<AdvanceKind>,
-        fullscreen_stable: bool,
-    ) {
-        if let Some(active) = self.transition.as_mut() {
-            active.anim.tick();
-            if active.anim.at_max() {
-                self.transition = None;
+    /// 结束对应内容的请求；过期成功结果直接释放，失败按内容与目标保留且不重试。
+    fn install_terminal_image(&mut self, completion: EncodeCompletion) {
+        let EncodeCompletion { identity, result } = completion;
+        self.encode_pending.remove(&identity);
+        let current = self.encode_input(&identity.key) == Some(identity.input);
+        match result {
+            Ok(image) if current => {
+                let bytes = image.resident_bytes();
+                mineral_log::debug!(target: "cover_cache", ?identity, bytes, "terminal image ready");
+                self.terminal_images.insert(&identity.key, image, bytes);
+            }
+            Ok(_) => {
+                mineral_log::debug!(target: "cover_cache", ?identity, "discard terminal image with obsolete input");
+            }
+            Err(error) => {
+                mineral_log::warn!(target: "cover", ?identity, current,
+                    error = mineral_log::chain(&error), "terminal image encoding failed");
+                self.encode_failures.insert(identity, error);
             }
         }
-        if !fullscreen_stable {
-            self.displayed_cover = current_cover;
-            self.transition = None;
-            return;
-        }
-        if self.displayed_cover == current_cover {
-            return;
-        }
-        let previous = std::mem::replace(&mut self.displayed_cover, current_cover.clone());
-        // 身份已换:旧转场画的封面不再是当前这一对,无论等下开不开得起新转场都得先撤掉,
-        // 否则它会继续画一对过期封面(表现为闪回旧图再跳新图)。
-        self.transition = None;
-        let cfg = self.cfg.cover_transition();
-        let (Some(from_url), Some(to_url)) = (previous, current_cover) else {
-            return;
-        };
-        let from_decoded = self.cache.contains_key(&from_url);
-        let to_decoded = self.cache.contains_key(&to_url);
-        if !*cfg.enabled() || !from_decoded || !to_decoded {
-            return;
-        }
-        self.transition = Some(CoverTransition {
-            from_url,
-            to_url,
-            advance,
-            anim: Transition::expanding(ticks16_from_ms(
-                *cfg.duration_ms(),
-                *self.cfg.animation().frame_tick_ms(),
-            )),
-        });
-    }
-
-    /// 装入一条当前 generation 的终端图片成品并解除在飞键。
-    fn install_terminal_image(&mut self, result: EncodeResult) {
-        if result.generation != self.graphics_generation() {
-            return;
-        }
-        self.encode_pending.remove(&result.key);
-        mineral_log::debug!(target: "cover_cache", key = ?result.key, bytes = result.bytes,
-            "terminal image ready");
-        self.terminal_images
-            .insert(&result.key, result.terminal_image, result.bytes);
     }
 }
 
@@ -778,8 +644,8 @@ mod tests {
     use super::ImageEngine;
     use crate::image::CoverFingerprint;
     use crate::image::fetch::{CoverCompletion, CoverPreviewReady, CoverReady};
-    use crate::image::key::{ImageIdentity, PixelSize, TerminalImageKey};
-    use crate::image::terminal::TerminalImage;
+    use crate::image::halfblock::HalfblockImage;
+    use crate::image::key::{ImageIdentity, PixelSize, PreviewTarget, TerminalImageKey};
 
     /// 造一个使用默认配置的测试图片引擎(不起 worker)。
     fn engine() -> color_eyre::Result<ImageEngine> {
@@ -792,12 +658,13 @@ mod tests {
         let key = TerminalImageKey::rasterized(
             ImageIdentity::Url(url.clone()),
             PixelSize::from_cells(/*cells*/ (4, 4), /*cell_pixels*/ (8, 16)),
+            (4, 4),
             crate::config::CoverCellFit::Crop,
         );
         CoverPreviewReady {
             url: url.clone(),
             key,
-            image: TerminalImage::test_halfblocks(),
+            image: HalfblockImage::test_image(),
             bytes: 1,
         }
     }
@@ -815,7 +682,7 @@ mod tests {
             preview: preview_ready(&url),
             full: CoverReady {
                 url: url.clone(),
-                fingerprint: CoverFingerprint::of(&image),
+                fingerprint: CoverFingerprint::of(&image)?,
                 image,
                 palette: None,
             },
@@ -838,7 +705,7 @@ mod tests {
         use ratatui::layout::Rect;
         use std::time::Duration;
 
-        let sample_limit = super::PreviewTarget::thumbnail().pixels;
+        let sample_limit = PreviewTarget::thumbnail().pixels();
         for (width, height, width_divisor, height_divisor) in
             [(512, 512, 1, 1), (256, 512, 2, 1), (512, 256, 1, 2)]
         {
@@ -856,7 +723,8 @@ mod tests {
             let outside_radius = MediaUrl::remote("https://example.com/not-prefetched.jpg")?;
             let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
             let fetcher = CoverFetcher::spawn(cfg.cover().clone(), 0, None).await?;
-            let mut engine = ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty((8, 16)));
+            let mut engine =
+                ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty(), (8, 16));
             assert_ne!(
                 engine.thumbnail_preview_key(&url),
                 engine.preview_key(&url, Rect::new(0, 0, 4, 2)),
@@ -870,12 +738,12 @@ mod tests {
                 &mut buffer,
                 ImageRenderPhase::Stable,
             );
-            engine.tick(None, /*advance*/ None, false);
+            engine.tick();
             engine.prefetch([(mineral_model::SourceKind::NETEASE, url.clone())]);
 
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    engine.tick(None, /*advance*/ None, false);
+                    engine.tick();
                     engine.prepare_and_render_thumbnail(
                         Some(&url),
                         area,
@@ -902,13 +770,15 @@ mod tests {
             );
             let commands = engine.take_graphics_commands();
             let key = engine.thumbnail_preview_key(&url);
-            assert!(engine.terminal_images.render_if_ready(&key, |image| {
-                assert!(
-                    image.resident_bytes()
-                        <= u64::from(sample_limit.width()) * u64::from(sample_limit.height()) * 4,
-                    "行内 shared memory 不超过低清像素的 RGBA 预算"
-                );
-            }));
+            let image = engine
+                .terminal_images
+                .get(&key)
+                .ok_or_else(|| color_eyre::eyre::eyre!("missing inline image"))?;
+            assert!(
+                image.resident_bytes()
+                    <= u64::from(sample_limit.width()) * u64::from(sample_limit.height()) * 4,
+                "行内 shared memory 不超过低清像素的 RGBA 预算"
+            );
             assert!(commands.contains("a=t,"), "图片传输须在 cell 外排队");
             assert!(commands.contains("a=p,U=1,c=1,r=1"));
             assert!(
@@ -951,14 +821,14 @@ mod tests {
             let full = Arc::new(DynamicImage::ImageRgb8(RgbImage::new(64, 64)));
             engine.install_decoded_cover(CoverReady {
                 url: url.clone(),
-                fingerprint: CoverFingerprint::of(&full),
+                fingerprint: CoverFingerprint::of(&full)?,
                 image: full,
                 palette: None,
             });
             engine.set_budgets(0, 16 * 1024, 16 * 1024);
             assert!(!engine.cache.contains_key(&url));
             assert!(
-                engine.terminal_images.ready(&key),
+                engine.terminal_images.contains(&key),
                 "完整图回填和逐出不得清掉独立缩略图"
             );
         }
@@ -978,7 +848,7 @@ mod tests {
         kitty.cache.insert_test(
             &url,
             Arc::new(DynamicImage::ImageRgb8(RgbImage::new(64, 64))),
-        );
+        )?;
         let area = Rect::new(0, 0, 1, 1);
         for phase in [
             ImageRenderPhase::Offscreen,

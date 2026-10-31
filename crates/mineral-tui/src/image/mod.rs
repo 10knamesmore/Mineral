@@ -9,25 +9,22 @@ mod encode;
 pub(crate) mod fetch;
 mod geometry;
 pub(crate) mod graphics;
+mod halfblock;
 
-mod accent;
 mod cache;
 mod fingerprint;
 mod hub;
 mod key;
 mod kitty;
+mod prepared_image;
 mod presentation;
 mod render;
 pub(crate) use presentation::{ImageNeeds, ReadyImages};
 mod resize;
-mod terminal;
 mod thumbnail;
 
 pub(crate) use fingerprint::CoverFingerprint;
 pub(crate) use geometry::square_cells;
-#[cfg(test)]
-pub(crate) use graphics::GraphicsProtocol;
-pub(crate) use hub::CoverTransition;
 pub use hub::ImageEngine;
 pub(crate) use kitty::KittyImageRegistry;
 pub(crate) use render::{BlendStyle, ImageContent, ImageRenderPhase};

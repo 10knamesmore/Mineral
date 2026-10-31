@@ -94,19 +94,8 @@ impl<K> ListExpansionState<K> {
         self.filtered_frame = filtered;
     }
 
-    /// 准备期间声明旧端的资源使用，协议变更时结束旧输入。
+    /// 准备期间声明旧端的资源使用，保留转场仍需显示的图片。
     pub(crate) fn declare_images(&mut self, images: &mut crate::image::ImageNeeds<'_>) {
-        if self.active.as_ref().is_some_and(|active| {
-            active
-                .before
-                .content
-                .images
-                .iter()
-                .any(|image| !images.ready().inline_is_current(image))
-        }) {
-            self.invalidate();
-            return;
-        }
         if let Some(active) = &self.active {
             for image in &active.before.content.images {
                 images.retain(image);

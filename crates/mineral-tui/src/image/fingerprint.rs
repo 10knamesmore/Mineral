@@ -3,7 +3,7 @@
 
 use image::DynamicImage;
 
-use super::resize::resize_center_square;
+use super::resize::{self, resize_center_square};
 
 /// 指纹网格边长(像素)。
 const GRID: u32 = 16;
@@ -25,11 +25,11 @@ impl CoverFingerprint {
     ///
     /// # Params:
     ///   - `image`: 已解码封面；非方图按中心方阵取样
-    pub(crate) fn of(image: &DynamicImage) -> Self {
-        let sampled = resize_center_square(image, GRID).into_luma8();
-        Self {
+    pub(crate) fn of(image: &DynamicImage) -> Result<Self, resize::Error> {
+        let sampled = resize_center_square(image, GRID)?.into_luma8();
+        Ok(Self {
             gray: sampled.into_raw().into_boxed_slice(),
-        }
+        })
     }
 
     /// 是否同一张图：采样点同样多且平均灰度差在 [`TOLERANCE`] 内。
@@ -88,32 +88,35 @@ mod tests {
 
     /// 同一张图换分辨率重采样后仍判为同一张。
     #[test]
-    fn same_artwork_at_another_size_matches() {
-        let small = CoverFingerprint::of(&gradient(64));
-        let large = CoverFingerprint::of(&gradient(160));
+    fn same_artwork_at_another_size_matches() -> color_eyre::Result<()> {
+        let small = CoverFingerprint::of(&gradient(64))?;
+        let large = CoverFingerprint::of(&gradient(160))?;
         assert!(small.matches(&large), "同一张图换尺寸应相认");
-        let same = CoverFingerprint::of(&gradient(64));
+        let same = CoverFingerprint::of(&gradient(64))?;
         assert!(small.matches(&same), "同一张图应相认");
+        Ok(())
     }
 
     /// 不同图案不算同一张。
     #[test]
-    fn different_artwork_does_not_match() {
-        let gradient = CoverFingerprint::of(&gradient(64));
-        let stripes = CoverFingerprint::of(&stripes(64));
-        let flat = CoverFingerprint::of(&picture(64, |_, _| Rgb([200, 0, 0])));
+    fn different_artwork_does_not_match() -> color_eyre::Result<()> {
+        let gradient = CoverFingerprint::of(&gradient(64))?;
+        let stripes = CoverFingerprint::of(&stripes(64))?;
+        let flat = CoverFingerprint::of(&picture(64, |_, _| Rgb([200, 0, 0])))?;
         assert!(!gradient.matches(&stripes), "条纹不是渐变");
         assert!(!gradient.matches(&flat), "纯色不是渐变");
         assert!(!stripes.matches(&flat), "纯色不是条纹");
+        Ok(())
     }
 
     /// 平色封面之间也要按亮度区分:黑与白不是同一张,差几档的同一色算同一张。
     #[test]
-    fn flat_covers_compare_brightness() {
-        let black = CoverFingerprint::of(&picture(32, |_, _| Rgb([0, 0, 0])));
-        let white = CoverFingerprint::of(&picture(32, |_, _| Rgb([255, 255, 255])));
-        let near_black = CoverFingerprint::of(&picture(48, |_, _| Rgb([3, 3, 3])));
+    fn flat_covers_compare_brightness() -> color_eyre::Result<()> {
+        let black = CoverFingerprint::of(&picture(32, |_, _| Rgb([0, 0, 0])))?;
+        let white = CoverFingerprint::of(&picture(32, |_, _| Rgb([255, 255, 255])))?;
+        let near_black = CoverFingerprint::of(&picture(48, |_, _| Rgb([3, 3, 3])))?;
         assert!(!black.matches(&white), "黑与白不是同一张");
         assert!(black.matches(&near_black), "同一档深色应相认");
+        Ok(())
     }
 }

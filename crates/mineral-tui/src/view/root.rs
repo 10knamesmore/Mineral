@@ -4,7 +4,7 @@ use crate::components::layout::browse::spectrum::SpectrumState;
 use crate::components::layout::shared::transport::TransportBar;
 use crate::components::lifecycle::Component;
 use crate::render::anim::{Toggle, ticks16_from_ms};
-use crate::runtime::state::{BrowsePage, SearchPage, search_whitelist};
+use crate::runtime::state::{BrowsePage, CoverPresentation, SearchPage, search_whitelist};
 use ratatui::layout::Rect;
 
 /// 根界面只拥有组件与页面显示状态。
@@ -27,6 +27,9 @@ pub(crate) struct RootView {
 
     /// 频谱状态(条高 + 平滑)。
     pub(crate) spectrum: Component<SpectrumState>,
+
+    /// 当前播放封面的配色目标与全屏切歌转场。
+    pub(crate) cover: CoverPresentation,
 
     /// 最近一次准备的主帧面积；输入路径据此计算弹出菜单锚点。
     pub(crate) frame_area: Rect,
@@ -61,6 +64,7 @@ impl RootView {
             dim: Toggle::new(ticks16_from_ms(*anim.focus_fade_ms(), tick_ms)),
             transport: Component::new(TransportBar::new(mode, anim)),
             spectrum: Component::new(SpectrumState::new(cfg.spectrum().clone(), tick_ms)),
+            cover: CoverPresentation::default(),
             vinyl: crate::components::layout::shared::vinyl::VinylSpin::from_config(
                 *anim.vinyl_rev_ms(),
                 tick_ms,

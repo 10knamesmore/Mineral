@@ -6,11 +6,14 @@ use image::{DynamicImage, GrayImage, ImageFormat, RgbImage};
 use jpeg_decoder::{CodingProcess, Decoder, ImageInfo, PixelFormat};
 
 use super::key::PixelSize;
-use super::resize::thumbnail_exact;
+use super::resize::{self, thumbnail_exact};
 
 /// 封面像素解码失败。
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Error {
+    #[error("sample decoded cover pixels")]
+    Sampling(#[from] resize::Error),
+
     /// 图片格式或通用解码器失败。
     #[error("decode cover image")]
     Image(#[from] image::ImageError),
@@ -77,7 +80,7 @@ pub(super) fn display(
             required.height(),
         )
     };
-    Ok(thumbnail_exact(&image, width, height))
+    Ok(thumbnail_exact(&image, width, height)?)
 }
 
 /// JPEG 使用不低于两倍 halfblock 网格的 IDCT 缩放，其余编码保持原有解码路径。

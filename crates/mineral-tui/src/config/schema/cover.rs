@@ -10,7 +10,7 @@ use mineral_config::de;
 /// 封面配置。
 #[config_section]
 pub struct CoverConfig {
-    /// 封面图像协议；Kitty 需要 POSIX 共享内存
+    /// 封面图像协议，修改后需重启 TUI；Kitty 需要 POSIX 共享内存
     protocol: CoverProtocolMode,
 
     /// 主封面边缘与字符格的适配；不改变横图、竖图的整体外框，不影响行内缩略图
@@ -77,20 +77,14 @@ pub struct CoverCacheConfig {
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum CoverProtocolMode {
-    /// 自动探测，不支持时使用半块字符
+    /// 自动探测；终端无法读取 Kitty 共享内存或在 zellij 内时使用半块字符
     Auto,
 
     /// 半块字符
-    Halfblocks,
+    Halfblock,
 
-    /// Kitty；无 POSIX 共享内存时沿用自动探测结果
+    /// Kitty；终端无法读取 POSIX 共享内存时使用半块字符
     Kitty,
-
-    /// Sixel
-    Sixel,
-
-    /// iTerm2
-    Iterm2,
 }
 
 /// 主封面按原图比例确定最小字符外框后，如何处理不足一格的边缘。

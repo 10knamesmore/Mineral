@@ -21,7 +21,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 
 use crate::image::KittyImageRegistry;
-use crate::image::graphics::GraphicsProtocol;
 use crate::render::memo::Compositor;
 
 use super::output::write_cells;
@@ -154,7 +153,6 @@ impl Tui {
         &mut self,
         plan: crate::render::memo::FramePlan<'_>,
         graphics: &str,
-        protocol: GraphicsProtocol,
     ) -> io::Result<()> {
         let area = self.terminal.get_frame().area();
         let deletions = self
@@ -169,11 +167,7 @@ impl Tui {
             self.skipped_frames = self.skipped_frames.saturating_add(1);
             return Ok(());
         }
-        let whole_frame_graphics =
-            matches!(protocol, GraphicsProtocol::Sixel | GraphicsProtocol::Iterm2);
-        let update =
-            self.compositor
-                .render(plan, &mut self.terminal.get_frame(), whole_frame_graphics);
+        let update = self.compositor.render(plan, &mut self.terminal.get_frame());
         if !graphics.is_empty() {
             let mut output = io::stdout().lock();
             output.write_all(graphics.as_bytes())?;

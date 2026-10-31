@@ -3,33 +3,33 @@
 use ratatui::layout::Rect;
 
 use super::key::PixelSize;
-use super::resize::fitted_pixels;
+use super::resize::{self, fitted_pixels};
 
 /// 将原图等比放入区域，返回居中的最小 cell 外框；取整余量不改变图片比例。
 pub(super) fn fitted_area(
     area: Rect,
     image: &image::DynamicImage,
     cell_pixels: (u16, u16),
-) -> Rect {
+) -> Result<Rect, resize::Error> {
     if area.is_empty() {
-        return area;
+        return Ok(area);
     }
     let pixels = fitted_pixels(
         image,
         PixelSize::from_cells((area.width, area.height), cell_pixels),
-    );
+    )?;
     let width = u16::try_from(pixels.width().div_ceil(u32::from(cell_pixels.0).max(1)))
         .unwrap_or(area.width)
         .min(area.width);
     let height = u16::try_from(pixels.height().div_ceil(u32::from(cell_pixels.1).max(1)))
         .unwrap_or(area.height)
         .min(area.height);
-    Rect::new(
+    Ok(Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
         width,
         height,
-    )
+    ))
 }
 
 /// 按真实 cell 像素比例在可用区域内计算视觉正方形。

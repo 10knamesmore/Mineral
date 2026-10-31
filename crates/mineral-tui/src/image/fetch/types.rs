@@ -10,8 +10,8 @@ use tokio::sync::oneshot;
 use tokio::task::JoinError;
 
 use crate::image::CoverFingerprint;
-use crate::image::key::TerminalImageKey;
-use crate::image::terminal::TerminalImage;
+use crate::image::halfblock::HalfblockImage;
+use crate::image::key::{PreviewTarget, TerminalImageKey};
 use crate::render::palette::CoverPalette;
 
 /// 一次 preview worker 请求。
@@ -22,11 +22,8 @@ pub(super) struct PreviewRequest {
     /// 图片源 URL。
     pub(super) url: MediaUrl,
 
-    /// 图片身份与目标像素尺寸组成的 preview 键。
-    pub(super) key: TerminalImageKey,
-
-    /// preview 对应的目标 cell 宽高。
-    pub(super) cells: (u16, u16),
+    /// 低清采样尺寸与主封面的格边策略。
+    pub(super) target: PreviewTarget,
 }
 
 /// 一次按配置尺寸解码 worker 请求。
@@ -84,9 +81,9 @@ pub(crate) struct CoverPreviewReady {
     pub key: TerminalImageKey,
 
     /// 可直接写入 ratatui buffer 的 halfblock preview。
-    pub image: TerminalImage,
+    pub image: HalfblockImage,
 
-    /// preview RGB 像素缓冲常驻字节数。
+    /// preview RGBA 像素缓冲常驻字节数。
     pub bytes: u64,
 }
 

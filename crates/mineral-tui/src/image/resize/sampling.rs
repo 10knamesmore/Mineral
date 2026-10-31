@@ -1,13 +1,30 @@
-//! 使用 CPU SIMD 采样封面，统一精确尺寸、等比适配、居中裁剪与透明补边。
+//! 使用 CPU SIMD 采样封面，保留原生像素格式与色彩标记。
 
-use crate::config::CoverCellFit;
 use fast_image_resize::images::CroppedImage;
 use fast_image_resize::{CropBox, FilterType, ResizeAlg, ResizeError, ResizeOptions, Resizer};
-use image::{DynamicImage, Rgba, RgbaImage};
+use image::{DynamicImage, RgbaImage};
 
 use crate::image::key::PixelSize;
 
-/// 显示图保留细节，缩略图以颜色和构图为主；同时决定加速算法与回退算法。
+/// 图片像素采样失败；调用方决定记录日志或结束当前资源任务。
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    #[error("image sampling requires nonzero source and target dimensions")]
+    EmptyDimensions,
+
+    #[error("resize image pixels")]
+    Resize(#[from] ResizeError),
+}
+
+/// 需要生成精确物理像素画布的两种适配策略。
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PixelFit {
+    Crop,
+
+    Stretch,
+}
+
+/// 显示图保留细节，缩略图以颜色和构图为主。
 #[derive(Clone, Copy, Debug)]
 enum SamplingFilter {
     /// 双线性采样，对应 image 的 Triangle 核。
@@ -16,7 +33,7 @@ enum SamplingFilter {
     /// 透明画布使用 alpha 加权滤波，防止补边黑色污染图片边缘。
     Transparent,
 
-    /// Box 区域采样；整数回退到缩略图算法，浮点回退到 Triangle。
+    /// Box 区域采样。
     Thumbnail,
 }
 
@@ -48,7 +65,7 @@ pub(in crate::image) fn resize_exact(
     source: &DynamicImage,
     width: u32,
     height: u32,
-) -> DynamicImage {
+) -> Result<DynamicImage, Error> {
     sample(
         source,
         width,
@@ -62,7 +79,7 @@ pub(in crate::image) fn resize_exact(
 pub(in crate::image) fn resize_center_square(
     source: &DynamicImage,
     output_side: u32,
-) -> DynamicImage {
+) -> Result<DynamicImage, Error> {
     let source_side = source.width().min(source.height());
     sample(
         source,
@@ -83,7 +100,7 @@ pub(in crate::image) fn resize_transparent(
     source: &DynamicImage,
     width: u32,
     height: u32,
-) -> DynamicImage {
+) -> Result<DynamicImage, Error> {
     sample(
         source,
         width,
@@ -103,7 +120,7 @@ pub(in crate::image) fn thumbnail_exact(
     source: &DynamicImage,
     width: u32,
     height: u32,
-) -> DynamicImage {
+) -> Result<DynamicImage, Error> {
     sample(
         source,
         width,
@@ -124,7 +141,7 @@ pub(in crate::image) fn thumbnail_to_fill(
     bounds: PixelSize,
     width: u32,
     height: u32,
-) -> DynamicImage {
+) -> Result<DynamicImage, Error> {
     sample(
         source,
         width,
@@ -140,15 +157,22 @@ pub(in crate::image) fn thumbnail_to_fill(
 ///   - `source`: 已解码图片
 ///   - `width`: 允许的最大像素宽度
 ///   - `height`: 允许的最大像素高度
-pub(in crate::image) fn thumbnail(source: &DynamicImage, width: u32, height: u32) -> DynamicImage {
-    let (width, height) = proportional_dimensions(source, width, height, false);
+pub(in crate::image) fn thumbnail(
+    source: &DynamicImage,
+    width: u32,
+    height: u32,
+) -> Result<DynamicImage, Error> {
+    let (width, height) = proportional_dimensions(source, width, height, false)?;
     thumbnail_exact(source, width, height)
 }
 
 /// 计算完整容纳原图的等比像素尺寸；整数像素按四舍五入取整。
-pub(in crate::image) fn fitted_pixels(source: &DynamicImage, bounds: PixelSize) -> PixelSize {
-    let (width, height) = proportional_dimensions(source, bounds.width(), bounds.height(), false);
-    PixelSize::new(width, height)
+pub(in crate::image) fn fitted_pixels(
+    source: &DynamicImage,
+    bounds: PixelSize,
+) -> Result<PixelSize, Error> {
+    let (width, height) = proportional_dimensions(source, bounds.width(), bounds.height(), false)?;
+    Ok(PixelSize::new(width, height))
 }
 
 /// 先按比例覆盖目标区域，再居中裁剪；奇数留边时多余像素仍位于右侧或下侧。
@@ -161,12 +185,12 @@ pub(in crate::image) fn resize_to_fill(
     source: &DynamicImage,
     width: u32,
     height: u32,
-) -> DynamicImage {
-    let (scaled_width, scaled_height) = proportional_dimensions(source, width, height, true);
-    let scaled = resize_exact(source, scaled_width, scaled_height);
+) -> Result<DynamicImage, Error> {
+    let (scaled_width, scaled_height) = proportional_dimensions(source, width, height, true)?;
+    let scaled = resize_exact(source, scaled_width, scaled_height)?;
     let left = scaled_width.saturating_sub(width) / 2;
     let top = scaled_height.saturating_sub(height) / 2;
-    scaled.crop_imm(left, top, width, height)
+    Ok(scaled.crop_imm(left, top, width, height))
 }
 
 /// 按格边策略适配到最小字符外框的物理像素尺寸，供终端图片编码使用。
@@ -174,43 +198,26 @@ pub(in crate::image) fn resize_to_fill(
 /// # Params:
 ///   - `source`: 已解码图片
 ///   - `pixels`: 最小字符外框的完整像素尺寸，不是整个封面槽
-///   - `cell_fit`: 居中截边、微调宽高或保持原样留白
+///   - `fit`: 居中截边或微调宽高
 pub(in crate::image) fn scale_to_pixels(
     source: &DynamicImage,
     pixels: PixelSize,
-    cell_fit: CoverCellFit,
-) -> RgbaImage {
-    match cell_fit {
-        CoverCellFit::Crop => {
-            return sample(
-                source,
-                pixels.width(),
-                pixels.height(),
-                SamplingFilter::Display,
-                SamplingRegion::Fit(pixels),
-            )
-            .into_rgba8();
-        }
-        CoverCellFit::Stretch => {
-            return resize_exact(source, pixels.width(), pixels.height()).into_rgba8();
-        }
-        _ => {}
-    }
-    let (width, height) = proportional_dimensions(source, pixels.width(), pixels.height(), false);
-    let resized = resize_exact(source, width, height).into_rgba8();
-    let mut canvas = RgbaImage::from_pixel(pixels.width(), pixels.height(), Rgba([0, 0, 0, 0]));
-    image::imageops::overlay(
-        &mut canvas,
-        &resized,
-        i64::from(pixels.width().saturating_sub(width) / 2),
-        i64::from(pixels.height().saturating_sub(height) / 2),
-    );
-    canvas
+    fit: PixelFit,
+) -> Result<RgbaImage, Error> {
+    let sampled = match fit {
+        PixelFit::Crop => sample(
+            source,
+            pixels.width(),
+            pixels.height(),
+            SamplingFilter::Display,
+            SamplingRegion::Fit(pixels),
+        )?,
+        PixelFit::Stretch => resize_exact(source, pixels.width(), pixels.height())?,
+    };
+    Ok(sampled.into_rgba8())
 }
 
 /// 保留源像素格式和色彩标记；仅透明画布滤波使用 alpha 加权，不额外转换完整像素缓冲。
-///
-/// 加速采样失败时记录 warn 日志，丢弃未完成的输出，并用 image 的原有算法重新采样。
 ///
 /// # Params:
 ///   - `source`: 借用原生像素与色彩标记的图片
@@ -224,12 +231,13 @@ fn sample(
     height: u32,
     filter: SamplingFilter,
     region: SamplingRegion,
-) -> DynamicImage {
+) -> Result<DynamicImage, Error> {
+    validate_dimensions(source, width, height)?;
     if matches!(region, SamplingRegion::Whole)
         && source.width() == width
         && source.height() == height
     {
-        return source.clone();
+        return Ok(source.clone());
     }
     let mut output = DynamicImage::new(width, height, source.color());
     let fast_filter = match filter {
@@ -240,6 +248,7 @@ fn sample(
         .resize_alg(ResizeAlg::Convolution(fast_filter))
         .use_alpha(matches!(filter, SamplingFilter::Transparent));
     if let SamplingRegion::Fit(bounds) = region {
+        validate_dimensions(source, bounds.width(), bounds.height())?;
         let crop = CropBox::fit_src_into_dst_size(
             source.width(),
             source.height(),
@@ -264,40 +273,19 @@ fn sample(
             fast_resizer.resize(source, &mut output, &options)
         }
     };
-    if let Err(error) = result {
-        mineral_log::warn!(target: "cover", %error,
-            source_width = source.width(), source_height = source.height(),
-            width, height, pixel_format = ?source.color(), ?filter, ?region,
-            cpu = ?fast_resizer.cpu_extensions(), "cover pixel sampling failed; falling back to image");
-
-        drop(output);
-        let cropped = match region {
-            SamplingRegion::Whole => None,
-            SamplingRegion::Fit(bounds) => {
-                Some(resize_to_fill(source, bounds.width(), bounds.height()))
-            }
-            SamplingRegion::Crop {
-                left,
-                top,
-                width,
-                height,
-            } => Some(source.crop_imm(left, top, width, height)),
-        };
-        let source = cropped.as_ref().unwrap_or(source);
-
-        output = match (filter, source.color()) {
-            // image 的整数缩略图算法对浮点通道也加舍入偏移，会抬高原有亮度。
-            (SamplingFilter::Thumbnail, image::ColorType::Rgb32F | image::ColorType::Rgba32F)
-            | (SamplingFilter::Display | SamplingFilter::Transparent, _) => {
-                source.resize_exact(width, height, image::imageops::FilterType::Triangle)
-            }
-            (SamplingFilter::Thumbnail, _) => source.thumbnail_exact(width, height),
-        };
-    }
+    result?;
     let color_space = source.color_space();
     output.set_rgb_primaries(color_space.primaries);
     output.set_transfer_function(color_space.transfer);
-    output
+    Ok(output)
+}
+
+fn validate_dimensions(source: &DynamicImage, width: u32, height: u32) -> Result<(), Error> {
+    if source.width() == 0 || source.height() == 0 || width == 0 || height == 0 {
+        Err(Error::EmptyDimensions)
+    } else {
+        Ok(())
+    }
 }
 
 /// 按限制轴计算等比尺寸并四舍五入，保留原有适配／裁剪的像素边界。
@@ -312,15 +300,10 @@ fn proportional_dimensions(
     width: u32,
     height: u32,
     fill: bool,
-) -> (u32, u32) {
+) -> Result<(u32, u32), Error> {
+    validate_dimensions(source, width, height)?;
     let source_width = u64::from(source.width());
     let source_height = u64::from(source.height());
-    if source_width == 0 || source_height == 0 {
-        return (
-            if source_width == 0 { 1 } else { width.max(1) },
-            if source_height == 0 { 1 } else { height.max(1) },
-        );
-    }
     let width_limits = u64::from(width) * source_height <= u64::from(height) * source_width;
     let (numerator, denominator) = if width_limits != fill {
         (u64::from(width), source_width)
@@ -345,8 +328,8 @@ fn proportional_dimensions(
     } else {
         (scaled_width, scaled_height)
     };
-    (
+    Ok((
         u32::try_from(scaled_width).unwrap_or(u32::MAX),
         u32::try_from(scaled_height).unwrap_or(u32::MAX),
-    )
+    ))
 }

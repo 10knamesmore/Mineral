@@ -240,14 +240,6 @@ impl<C: Overlay> OverlayStack<C> {
         self.layers.len()
     }
 
-    /// 是否有正在关闭的居中层，用于终端输出的遮挡恢复。
-    pub(crate) fn any_leaving_centered(&self) -> bool {
-        self.layers.iter().any(|layer| {
-            let chrome = layer.content.chrome();
-            layer.animation.leaving() && !chrome.dock && chrome.anchor.is_none()
-        })
-    }
-
     /// 借用所有已挂载内容。
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &C> {
         self.layers.iter().map(|layer| &*layer.content)

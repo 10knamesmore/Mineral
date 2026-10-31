@@ -17,9 +17,9 @@ pub(crate) use loader::{default_tui_tree, tui_from_tree};
 pub(crate) use schema::{
     AmbientConfig, AnchorConfig, AnimationConfig, BehaviorConfig, ChannelSearchConfig, CopyContext,
     CopyTemplate, CoverCellFit, CoverConfig, CoverDecodePixelsConfig, CoverProtocolMode,
-    CoverTransitionStyle, DeepWeights, KeyBinding, KeysConfig, KmeansConfig, LayoutConfig,
-    LyricTextAlphaConfig, LyricsConfig, MarqueeConfig, MarqueeMode, MenuAlign, MenuReveal,
-    MinimapConfig, ProgressConfig, PulseConfig, SearchFocusTransition, SpectrumConfig,
+    CoverTransitionConfig, CoverTransitionStyle, DeepWeights, KeyBinding, KeysConfig, KmeansConfig,
+    LayoutConfig, LyricTextAlphaConfig, LyricsConfig, MarqueeConfig, MarqueeMode, MenuAlign,
+    MenuReveal, MinimapConfig, ProgressConfig, PulseConfig, SearchFocusTransition, SpectrumConfig,
     SpectrumStyle, SweepStyle, TextStyle, TimeFormat, TitleField, TitleSegment, TrailTimingConfig,
     TuiScriptConfig, WaveformConfig, WindowTitleConfig,
 };

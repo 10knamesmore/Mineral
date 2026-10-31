@@ -185,7 +185,7 @@ fn retained_frame_leaves_unaffected_components_and_cells_alone() -> color_eyre::
                 .buffer_mut()
                 .set_string(10, 1, "界", ratatui::style::Style::default());
         });
-        let update = compositor.render(plan, &mut terminal.get_frame(), false);
+        let update = compositor.render(plan, &mut terminal.get_frame());
         if value >= 2 {
             assert_eq!(right_calls.get(), before_calls);
             assert_eq!(
@@ -230,7 +230,7 @@ fn retained_frame_restores_moved_and_removed_layers() -> color_eyre::Result<()> 
                 frame.render_widget(Paragraph::new("中"), position);
             });
         }
-        let update = compositor.render(plan, &mut terminal.get_frame(), false);
+        let update = compositor.render(plan, &mut terminal.get_frame());
         if step >= 2 {
             assert_eq!(base_calls.get(), calls);
             assert!(!update.is_empty());

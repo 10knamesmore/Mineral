@@ -9,8 +9,8 @@ use mineral_persist::CacheIndex;
 
 use crate::image::CoverFingerprint;
 use crate::image::colors::extract_palette;
-use crate::image::key::TerminalImageKey;
-use crate::image::terminal::TerminalImage;
+use crate::image::halfblock::HalfblockImage;
+use crate::image::key::{ImageIdentity, PreviewTarget};
 use crate::render::palette::CoverPalette;
 
 use super::source::load_source;
@@ -31,7 +31,7 @@ pub(super) struct PreviewFull {
 /// preview worker 的一次解码产物:低清成品 + 非 JPEG 源顺路解码的显示图。
 pub(super) struct PreviewResult {
     /// 可直接写入 ratatui buffer 的 halfblock preview。
-    preview: TerminalImage,
+    preview: HalfblockImage,
 
     /// preview RGBA 像素缓冲常驻字节数。
     resident: u64,
@@ -59,29 +59,34 @@ pub(super) async fn fetch_preview(
     let PreviewRequest {
         source,
         url,
-        key,
-        cells,
+        target,
     } = request;
     let bytes = load_source(source, &url, client, cache).await?;
-    let pixels = key.pixels()?;
-    let thumbnail = matches!(&key, TerminalImageKey::Thumbnail { .. });
-    let cell_fit = key.cell_fit();
+    let key = target.key(ImageIdentity::Url(url.clone()));
+    let cells = target.cells();
 
     let result = {
         let cfg = Arc::clone(cfg);
         let preview = tokio::task::spawn_blocking(
             move || -> Result<PreviewResult, crate::image::decode::Error> {
-                let sample = |image: &DynamicImage| {
-                    if thumbnail {
-                        TerminalImage::thumbnail_preview(image, pixels)
-                    } else {
-                        TerminalImage::halfblock_preview(image, pixels, cells, cell_fit)
-                    }
+                let sample = |image: &DynamicImage| -> Result<_, crate::image::resize::Error> {
+                    let preview = match target {
+                        PreviewTarget::Cover {
+                            pixels,
+                            cells,
+                            cell_fit,
+                        } => HalfblockImage::encode(image, pixels, cells, cell_fit),
+                        PreviewTarget::Thumbnail { pixels } => {
+                            HalfblockImage::thumbnail(image, pixels)
+                        }
+                    }?;
+                    let resident = preview.resident_bytes();
+                    Ok((preview, resident))
                 };
                 if matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Jpeg)) {
                     // JPEG 走低档位 IDCT 缩小解码,preview 很便宜;显示图仍需单独 decode,不带 full。
                     let image = crate::image::decode::preview(&bytes, cells)?;
-                    let (preview, resident) = sample(&image);
+                    let (preview, resident) = sample(&image)?;
                     return Ok(PreviewResult {
                         preview,
                         resident,
@@ -92,8 +97,8 @@ pub(super) async fn fetch_preview(
                 // 显示图(供 RAM LRU)与 preview 源,复用同次解码,避免后续 decode 再解一遍。
                 let image = crate::image::decode::display(&bytes, cfg.decode_pixels())?;
                 let palette = extract_palette(&image, cfg.kmeans());
-                let fingerprint = CoverFingerprint::of(&image);
-                let (preview, resident) = sample(&image);
+                let fingerprint = CoverFingerprint::of(&image)?;
+                let (preview, resident) = sample(&image)?;
                 Ok(PreviewResult {
                     preview,
                     resident,

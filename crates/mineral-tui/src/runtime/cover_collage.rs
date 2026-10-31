@@ -1,0 +1,429 @@
+//! mineral 源歌单(跨源聚合,无自带封面)的真封面拼贴。
+//!
+//! 取歌单内前 [`MAX_TILES`] 首有封面的歌当成员,成员图经图片引擎按需解码,
+//! 已就绪的拼成一张方图,以合成键(`mineral://collage/<指纹>`)塞进图片引擎的解码图缓存——
+//! 自那一步起与普通封面同管线(kitty 编码 / halfblock 降级 / LRU)。
+//!
+//! 成员 decode 失败不阻塞已就绪图片；就绪成员增加或合成图被逐出时重新拼贴。
+//! 成员集变化即换新指纹键，旧图交给 LRU 自然逐出。
+
+use std::sync::Arc;
+
+use image::DynamicImage;
+use mineral_model::{MediaUrl, Playlist, SourceKind};
+
+use rustc_hash::FxHashMap;
+
+use crate::image::collage::{MAX_TILES, compose};
+use crate::image::{ImageEngine, ReadyImages};
+use crate::runtime::state::LibraryData;
+use crate::runtime::view_model::CollectionTrackView;
+
+/// 歌单封面的渐进拼贴记录，与通用图片资源和 UI 配色状态分开持有。
+#[derive(Default)]
+pub(crate) struct CoverCollages {
+    /// 合成身份对应的已就绪成员数；增加时重拼同一身份的图片。
+    tile_counts: FxHashMap<MediaUrl, usize>,
+}
+
+impl CoverCollages {
+    /// 为缺封面的聚合歌单请求成员图片，就绪成员增加时更新合成封面。
+    pub(crate) fn prepare(&mut self, library: &LibraryData, images: &mut ImageEngine) {
+        let mut requests = Vec::<(SourceKind, MediaUrl)>::new();
+        let mut composed = Vec::<(MediaUrl, usize, DynamicImage)>::new();
+        for p in &library.playlists {
+            if p.data.cover_url.is_some() || p.data.source() != SourceKind::MINERAL {
+                continue;
+            }
+            let Some(tracks) = library.tracks.get(&p.data.id) else {
+                continue;
+            };
+            let members = member_covers(tracks);
+            let Some(key) = collage_key(&p.data, &members) else {
+                continue;
+            };
+            for (source, url) in &members {
+                requests.push((*source, (*url).clone()));
+            }
+            // 合成图仍在且成员数未增加时，不再读取像素或重复拼贴。
+            let ready_count = members
+                .iter()
+                .filter(|(_, url)| images.cache.contains_key(url))
+                .count();
+            if ready_count == 0
+                || (images.cache.contains_key(&key)
+                    && self
+                        .tile_counts
+                        .get(&key)
+                        .is_some_and(|count| *count >= ready_count))
+            {
+                continue;
+            }
+            let ready = members
+                .iter()
+                .filter_map(|(_, url)| images.cache.get(url).cloned())
+                .collect::<Vec<Arc<DynamicImage>>>();
+            let image = match compose(&ready) {
+                Ok(Some(image)) => image,
+                Ok(None) => continue,
+                Err(error) => {
+                    mineral_log::warn!(target: "cover", key = %key, error = mineral_log::chain(&error), "collage sampling failed");
+                    continue;
+                }
+            };
+            composed.push((key, ready.len(), image));
+        }
+        images.load(requests);
+        for (key, tiles, image) in composed {
+            mineral_log::debug!(target: "cover", key = %key, tiles, "歌单拼贴合成入缓存");
+            if let Err(error) = images.insert_synthesized(&key, Arc::new(image)) {
+                mineral_log::warn!(target: "cover", key = %key, error = mineral_log::chain(&error), "collage fingerprint sampling failed");
+                continue;
+            }
+            self.tile_counts.insert(key, tiles);
+        }
+    }
+}
+
+/// 渲染路径:歌单的有效封面 URL。
+///
+/// 自带 `cover_url` 直接给;mineral 源无封面歌单在拼贴已就绪(合成键命中缓存)时给
+/// 合成键；其余返回 `None`，调用方留空，拼贴到货后自然切换。
+///
+/// # Params:
+///   - `playlist`: 目标歌单
+///
+/// # Return:
+///   可交给 [`crate::image::ImageContent::Display`] 的封面 URL。
+pub(crate) fn effective_cover_url(
+    library: &LibraryData,
+    images: ReadyImages<'_>,
+    playlist: &Playlist,
+) -> Option<MediaUrl> {
+    if let Some(url) = &playlist.cover_url {
+        return Some(url.clone());
+    }
+    if playlist.source() != SourceKind::MINERAL {
+        return None;
+    }
+    let tracks = library.tracks.get(&playlist.id)?;
+    let key = collage_key(playlist, &member_covers(tracks))?;
+    images.contains_decoded(&key).then_some(key)
+}
+
+/// 歌单内前 [`MAX_TILES`] 首**有封面**的歌的 `(来源, 封面 URL)`(按歌单顺序,早停)。
+fn member_covers(tracks: &[CollectionTrackView]) -> Vec<(SourceKind, &MediaUrl)> {
+    tracks
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .data
+                .song
+                .cover_url
+                .as_ref()
+                .map(|url| (entry.data.song.id.namespace(), url))
+        })
+        .take(MAX_TILES)
+        .collect()
+}
+
+/// 拼贴合成键:`mineral://collage/<FNV-1a 64 指纹>`,指纹吃歌单 qualified id + 成员
+/// 封面 URL 串(顺序敏感)。成员集变化 → 指纹变 → 新键,旧键图由 LRU 自然逐出。
+///
+/// # Params:
+///   - `playlist`: 所属歌单
+///   - `members`: [`member_covers`] 产物
+///
+/// # Return:
+///   合成键;成员为空返回 `None`(没图可拼,键无意义)。
+fn collage_key(playlist: &Playlist, members: &[(SourceKind, &MediaUrl)]) -> Option<MediaUrl> {
+    if members.is_empty() {
+        return None;
+    }
+    let mut fp = fnv64(FNV_OFFSET, playlist.id.qualified().as_bytes());
+    for (_, url) in members {
+        fp = fnv64(fp, url.to_string().as_bytes());
+    }
+    MediaUrl::remote(&format!("mineral://collage/{fp:016x}")).ok()
+}
+
+/// FNV-1a 64 位偏移基。
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// 把 `bytes` 揉进 FNV-1a 64 位滚动值。
+fn fnv64(hash: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(hash, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use color_eyre::eyre::eyre;
+    use image::{DynamicImage, Rgb, RgbImage};
+    use mineral_common::revision::Revision;
+    use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
+
+    use super::{collage_key, compose, effective_cover_url, member_covers};
+    use crate::runtime::state::AppState;
+    use crate::test_support::entry_views;
+
+    fn tick(state: &mut AppState) {
+        state
+            .resources
+            .collages
+            .prepare(&state.models.library, &mut state.resources.images);
+    }
+
+    /// 造一张纯色方图。
+    fn solid(rgb: [u8; 3], side: u32) -> Arc<DynamicImage> {
+        let mut img = RgbImage::new(side, side);
+        for p in img.pixels_mut() {
+            *p = Rgb(rgb);
+        }
+        Arc::new(DynamicImage::ImageRgb8(img))
+    }
+
+    /// 断言合成图 `(x, y)` 像素为 `rgb`。
+    fn assert_px(img: &DynamicImage, x: u32, y: u32, rgb: [u8; 3]) -> color_eyre::Result<()> {
+        let px = img
+            .to_rgb8()
+            .get_pixel_checked(x, y)
+            .copied()
+            .ok_or_else(|| eyre!("像素 ({x},{y}) 越界"))?;
+        assert_eq!(px, Rgb(rgb), "像素 ({x},{y}) 颜色");
+        Ok(())
+    }
+
+    /// 四张纯色图 → 2×2 四象限(左上红、右上绿、左下蓝、右下黄),纯色无缝可精确断言。
+    #[test]
+    fn compose_four_fills_quadrants() -> color_eyre::Result<()> {
+        let imgs = vec![
+            solid([200, 0, 0], 8),
+            solid([0, 200, 0], 8),
+            solid([0, 0, 200], 8),
+            solid([200, 200, 0], 8),
+        ];
+        let out = compose(&imgs)?.ok_or_else(|| eyre!("应拼出图"))?;
+        assert_eq!((out.width(), out.height()), (8, 8), "输出使用成员最小短边");
+        assert_px(&out, 2, 2, [200, 0, 0])?;
+        assert_px(&out, 6, 2, [0, 200, 0])?;
+        assert_px(&out, 2, 6, [0, 0, 200])?;
+        assert_px(&out, 6, 6, [200, 200, 0])?;
+        Ok(())
+    }
+
+    /// 一张全铺;两张左右对分;三张左列整高 + 右列上下。
+    #[test]
+    fn compose_degraded_layouts() -> color_eyre::Result<()> {
+        let one = compose(&[solid([200, 0, 0], 8)])?.ok_or_else(|| eyre!("1 张应拼出"))?;
+        assert_px(&one, 1, 1, [200, 0, 0])?;
+        assert_px(&one, 6, 6, [200, 0, 0])?;
+
+        let two = compose(&[solid([200, 0, 0], 8), solid([0, 200, 0], 8)])?
+            .ok_or_else(|| eyre!("2 张应拼出"))?;
+        assert_px(&two, 2, 4, [200, 0, 0])?;
+        assert_px(&two, 6, 4, [0, 200, 0])?;
+
+        let three = compose(&[
+            solid([200, 0, 0], 8),
+            solid([0, 200, 0], 8),
+            solid([0, 0, 200], 8),
+        ])?
+        .ok_or_else(|| eyre!("3 张应拼出"))?;
+        assert_px(&three, 2, 2, [200, 0, 0])?;
+        assert_px(&three, 2, 6, [200, 0, 0])?;
+        assert_px(&three, 6, 2, [0, 200, 0])?;
+        assert_px(&three, 6, 6, [0, 0, 200])?;
+        Ok(())
+    }
+
+    /// 空成员拼不出图。
+    #[test]
+    fn compose_empty_is_none() -> color_eyre::Result<()> {
+        assert!(compose(&[])?.is_none(), "空成员应返回 None");
+        Ok(())
+    }
+
+    /// 造一首带封面的歌(id/封面按序号区分,归属 `source`)。
+    fn song_with_cover(source: SourceKind, i: usize) -> color_eyre::Result<Song> {
+        Ok(Song::builder()
+            .id(SongId::new(source, format!("s{i}")))
+            .name(format!("song {i}"))
+            .duration_ms(Some(1000))
+            .cover_url(Some(MediaUrl::remote(&format!("https://cover/{i}.jpg"))?))
+            .build())
+    }
+
+    /// 成员选取:跳过无封面的歌、按序取前 4 首、超出截断。
+    #[test]
+    fn member_covers_picks_first_four_with_cover() -> color_eyre::Result<()> {
+        let no_cover = Song::builder()
+            .id(SongId::new(SourceKind::NETEASE, "s0"))
+            .name("no cover".to_owned())
+            .duration_ms(Some(1000))
+            .build();
+        let mut songs = vec![no_cover];
+        for i in 1..=6 {
+            songs.push(song_with_cover(SourceKind::NETEASE, i)?);
+        }
+        let tracks = entry_views(songs);
+        let members = member_covers(&tracks);
+        assert_eq!(members.len(), 4, "取前 4 首有封面的");
+        let first = members.first().map(|(_, u)| u.to_string());
+        assert_eq!(
+            first.as_deref(),
+            Some("https://cover/1.jpg"),
+            "无封面首曲被跳过"
+        );
+        let last = members.last().map(|(_, u)| u.to_string());
+        assert_eq!(
+            last.as_deref(),
+            Some("https://cover/4.jpg"),
+            "第 5 首起截断"
+        );
+        Ok(())
+    }
+
+    /// 造一个 mineral 聚合歌单与 `n` 首带封面曲目的 state。
+    fn mineral_state(n: usize) -> color_eyre::Result<AppState> {
+        let mut s = AppState::test_default()?;
+        let pid = PlaylistId::new(SourceKind::MINERAL, "favorites");
+        s.models.library.playlists = vec![crate::test_support::playlist_view(
+            "favorites",
+            "Favorites",
+            SourceKind::MINERAL,
+            u64::try_from(n).unwrap_or(0),
+        )];
+        let songs = (0..n)
+            .map(|i| song_with_cover(SourceKind::NETEASE, i))
+            .collect::<color_eyre::Result<Vec<Song>>>()?;
+        let tracks = entry_views(songs);
+        s.models.library.tracks.insert(
+            pid,
+            crate::runtime::state::CollectionTracks {
+                revision: Revision::default(),
+                entries: tracks,
+                complete: true,
+                next_offset: None,
+            },
+        );
+        Ok(s)
+    }
+
+    /// 第 `i` 首歌的封面 URL(与 [`song_with_cover`] 对应)。
+    fn cover_url(i: usize) -> color_eyre::Result<MediaUrl> {
+        Ok(MediaUrl::remote(&format!("https://cover/{i}.jpg"))?)
+    }
+
+    /// 禁用 fetcher 会同步结束成员请求，不留下 loading，也不合成空拼贴。
+    #[test]
+    fn disabled_fetcher_settles_member_requests() -> color_eyre::Result<()> {
+        let mut s = mineral_state(4)?;
+        tick(&mut s);
+        assert_eq!(
+            s.resources.images.loading_count(),
+            0,
+            "禁用 fetcher 不应留下在途请求"
+        );
+        assert!(
+            s.resources.collages.tile_counts.is_empty(),
+            "无就绪成员不应合成"
+        );
+        assert!(
+            effective_cover_url(
+                &s.models.library,
+                s.resources.images.ready(),
+                &s.models
+                    .library
+                    .playlists
+                    .first()
+                    .ok_or_else(|| eyre!("歌单在"))?
+                    .data
+            )
+            .is_none(),
+            "未合成时渲染侧应保持空白"
+        );
+        Ok(())
+    }
+
+    /// 渐进式重拼:2 张就绪先拼 2,其余到货后重拼成 4;渲染侧自合成起给合成键。
+    #[test]
+    fn tick_composes_progressively() -> color_eyre::Result<()> {
+        let mut s = mineral_state(4)?;
+        for i in 0..2 {
+            s.resources
+                .images
+                .cache
+                .insert_test(&cover_url(i)?, solid([200, 0, 0], 8))?;
+        }
+        tick(&mut s);
+        let playlist = s
+            .models
+            .library
+            .playlists
+            .first()
+            .ok_or_else(|| eyre!("歌单在"))?
+            .data
+            .clone();
+        let key = effective_cover_url(&s.models.library, s.resources.images.ready(), &playlist)
+            .ok_or_else(|| eyre!("2 张就绪应已合成"))?;
+        assert_eq!(
+            s.resources.collages.tile_counts.get(&key).copied(),
+            Some(2),
+            "记录就绪数 2"
+        );
+
+        for i in 2..4 {
+            s.resources
+                .images
+                .cache
+                .insert_test(&cover_url(i)?, solid([0, 200, 0], 8))?;
+        }
+        tick(&mut s);
+        assert_eq!(
+            s.resources.collages.tile_counts.get(&key).copied(),
+            Some(4),
+            "全员到货应重拼成 4"
+        );
+
+        // 就绪数没变,再 tick 不重拼(记录值不动、无新键)。
+        tick(&mut s);
+        assert_eq!(
+            s.resources.collages.tile_counts.len(),
+            1,
+            "稳态不再新增合成"
+        );
+        Ok(())
+    }
+
+    /// 合成键确定性 + 成员敏感:同输入同键,成员变则键变;键是 Remote(mineral scheme)。
+    #[test]
+    fn collage_key_is_deterministic_and_member_sensitive() -> color_eyre::Result<()> {
+        let s = mineral_state(4)?;
+        let playlist = &s
+            .models
+            .library
+            .playlists
+            .first()
+            .ok_or_else(|| eyre!("歌单在"))?
+            .data;
+        let tracks = s
+            .models
+            .library
+            .tracks
+            .get(&playlist.id)
+            .ok_or_else(|| eyre!("曲目在"))?;
+        let k1 = collage_key(playlist, &member_covers(tracks)).ok_or_else(|| eyre!("应有键"))?;
+        let k2 = collage_key(playlist, &member_covers(tracks)).ok_or_else(|| eyre!("应有键"))?;
+        assert_eq!(k1, k2, "同输入同键");
+        assert!(k1.is_remote(), "合成键应为 Remote 变体");
+
+        let fewer = tracks.get(..2).ok_or_else(|| eyre!("切片在"))?;
+        let k3 = collage_key(playlist, &member_covers(fewer)).ok_or_else(|| eyre!("应有键"))?;
+        assert_ne!(k1, k3, "成员集变化应换键");
+        Ok(())
+    }
+}

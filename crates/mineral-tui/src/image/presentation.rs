@@ -19,7 +19,6 @@ impl ReadyImages<'_> {
         inputs: &mut crate::render::memo::Dependencies<'_>,
         urls: impl IntoIterator<Item = Option<MediaUrl>>,
     ) {
-        inputs.observe(&self.engine.graphics_generation());
         inputs.observe(&self.engine.cell_pixels());
         for url in urls {
             inputs.observe(&url);
@@ -41,11 +40,6 @@ impl ReadyImages<'_> {
         phase: ImageRenderPhase,
     ) {
         self.engine.render(content, area, target, phase);
-    }
-
-    /// 已就绪的终端图片实际占据区域，用于背景避让。
-    pub(crate) fn ready_area(self, url: &MediaUrl, area: Rect) -> Option<Rect> {
-        self.engine.ready_area(url, area)
     }
 
     /// 两个身份是否对应同一份已解码像素。
@@ -76,11 +70,6 @@ impl ReadyImages<'_> {
     /// 保留已就绪图片的身份，供组件自己的离场输入持有。
     pub(crate) fn inline_image(self, url: &MediaUrl, area: Rect) -> Option<InlineImage> {
         self.engine.inline_image(url, area)
-    }
-
-    /// 已保留图片是否仍属于当前终端协议代次。
-    pub(crate) fn inline_is_current(self, image: &InlineImage) -> bool {
-        self.engine.inline_is_current(image)
     }
 }
 

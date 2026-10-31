@@ -60,7 +60,7 @@ fn component_identity_survives_moves_but_not_new_instances() -> color_eyre::Resu
     let mut plan = FramePlan::default();
     plan.add(area, component.bind_view(env, |state| state));
     let previous = plan.placements();
-    compositor.render(plan, &mut terminal.get_frame(), false);
+    compositor.render(plan, &mut terminal.get_frame());
     assert_eq!(component.paints.get(), 1);
 
     let moved = Box::new(component);
@@ -81,7 +81,7 @@ fn component_identity_survives_moves_but_not_new_instances() -> color_eyre::Resu
         let placements = plan.placements();
         assert!(!recorded_instances.contains(&placements));
         assert!(compositor.needs_frame(&plan, area));
-        compositor.render(plan, &mut terminal.get_frame(), false);
+        compositor.render(plan, &mut terminal.get_frame());
         assert_eq!(component.paints.get(), paints + 1);
         recorded_instances.push(placements);
     }
@@ -114,7 +114,7 @@ fn reordering_instances_invalidates_an_otherwise_unchanged_plan() -> color_eyre:
         }
         assert_eq!(compositor.needs_frame(&plan, area), changed);
         if changed {
-            compositor.render(plan, &mut terminal.get_frame(), false);
+            compositor.render(plan, &mut terminal.get_frame());
         }
     }
     Ok(())
@@ -153,7 +153,7 @@ fn preparation_runs_through_cache_hits_and_cancelled_plans() -> color_eyre::Resu
         plan.add(area, component.bind_view(env, |state| state));
         assert_eq!(compositor.needs_frame(&plan, area), changed);
         if submit {
-            compositor.render(plan, &mut terminal.get_frame(), false);
+            compositor.render(plan, &mut terminal.get_frame());
         }
     }
     assert_eq!(component.preparations, 4);

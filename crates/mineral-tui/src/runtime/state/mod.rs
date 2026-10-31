@@ -4,6 +4,7 @@ mod application_state;
 mod artist_albums;
 mod browse;
 mod channel_search;
+mod cover;
 mod detail;
 mod library;
 mod library_projection;
@@ -24,14 +25,13 @@ pub(crate) use track_filter::{FilteredTracks, TrackFilterCache};
 mod view_context;
 mod view_switch;
 
-#[cfg(test)]
-pub(crate) use crate::image::CoverTransition;
 pub use application_state::AppState;
 pub(crate) use application_state::spectrum_params;
 pub(crate) use artist_albums::ArtistAlbums;
 pub use browse::BrowsePage;
 pub(crate) use browse::{BrowseModel, LibraryQueueProjection};
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};
+pub(crate) use cover::{AppliedCoverPalette, CoverPresentation, CoverTransition};
 pub use detail::{ArtistSection, DetailData, DetailFetch, DetailFrame, EntityRef};
 pub use library::LibraryData;
 pub(crate) use library_projection::LibraryUpdate;

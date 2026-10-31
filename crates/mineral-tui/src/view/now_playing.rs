@@ -8,6 +8,7 @@ use crate::components::lifecycle::ComponentView;
 use crate::image::{ImageNeeds, ReadyImages};
 use crate::render::theme::Theme;
 use crate::runtime::collection::CollectionRef;
+use crate::runtime::cover_collage;
 use crate::runtime::playback::Playback;
 use crate::runtime::state::BrowseModel;
 use crate::runtime::state::{AppState, BrowsePage, LibraryData, View};
@@ -36,7 +37,7 @@ fn input<'a>(
         playing: playback.track.as_ref().map(|song| &song.id),
         collection_cover: collection.and_then(|item| match item {
             CollectionRef::Playlist(p) => {
-                crate::image::collage::effective_cover_url(library, images, &p.data)
+                cover_collage::effective_cover_url(library, images, &p.data)
             }
             CollectionRef::Album(a) => a.data.cover_url.clone(),
         }),
@@ -150,7 +151,7 @@ pub(crate) fn url(state: &AppState) -> Option<MediaUrl> {
 pub(crate) fn url_for_view(state: &AppState, view: View) -> Option<MediaUrl> {
     match view {
         View::Collections => match state.selected_collection_in_list()? {
-            CollectionRef::Playlist(p) => crate::image::collage::effective_cover_url(
+            CollectionRef::Playlist(p) => cover_collage::effective_cover_url(
                 &state.models.library,
                 state.resources.images.ready(),
                 &p.data,

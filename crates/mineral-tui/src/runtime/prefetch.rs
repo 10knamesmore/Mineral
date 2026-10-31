@@ -18,7 +18,7 @@ use crate::runtime::collection::{CollectionGroup, CollectionId, CollectionRef};
 use crate::runtime::state::{AppState, DetailFetch, View};
 
 /// 每 tick 调一次:封面 + 歌单/专辑 tracks + 选中歌本地完整播放次数三路 prefetch,
-/// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::image::collage`])。
+/// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::runtime::cover_collage`])。
 /// `queue_covers` 来自浮层的过滤视图,与 Browse 和在播候选合并后统一提交。
 pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(SourceKind, MediaUrl)>) {
     request_covers(state, queue_covers);
@@ -28,7 +28,10 @@ pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(Sourc
     request_play_count(state, client);
     request_detail(state, client);
     request_detail_covers(state);
-    crate::image::collage::tick(state);
+    state
+        .resources
+        .collages
+        .prepare(&state.models.library, &mut state.resources.images);
 }
 
 /// 合并队列光标、Browse 与在播位置的封面候选,共用图片引擎的预取入口。
@@ -144,7 +147,7 @@ fn song_cover(s: &Song) -> Option<(SourceKind, &MediaUrl)> {
 /// - 在播曲自身:频谱 / 动态 accent 的色板只在完整解码时提取,而浏览态没有主图渲染来登记
 ///   这次解码(now_playing 面板跟的是选中项,列表走低清缩略图),不显式登记就只能等进全屏
 ///   才开始取色。
-/// - 前后邻居:切歌转场要两图都已解码才开(`ImageEngine::sync_transition`),邻居封面只有提前
+/// - 前后邻居:切歌转场要两图都已解码才开，邻居封面只有提前
 ///   解码才赶得上;不等全屏稳态帧、任何视图都跑,否则刚启动 / 刚进全屏按 `n` / `p` 只能瞬切。
 fn request_playback_cover_decodes(state: &mut AppState) {
     let ahead = *state.cfg.prefetch().prewarm_ahead();
@@ -1038,7 +1041,7 @@ mod tests {
         let mut state = AppState::test_default()?;
         state.cfg = Arc::clone(&cfg);
         state.resources.images =
-            ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty((8, 16)));
+            ImageEngine::new(cfg, fetcher, TerminalGraphics::fixed_kitty(), (8, 16));
 
         let playing = Song::builder()
             .id(SongId::new(SourceKind::NETEASE, "playing"))
@@ -1053,12 +1056,8 @@ mod tests {
 
         super::tick(&mut state, &TestClient::default(), Vec::new());
         let ready = tokio::time::timeout(Duration::from_secs(5), async {
-            while !state.resources.images.palettes.contains_key(&url) {
-                state.resources.images.tick(
-                    Some(url.clone()),
-                    /*advance*/ None,
-                    /*fullscreen_stable*/ false,
-                );
+            while state.resources.images.cache.palette(&url).is_none() {
+                state.resources.images.tick();
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -1343,9 +1342,9 @@ mod tests {
         Ok(())
     }
 
-    /// 非 Kitty 协议仅保留 artist 当前分区的选中副头图，来源仍取行内实体。
+    /// Halfblock 仅保留 artist 当前分区的选中副头图，来源仍取行内实体。
     #[test]
-    fn detail_covers_on_other_protocols_only_prefetch_artist_selection() -> color_eyre::Result<()> {
+    fn halfblock_detail_covers_only_prefetch_artist_selection() -> color_eyre::Result<()> {
         let cfg = prefetch_radius_config(2)?;
         for (kind, section) in DETAIL_COVER_LISTS {
             let mut state = detail_cover_state(kind, section)?;
@@ -1355,17 +1354,11 @@ mod tests {
             } else {
                 Vec::new()
             };
-            for protocol in [
-                GraphicsProtocol::Halfblocks,
-                GraphicsProtocol::Sixel,
-                GraphicsProtocol::Iterm2,
-            ] {
-                assert_eq!(
-                    collect_detail_cover_candidates(&state, protocol),
-                    expected,
-                    "{protocol:?}: {kind:?}/{section:?} 不应预取邻居缩略图"
-                );
-            }
+            assert_eq!(
+                collect_detail_cover_candidates(&state, GraphicsProtocol::Halfblocks),
+                expected,
+                "{kind:?}/{section:?} 不应预取邻居缩略图"
+            );
         }
         Ok(())
     }

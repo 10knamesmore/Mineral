@@ -9,17 +9,17 @@ use ratatui::style::Color;
 use crate::image::geometry::fitted_area;
 use crate::image::key::PixelSize;
 use crate::image::resize::{
-    fitted_pixels, resize_transparent, thumbnail, thumbnail_exact, thumbnail_to_fill,
+    Error, fitted_pixels, resize_transparent, thumbnail, thumbnail_exact, thumbnail_to_fill,
 };
 use crate::render::color::lerp_color;
 
-/// 一张按目标 cell 网格编码的 halfblocks 图片。
-pub(crate) struct HalfblocksImage {
+/// 一张按目标 cell 网格采样的半块字符图片，也为 Kitty 缩略图提供低清像素。
+pub(crate) struct HalfblockImage {
     /// 每个 cell 对应上下两个像素；alpha 保留图片透明度和 cell 取整留白。
     pixels: RgbaImage,
 }
 
-impl HalfblocksImage {
+impl HalfblockImage {
     /// 先区域采样到两倍 halfblock 网格，再滤波到 `width × height*2` 像素。
     ///
     /// # Params:
@@ -32,37 +32,43 @@ impl HalfblocksImage {
         target_pixels: PixelSize,
         cells: (u16, u16),
         cell_fit: CoverCellFit,
-    ) -> Self {
+    ) -> Result<Self, Error> {
+        if cells.0 == 0
+            || cells.1 == 0
+            || target_pixels.width() == 0
+            || target_pixels.height() == 0
+            || source.width() == 0
+            || source.height() == 0
+        {
+            return Err(Error::EmptyDimensions);
+        }
         let width = u32::from(cells.0);
         let height = u32::from(cells.1).saturating_mul(2);
         let mut pixels = RgbaImage::new(width, height);
-        if cells.0 == 0 || cells.1 == 0 {
-            return Self { pixels };
-        }
         let cell_pixels = (
             u16::try_from(target_pixels.width() / u32::from(cells.0)).unwrap_or(u16::MAX),
             u16::try_from(target_pixels.height() / u32::from(cells.1)).unwrap_or(u16::MAX),
         );
-        let area = fitted_area(Rect::new(0, 0, cells.0, cells.1), source, cell_pixels);
+        let area = fitted_area(Rect::new(0, 0, cells.0, cells.1), source, cell_pixels)?;
         let fitted_cells = (area.width, area.height);
         let bounds = PixelSize::from_cells(fitted_cells, cell_pixels);
         let sample_width = u32::from(area.width) * 2;
         let sample_height = u32::from(area.height) * 4;
         let sampled = match cell_fit {
             CoverCellFit::Crop => {
-                thumbnail_to_fill(source, bounds, sample_width, sample_height).into_rgba8()
+                thumbnail_to_fill(source, bounds, sample_width, sample_height)?.into_rgba8()
             }
             CoverCellFit::Stretch => {
-                thumbnail_exact(source, sample_width, sample_height).into_rgba8()
+                thumbnail_exact(source, sample_width, sample_height)?.into_rgba8()
             }
-            _ => sample_halfblocks(source, bounds, fitted_cells),
+            _ => sample_halfblocks(source, bounds, fitted_cells)?,
         };
         // 只对图片自身的 cell 外框滤波，避免 preview 的大画布把像素漏到外框之外。
         let fitted = resize_transparent(
             &DynamicImage::ImageRgba8(sampled),
             u32::from(area.width),
             u32::from(area.height) * 2,
-        )
+        )?
         .into_rgba8();
         image::imageops::overlay(
             &mut pixels,
@@ -70,14 +76,14 @@ impl HalfblocksImage {
             i64::from(area.x),
             i64::from(area.y) * 2,
         );
-        Self { pixels }
+        Ok(Self { pixels })
     }
 
     /// 等比生成无补边的低清像素,供 Kitty 行内封面复用;留白由最终 placement 决定。
-    pub(super) fn thumbnail(source: &DynamicImage, pixels: PixelSize) -> Self {
-        Self {
-            pixels: thumbnail(source, pixels.width(), pixels.height()).into_rgba8(),
-        }
+    pub(super) fn thumbnail(source: &DynamicImage, pixels: PixelSize) -> Result<Self, Error> {
+        Ok(Self {
+            pixels: thumbnail(source, pixels.width(), pixels.height())?.into_rgba8(),
+        })
     }
 
     /// 把 halfblock 像素网格写入 ratatui buffer。
@@ -96,6 +102,14 @@ impl HalfblocksImage {
             .saturating_mul(u64::from(self.pixels.height()))
             .saturating_mul(4)
     }
+
+    /// 构造缓存测试使用的最小半块图片。
+    #[cfg(test)]
+    pub(super) fn test_image() -> Self {
+        Self {
+            pixels: RgbaImage::new(1, 2),
+        }
+    }
 }
 
 /// 直接生成两倍 halfblock 网格的采样画布，按真实像素比例保持原图形状并居中。
@@ -111,7 +125,7 @@ fn sample_halfblocks(
     source: &DynamicImage,
     target_pixels: PixelSize,
     cells: (u16, u16),
-) -> RgbaImage {
+) -> Result<RgbaImage, Error> {
     let width = u32::from(cells.0) * 2;
     let height = u32::from(cells.1) * 4;
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
@@ -124,24 +138,24 @@ fn sample_halfblocks(
         || source.width() == 0
         || source.height() == 0
     {
-        return canvas;
+        return Err(Error::EmptyDimensions);
     }
 
     let cell_pixels = (
         u16::try_from(target_width / u32::from(cells.0)).unwrap_or(u16::MAX),
         u16::try_from(target_height / u32::from(cells.1)).unwrap_or(u16::MAX),
     );
-    let area = fitted_area(Rect::new(0, 0, cells.0, cells.1), source, cell_pixels);
+    let area = fitted_area(Rect::new(0, 0, cells.0, cells.1), source, cell_pixels)?;
     let bounds = PixelSize::from_cells((area.width, area.height), cell_pixels);
-    let fitted = fitted_pixels(source, bounds);
+    let fitted = fitted_pixels(source, bounds)?;
     let sample_width = scaled_axis(fitted.width(), width, target_width).min(width);
     let sample_height = scaled_axis(fitted.height(), height, target_height).min(height);
-    let sampled = thumbnail_exact(source, sample_width, sample_height).into_rgba8();
+    let sampled = thumbnail_exact(source, sample_width, sample_height)?.into_rgba8();
     let left = u32::from(area.x) * 2 + (u32::from(area.width) * 2).saturating_sub(sample_width) / 2;
     let top =
         u32::from(area.y) * 4 + (u32::from(area.height) * 4).saturating_sub(sample_height) / 2;
     image::imageops::overlay(&mut canvas, &sampled, i64::from(left), i64::from(top));
-    canvas
+    Ok(canvas)
 }
 
 /// 按非零比例缩放一个像素轴，四舍五入并保留至少一个像素。
@@ -157,14 +171,14 @@ pub(in crate::image) fn sample_pixels(
     cells: (u16, u16),
     cell_pixels: (u16, u16),
     cell_fit: CoverCellFit,
-) -> RgbaImage {
-    HalfblocksImage::encode(
+) -> Result<RgbaImage, Error> {
+    HalfblockImage::encode(
         source,
         PixelSize::from_cells(cells, cell_pixels),
         cells,
         cell_fit,
     )
-    .pixels
+    .map(|image| image.pixels)
 }
 
 /// 将透明网格叠到本帧背景；完全留白的 cell 保留原内容。
@@ -214,7 +228,7 @@ fn over_background(pixel: Rgba<u8>, background: Color) -> Color {
 mod tests {
     use image::{DynamicImage, Rgb, RgbImage, Rgba, RgbaImage};
 
-    use super::HalfblocksImage;
+    use super::HalfblockImage;
     use crate::image::key::PixelSize;
 
     /// 横图、竖图和非方形 cell 保持物理比例，居中留白保留透明度。
@@ -231,12 +245,12 @@ mod tests {
                 source_size.1,
                 Rgb([255, 0, 0]),
             ));
-            let image = HalfblocksImage::encode(
+            let image = HalfblockImage::encode(
                 &source,
                 PixelSize::from_cells(cells, cell_pixels),
                 cells,
                 crate::config::CoverCellFit::Contain,
-            );
+            )?;
             assert_eq!(image.pixels.dimensions(), (16, 16));
             assert_eq!(image.resident_bytes(), 16 * 16 * 4);
             let content = image
@@ -267,12 +281,12 @@ mod tests {
         for alpha in [0, 128, 255] {
             let source =
                 DynamicImage::ImageRgba8(RgbaImage::from_pixel(128, 128, Rgba([255, 0, 0, alpha])));
-            let image = HalfblocksImage::encode(
+            let image = HalfblockImage::encode(
                 &source,
                 target,
                 cells,
                 crate::config::CoverCellFit::Contain,
-            );
+            )?;
             for blue in [40, 160] {
                 let mut buffer = Buffer::empty(area);
                 buffer.set_style(area, Style::new().bg(Color::Rgb(0, 0, blue)));

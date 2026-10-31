@@ -1,8 +1,9 @@
-//! 终端图片协议、能力探测与 backend 生命周期状态。
+//! 启动时确定图片协议与传输方式；字符像素尺寸独立查询。
 
-mod backend;
 mod protocol;
 mod query;
+mod session;
 
-pub(crate) use backend::{TerminalBackend, TerminalGraphics};
 pub(crate) use protocol::{GraphicsProtocol, TerminalRelay};
+pub(crate) use query::{query_cell_pixels, window_cell_pixels};
+pub(crate) use session::TerminalGraphics;

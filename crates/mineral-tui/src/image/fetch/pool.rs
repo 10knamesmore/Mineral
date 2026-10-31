@@ -13,7 +13,7 @@ use mineral_persist::CacheIndex;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::image::key::TerminalImageKey;
+use crate::image::key::PreviewTarget;
 
 use super::types::{
     CoverCompletion, CoverRequest, DecodeRequest, OriginalImageError, PreviewRequest, ReadyBuf,
@@ -127,24 +127,16 @@ impl CoverFetcher {
     /// # Params:
     ///   - `source`: 来源，决定缓存子目录
     ///   - `url`: 图片源 URL
-    ///   - `key`: 图片身份与目标像素尺寸组成的 preview 键
-    ///   - `cells`: preview 对应的目标 cell 宽高
+    ///   - `target`: 低清采样尺寸与主封面的格边策略
     ///
     /// # Return:
     ///   worker 队列仍可接收请求时返回 `true`
-    pub(crate) fn preview(
-        &self,
-        source: SourceKind,
-        url: MediaUrl,
-        key: TerminalImageKey,
-        cells: (u16, u16),
-    ) -> bool {
+    pub(crate) fn preview(&self, source: SourceKind, url: MediaUrl, target: PreviewTarget) -> bool {
         self.req_tx
             .send(CoverRequest::Preview(PreviewRequest {
                 source,
                 url,
-                key,
-                cells,
+                target,
             }))
             .is_ok()
     }

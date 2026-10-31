@@ -3,14 +3,8 @@
 /// Mineral 支持的终端图片协议。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GraphicsProtocol {
-    /// Kitty graphics protocol。
+    /// Kitty graphics protocol；像素经 POSIX shared memory 传输。
     Kitty,
-
-    /// Sixel graphics protocol。
-    Sixel,
-
-    /// iTerm2 inline images protocol。
-    Iterm2,
 
     /// 使用 cell 前景色与背景色绘制半块字符。
     Halfblocks,
@@ -68,11 +62,6 @@ impl TerminalRelay {
                 );
             }
         }
-    }
-
-    /// 判断控制序列是否经过 tmux。
-    pub(crate) fn is_tmux(self) -> bool {
-        self == Self::Tmux
     }
 
     /// 按 relay 规则包装一组完整控制序列。

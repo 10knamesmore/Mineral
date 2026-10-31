@@ -4,7 +4,7 @@ use super::page_morph;
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 
@@ -55,7 +55,6 @@ pub(crate) fn plan<'a>(
         area,
         app.as_ref().map(|app| RootLayer {
             app,
-            normal,
             areas,
             full,
             search,
@@ -121,7 +120,7 @@ fn draw_uncached(frame: &mut Frame<'_>, app: &FrameView<'_>) {
     // 整屏背景底(在任何布局面板之下):先铺 `theme.background`(普通页也有底色,消除进退
     // 全屏时与沉浸背景的色跳变),再叠氛围场——氛围由滞后跟随门控,进 / 退全屏时背景色慢
     // 半拍淡入 / 淡出,退出时越过恢复的列表界面慢褪。
-    paint_backdrop(frame, app, &normal, layout_cfg);
+    paint_backdrop(frame, app);
 
     // 互斥保证 fullscreen / search 两个 Toggle 同时只一个离开 at_min,故顺序判即可。
     if !app.fullscreen.at_min() {
@@ -307,68 +306,20 @@ fn paint_fullscreen(frame: &mut Frame<'_>, areas: &Areas, app: &FrameView<'_>) {
 ///
 /// 普通页面本无底色(逐格终端默认),进 / 退全屏时整屏刷成沉浸底会瞬跳;这里给普通页也
 /// 铺 `theme.background`(默认 = `base` = 氛围场在浓度 0 时的底色),两端连续。氛围场再叠
-/// 其上,浓度由**滞后跟随**进度驱动(慢半拍跟随全屏形变)。Sixel / iTerm2 实际图区
-/// 避开背景重绘，防止首 cell 改色触发图协议载荷重发；其他区域保留动态背景。
-pub(super) fn paint_backdrop(
-    frame: &mut Frame<'_>,
-    app: &FrameView<'_>,
-    normal: &Areas,
-    layout_cfg: &crate::config::LayoutConfig,
-) {
+/// 其上,浓度由**滞后跟随**进度驱动(慢半拍跟随全屏形变)。
+pub(super) fn paint_backdrop(frame: &mut Frame<'_>, app: &FrameView<'_>) {
     let area = frame.area();
-    let skip = backdrop_skip(app, area, normal, layout_cfg);
-    fill_bg(frame.buffer_mut(), area, app.env.theme.background, skip);
-    draw_ambient(frame, app, skip);
-}
-
-/// 本帧铺底 / 氛围都要挖的真图洞(防每帧改图 cell 的 bg 触发图协议载荷 diff 重发):
-///   - 全屏稳态(`at_max`):全屏封面真图区(见 [`ambient_skip_rect`]);
-///   - 退出残留期(几何已回列表 `at_min`、氛围仍在褪):now_playing 面板的真图封面区;
-///   - 其余(Kitty / halfblock / 形变途中):无洞。
-fn backdrop_skip(
-    app: &FrameView<'_>,
-    area: Rect,
-    normal: &Areas,
-    layout_cfg: &crate::config::LayoutConfig,
-) -> Option<Rect> {
-    let fullscreen = app.fullscreen;
-    if fullscreen.at_max() {
-        return ambient_skip_rect(app, compute_fullscreen(area, layout_cfg).cover);
-    }
-    if fullscreen.at_min() && app.ambient_reveal.active() {
-        return now_playing_cover_skip(app, normal.right);
-    }
-    None
-}
-
-/// now_playing 面板当前 place 的真图封面视觉区(用于退出残留期挖洞);面板不画真图
-/// (无选中 / 无图 / 协议未就绪 / halfblock 兜底)时为 `None`。
-fn now_playing_cover_skip(app: &FrameView<'_>, right: Option<Rect>) -> Option<Rect> {
-    let right = nonempty(right?)?;
-    let url = match app.selected.input.switch.current() {
-        crate::runtime::state::View::Collections => app.selected.input.collection_cover.as_ref(),
-        crate::runtime::state::View::Tracks => app
-            .selected
-            .input
-            .track
-            .and_then(|entry| entry.data.song.cover_url.as_ref()),
-    }?;
-    let [cover_sec, _, _] =
-        crate::components::layout::browse::now_playing::main_cover::sections(right)?;
-    app.images.ready_area(url, nonempty(cover_sec)?)
+    fill_bg(frame.buffer_mut(), area, app.env.theme.background);
+    draw_ambient(frame, app);
 }
 
 /// 整屏背景填充:把 `area` 内每格底色刷成 `color`;`color == Reset` 时不改已有背景。
-/// `skip` 区不刷(见 [`ambient_skip_rect`])。
-fn fill_bg(buf: &mut Buffer, area: Rect, color: Color, skip: Option<Rect>) {
+fn fill_bg(buf: &mut Buffer, area: Rect, color: Color) {
     if matches!(color, Color::Reset) {
         return;
     }
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
-            if skip.is_some_and(|hole| hole.contains(Position::new(x, y))) {
-                continue;
-            }
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_bg(color);
             }
@@ -380,7 +331,7 @@ fn fill_bg(buf: &mut Buffer, area: Rect, color: Color, skip: Option<Rect>) {
 /// 时背景色慢半拍淡入 / 淡出,退出时几何已回列表、场仍越过列表慢褪(故门控用
 /// `ambient_reveal.active()` 而非全屏几何)。跟随静止在关态时整段跳过(背景填充已铺底);
 /// 功能关且色板淡出已到底、或 ANSI 主题无真彩底色时同样跳过。
-fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>, skip: Option<Rect>) {
+fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>) {
     if !app.ambient_reveal.active() {
         return;
     }
@@ -400,19 +351,7 @@ fn draw_ambient(frame: &mut Frame<'_>, app: &FrameView<'_>, skip: Option<Rect>) 
         cfg,
         app.ambient_reveal.progress(),
         app.ambient_pulse.level_permille(cfg.pulse()),
-        skip,
     );
-}
-
-/// Sixel / iTerm2 的实际图片外框避开背景重绘，防止首 cell 改色导致重发载荷。
-/// Kitty 逐格保留背景；halfblock 和转场按透明度合成，这些路径都不挖洞。
-fn ambient_skip_rect(app: &FrameView<'_>, cover: Option<Rect>) -> Option<Rect> {
-    if !app.fullscreen.at_max() || app.cover_transition.is_some() {
-        return None;
-    }
-    let track = app.playing?;
-    let url = track.cover_url.as_ref()?;
-    app.images.ready_area(url, cover.and_then(nonempty)?)
 }
 
 /// 全屏独立封面跟随在播曲；形变中只画 halfblock，稳态全屏才使用终端图片成品
@@ -428,7 +367,7 @@ pub(super) fn draw_fullscreen_cover(frame: &mut Frame<'_>, area: Rect, app: &Fra
         // 切歌转场窗口:新旧两图像素级合成 halfblock(纯 cell,逐帧重画安全),恰好盖住
         // 新图的离线编码期，推满后使用准备阶段已预热的终端成品。缺图时显示已就绪的一端。
         if let Some(transition) = app.cover_transition {
-            let style = BlendStyle::from(*app.env.config.cover_transition().style());
+            let style = BlendStyle::from(app.env.config.cover_transition());
             app.images.render(
                 ImageContent::Blend {
                     from: &transition.from_url,
@@ -509,7 +448,7 @@ mod tests {
             .resources
             .images
             .cache
-            .insert_test(&url, Arc::new(img));
+            .insert_test(&url, Arc::new(img))?;
         // 关掉滚动防抖早退(置选中变化于防抖窗口之外),让稳态帧真正派发编码。
         app.state.ui.browse.nav.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -608,7 +547,7 @@ mod tests {
                     .resources
                     .images
                     .cache
-                    .insert_test(&url, Arc::new(img));
+                    .insert_test(&url, Arc::new(img))?;
             }
         }
         // 重新同步在播曲(带上刚塞的封面 URL)。
@@ -629,7 +568,7 @@ mod tests {
             .images
             .encode_pending
             .iter()
-            .any(|key| key.matches_url(&next_url));
+            .any(|request| request.key.matches_url(&next_url));
         assert!(warmed, "全屏稳态应提前编码下一首封面");
         Ok(())
     }
@@ -653,7 +592,7 @@ mod tests {
                 .resources
                 .images
                 .cache
-                .insert_test(&url, Arc::new(img));
+                .insert_test(&url, Arc::new(img))?;
         }
         app.state.models.playback.track = app.state.models.player.queue.get(1).cloned();
         let mut fs = Toggle::new(1);
@@ -668,7 +607,7 @@ mod tests {
         for (idx, label) in [(0, "上一首"), (2, "下一首")] {
             let url = MediaUrl::remote(&format!("https://prewarm/{idx}.jpg"))?;
             assert!(
-                pending.iter().any(|key| key.matches_url(&url)),
+                pending.iter().any(|request| request.key.matches_url(&url)),
                 "全屏稳态应提前编码{label}封面"
             );
         }

@@ -46,13 +46,7 @@ impl Compositor {
     }
 
     /// 在保留画布上重建变化区域，再比较这些区域；调用者不交换或清空 Terminal 缓冲。
-    /// 非 cell 寻址的图形控制序列使用完整画布，保持原有协议提交范围。
-    pub(crate) fn render(
-        &mut self,
-        plan: FramePlan<'_>,
-        frame: &mut Frame<'_>,
-        whole_frame_graphics: bool,
-    ) -> FrameUpdate {
+    pub(crate) fn render(&mut self, plan: FramePlan<'_>, frame: &mut Frame<'_>) -> FrameUpdate {
         let resized = self
             .surface
             .as_ref()
@@ -64,8 +58,7 @@ impl Compositor {
             .surface
             .get_or_insert_with(|| Surface::new(frame.area()));
         let placements = plan.placements();
-        let (damage, painted_components) =
-            plan.recompose(frame, &self.placements, resized || whole_frame_graphics);
+        let (damage, painted_components) = plan.recompose(frame, &self.placements, resized);
         let indices = surface.diff(frame.buffer_mut(), &damage);
         self.placements = placements;
         FrameUpdate {

@@ -687,7 +687,7 @@ pub(crate) fn app_in_search_morph(
             .resources
             .images
             .cache
-            .insert_test(&url_a, Arc::new(solid_cover(255, 0, 255)));
+            .insert_test(&url_a, Arc::new(solid_cover(255, 0, 255)))?;
     }
     let url_b = MediaUrl::remote("https://x.y/detail-b.jpg")?;
     app.state.models.caps.insert(
@@ -721,7 +721,7 @@ pub(crate) fn app_in_search_morph(
             .resources
             .images
             .cache
-            .insert_test(&url_b, Arc::new(solid_cover(0, 255, 255)));
+            .insert_test(&url_b, Arc::new(solid_cover(0, 255, 255)))?;
     }
     let mut active = Toggle::new(8);
     active.set(true);
@@ -805,14 +805,7 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
     Ok(app)
 }
 
-/// 造一个接 [`TestClient`]、不启动图片 worker 且**已稳态进入全屏**的 [`App`]:正在播《潜在表明》、
-/// 缓存逐字歌词(position 62s 落在中段),queue 填 3 首。供全屏渲染快照用。
-pub(crate) fn app_in_fullscreen() -> color_eyre::Result<App> {
-    Ok(seed_fullscreen(test_app()?))
-}
-
-/// 同 [`app_in_fullscreen`],但接一个记录 `seek` 目标的 [`TestClient`];额外返回该记录
-/// (全屏歌词 Enter 跳到焦点行的绝对 seek 路径断言用)。
+/// 构造稳态全屏 App，并返回 TestClient 记录的 seek 目标，验证全屏歌词跳转入口。
 pub(crate) fn app_in_fullscreen_seek_probe() -> color_eyre::Result<(App, Arc<Mutex<Vec<u64>>>)> {
     let seeks: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let client = TestClient {
@@ -823,7 +816,7 @@ pub(crate) fn app_in_fullscreen_seek_probe() -> color_eyre::Result<(App, Arc<Mut
 }
 
 /// 把一个空 [`App`] 布置成稳态全屏在播态:缓存《潜在表明》逐字歌词、position 62s 落中段、
-/// queue 填 3 首、fullscreen 推到满值。[`app_in_fullscreen`] 系列共用。
+/// queue 填 3 首、fullscreen 推到满值。
 fn seed_fullscreen(mut app: App) -> App {
     let track = qianzai_song();
     app.state

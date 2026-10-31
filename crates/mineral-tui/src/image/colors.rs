@@ -37,7 +37,13 @@ pub fn extract_palette(
     // 大图先降采样:聚类只看颜色分布,sample_dim² 样本足够;box filter 极快且确定。
     let dim = (*k.sample_dim()).max(1);
     let rgb = if img.width() > dim || img.height() > dim {
-        thumbnail(img, dim, dim).into_rgb8()
+        match thumbnail(img, dim, dim) {
+            Ok(sampled) => sampled.into_rgb8(),
+            Err(error) => {
+                mineral_log::warn!(target: "cover", error = mineral_log::chain(&error), "palette sampling failed");
+                return None;
+            }
+        }
     } else {
         img.to_rgb8()
     };

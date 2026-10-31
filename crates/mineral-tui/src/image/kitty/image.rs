@@ -134,7 +134,7 @@ mod tests {
     /// 终端声明的格式、shared memory 实际长度和缓存字节数必须一致。
     #[test]
     fn transmission_matches_shared_memory_layout() -> color_eyre::Result<()> {
-        let graphics = TerminalGraphics::fixed_kitty((8, 16));
+        let graphics = TerminalGraphics::fixed_kitty();
         // RGB / RGBA payload 均按 64 KiB 对齐，避免 fstat 的页对齐长度混入像素记账断言。
         for (source, format, payload_bytes) in [
             (

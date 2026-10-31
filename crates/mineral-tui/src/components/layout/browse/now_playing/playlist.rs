@@ -151,7 +151,7 @@ mod tests {
             .resources
             .images
             .cache
-            .insert_test(&url, Arc::new(img));
+            .insert_test(&url, Arc::new(img))?;
 
         assert!(
             app.state.resources.images.encode_pending.is_empty(),
@@ -169,7 +169,7 @@ mod tests {
 
         let pending = app.state.resources.images.encode_pending;
         assert!(
-            pending.iter().any(|key| key.matches_url(&url)),
+            pending.iter().any(|request| request.key.matches_url(&url)),
             "入口曲封面应被按封面区尺寸提前编码(encode_pending 应含其 URL)"
         );
         Ok(())

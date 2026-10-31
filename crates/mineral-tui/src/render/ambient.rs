@@ -372,10 +372,6 @@ fn rate_f32(sample_rate: u32) -> f32 {
 ///   - `progress_permille`: 全屏形变进度(‰):浓度乘它,进场随形变淡入、退场收干净
 ///   - `pulse_permille`: 响度包络(‰,[`LoudnessPulse::level_permille`]):
 ///     `pulse.enabled` 时按 `pulse.depth` 叠加进浓度,音乐越响场越浓;关闭时忽略
-///   - `skip`: 不铺的洞(将被不透明终端图协议真图盖住的封面区)。图协议把整段载荷
-///     藏在图区首 cell 的 symbol 里,逐帧改那格 bg 会让 diff 每帧重发载荷——
-///     iTerm2 / sixel(数据即显示、自带擦行)表现为整图闪烁;图不透明,跳过零视觉损失
-#[allow(clippy::too_many_arguments)] // reason: 纯渲染入口,参数即全部输入,收拢成 struct 反而多一层搬运
 pub fn render(
     buf: &mut Buffer,
     area: Rect,
@@ -384,7 +380,6 @@ pub fn render(
     cfg: &AmbientConfig,
     progress_permille: u16,
     pulse_permille: u16,
-    skip: Option<Rect>,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -392,9 +387,6 @@ pub fn render(
     let field = AmbientField::new(area, gradient, base, cfg, progress_permille, pulse_permille);
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
-            if skip.is_some_and(|hole| hole.contains(ratatui::layout::Position::new(x, y))) {
-                continue;
-            }
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_bg(field.color_at(x, y));
             }

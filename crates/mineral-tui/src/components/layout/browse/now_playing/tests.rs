@@ -54,14 +54,14 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
             .resources
             .images
             .cache
-            .insert_test(&from, Arc::new(solid_cover(200, 0, 0)));
+            .insert_test(&from, Arc::new(solid_cover(200, 0, 0)))?;
     }
     if cache_track {
         state
             .resources
             .images
             .cache
-            .insert_test(&to, Arc::new(solid_cover(0, 0, 200)));
+            .insert_test(&to, Arc::new(solid_cover(0, 0, 200)))?;
     }
     Ok(state)
 }
@@ -91,8 +91,8 @@ fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
     render(&mut state, &theme, false)?;
     let pending = state.resources.images.encode_pending.clone();
     assert_eq!(pending.len(), 2, "只预热当前选中的两张图");
-    assert!(pending.iter().any(|key| key.matches_url(&from)));
-    assert!(pending.iter().any(|key| key.matches_url(&to)));
+    assert!(pending.iter().any(|request| request.key.matches_url(&from)));
+    assert!(pending.iter().any(|request| request.key.matches_url(&to)));
     state.ui.browse.view.tick();
     render(&mut state, &theme, false)?;
     assert_eq!(

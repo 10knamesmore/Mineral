@@ -6,9 +6,9 @@ use crate::components::layout::flight;
 use crate::components::layout::shared::compute::{compute, compute_fullscreen, compute_search};
 use crate::components::layout::shared::transform;
 use crate::components::lifecycle::{Component, ComponentView};
-use crate::image::{ImageContent, ImageRenderPhase};
+use crate::image::{BlendStyle, ImageContent, ImageRenderPhase};
 use crate::render::ambient::{self, AmbientField};
-use crate::runtime::state::AppState;
+use crate::runtime::state::{AppState, CoverTransition};
 use ratatui::layout::{Position, Rect};
 use std::time::Instant;
 
@@ -56,7 +56,7 @@ pub(crate) struct FrameView<'a> {
     pub(super) playing: Option<&'a mineral_model::Song>,
 
     /// 全屏切歌封面的既定过渡。
-    pub(super) cover_transition: Option<&'a crate::image::CoverTransition>,
+    pub(super) cover_transition: Option<&'a CoverTransition>,
 
     /// 待机唱片的既定旋转相位。
     pub(super) vinyl: &'a crate::components::layout::shared::vinyl::VinylSpin,
@@ -309,7 +309,7 @@ impl App {
             ambient_reveal: &state.ui.browse.ambient_reveal,
             images: state.resources.images.ready(),
             playing: state.models.playback.track.as_ref(),
-            cover_transition: state.resources.images.transition.as_ref(),
+            cover_transition: state.ui.cover.transition.as_ref(),
             vinyl: &state.ui.vinyl,
             search_flight: (!state.ui.channel_search.active.settled())
                 .then(|| {
@@ -350,12 +350,12 @@ fn prepare_fullscreen_cover(area: Rect, steady: Option<Rect>, state: &mut AppSta
         .as_ref()
         .and_then(|track| track.cover_url.clone());
     if state.ui.browse.fullscreen.at_max() {
-        if let Some(active) = &state.resources.images.transition {
+        if let Some(active) = &state.ui.cover.transition {
             let from = active.from_url.clone();
             let to = active.to_url.clone();
             let progress = active.anim.eased_in_out();
             let advance = active.advance;
-            let style = crate::image::BlendStyle::from(*state.cfg.cover_transition().style());
+            let style = BlendStyle::from(state.cfg.cover_transition());
             state.resources.images.prepare_display(
                 ImageContent::Blend {
                     from: &from,

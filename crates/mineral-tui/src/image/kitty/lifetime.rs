@@ -11,13 +11,11 @@ pub(crate) enum KittyImageEvent {
     Uploaded {
         id: u32,
 
+        /// 删除图片时使用与上传相同的传输方式。
         relay: TerminalRelay,
     },
 
     Released(u32),
-
-    /// 协议切换后，旧快照不再使用已上传图片。
-    RetireAll,
 }
 
 /// 缓存与转场通过 Arc 共享此引用；最后一个引用释放时只发事件，不执行终端 I/O。
@@ -53,7 +51,7 @@ impl Drop for KittyImageHandle {
 pub(crate) struct KittyImageRegistry {
     events: Receiver<KittyImageEvent>,
 
-    /// 保留上传时的 relay，协议切换后仍能删除旧图片。
+    /// 已上传图片及其控制序列传输方式，用于释放和退出时删除。
     uploaded: FxHashMap<u32, TerminalRelay>,
 }
 
@@ -82,7 +80,6 @@ impl KittyImageRegistry {
                         commands.push_str(&delete_image(id, relay));
                     }
                 }
-                KittyImageEvent::RetireAll => self.append_all_deletions(&mut commands),
             }
         }
         commands
@@ -91,13 +88,9 @@ impl KittyImageRegistry {
     /// 包含尚未消费的事件以及缓存、转场仍持有的图片。
     pub(crate) fn take_all_deletions(&mut self) -> String {
         let mut commands = self.take_pending_deletions();
-        self.append_all_deletions(&mut commands);
-        commands
-    }
-
-    fn append_all_deletions(&mut self, commands: &mut String) {
         for (id, relay) in self.uploaded.drain() {
             commands.push_str(&delete_image(id, relay));
         }
+        commands
     }
 }

@@ -99,11 +99,7 @@ impl App {
                 // 兜底默认值,跳过后端同步。fatal 态直接退出(不走 dispatch,不玩退出收缩动画)。
                 let graphics = self.state.resources.images.take_graphics_commands();
                 let view = self.frame_view();
-                tui.present(
-                    plan(area, &view),
-                    &graphics,
-                    self.state.resources.images.graphics_protocol(),
-                )?;
+                tui.present(plan(area, &view), &graphics)?;
                 if event::poll(self.frame_tick())?
                     && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press
@@ -118,11 +114,7 @@ impl App {
             let graphics = self.state.resources.images.take_graphics_commands();
             {
                 let view = self.frame_view();
-                tui.present(
-                    plan(area, &view),
-                    &graphics,
-                    self.state.resources.images.graphics_protocol(),
-                )?;
+                tui.present(plan(area, &view), &graphics)?;
             }
 
             let timeout = self.frame_tick().saturating_sub(self.last_tick.elapsed());
@@ -144,7 +136,7 @@ impl App {
                 self.update_spectrum();
                 self.state.tick_frame();
                 advance_preparation = true;
-                self.tick_overlays();
+                self.overlays.tick();
                 self.tick_images();
                 self.poll_clipboard();
                 self.client.flush_task_submissions();
@@ -175,35 +167,19 @@ impl App {
         // 当前曲的进入档位是 server 事实:切歌转场据此定向,`Prev` 之外都按下一首。
         let advance = self.state.models.player.current_advance;
         let fullscreen_stable = self.state.ui.browse.fullscreen.at_max();
-        self.state
-            .resources
-            .images
-            .tick(current_cover, advance, fullscreen_stable);
+        self.state.resources.images.tick();
+        self.state.ui.cover.tick(
+            current_cover,
+            advance,
+            fullscreen_stable,
+            self.state.resources.images.ready(),
+            self.state.cfg.cover_transition(),
+            *self.state.cfg.animation().frame_tick_ms(),
+        );
         let queue_covers = self.overlays.queue_cover_candidates(&self.state);
         crate::runtime::prefetch::tick(&mut self.state, &*self.client, queue_covers);
         self.sync_cover_palette();
         self.tick_cover_fades();
-    }
-
-    /// 推进浮层动画一拍;并处理「全屏下居中浮层刚被移除」的封面残影。
-    ///
-    /// 居中浮层(如 quit 确认)在全屏时会压住左侧封面的中段。kitty 协议把整行 unicode
-    /// 占位符打包在该行**最左 cell**、其余 cell `set_skip(true)`,而 ratatui 的 buffer diff
-    /// 跳过未变 cell —— 浮层只盖了封面中段、没碰最左驱动 cell,关闭后那几行不会自行重发,
-    /// 中段残留浮层底色(残影)。故在该居中浮层(退场动画放完)真正出栈的那一拍,清一次封面
-    /// 终端图片缓存：下一帧由 [`crate::image::ImageEngine`] 按需重建、重新 transmit 并
-    /// 全量 re-place，消除残影。
-    ///
-    /// **仅对居中浮层做此事**:停靠浮层(queue 贴右)不压封面,清它纯属白白触发封面重新解码
-    /// / 终端协议编码(几十毫秒、卡掉一帧),故停靠浮层出栈不刷新。
-    fn tick_overlays(&mut self) {
-        let before = self.overlays.len();
-        let closing_centered = self.overlays.any_leaving_centered();
-        self.overlays.tick();
-        if self.state.ui.browse.fullscreen.on() && closing_centered && self.overlays.len() < before
-        {
-            self.state.resources.images.terminal_images.clear();
-        }
     }
 
     /// 推进整屏转场动画一帧。`settled()`(进度抵达目标)时收尾:退出转场(`leaving()`)置
@@ -286,83 +262,6 @@ mod tests {
 
     /// 测试对照值 = tui-default.lua 的 `animation.transition_ms`(288)÷ `frame_tick_ms`(16)。
     const TRANSITION_TICKS: u16 = 18;
-
-    /// 回归：全屏下关闭居中浮层(quit 确认)后，终端图片缓存被清空，据此下一帧重建并全量
-    /// re-place,消除「居中浮层压过封面中段、关闭后 kitty 行不自重发」留下的残影。
-    #[test]
-    fn fullscreen_overlay_close_clears_cover_protocol() -> color_eyre::Result<()> {
-        use mineral_model::MediaUrl;
-
-        use crate::test_support::app_in_fullscreen;
-
-        let mut app = app_in_fullscreen()?;
-        assert!(app.state.ui.browse.fullscreen.on(), "前置:已稳态进入全屏");
-
-        // 模拟封面已渲染：塞一个终端图片缓存条目。
-        let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        app.state
-            .resources
-            .images
-            .insert_test_terminal_image(&url, (10, 10));
-        assert!(
-            !app.state.resources.images.terminal_images.is_empty(),
-            "前置:封面协议条目已就位"
-        );
-
-        // 开一个居中浮层并推满进场动画；浮层尚未出栈时终端图片缓存不应被清空。
-        app.overlays.push(super::AppOverlay::confirm());
-        for _ in 0..40 {
-            app.tick_overlays();
-        }
-        assert!(
-            !app.state.resources.images.terminal_images.is_empty(),
-            "浮层开着时(未出栈)不应清空封面协议"
-        );
-
-        // 关闭并推满退场动画 → 浮层出栈 → 该拍清空封面协议。
-        app.overlays.close_top();
-        for _ in 0..40 {
-            app.tick_overlays();
-        }
-        assert!(
-            app.state.resources.images.terminal_images.is_empty(),
-            "全屏关浮层后封面协议应被清空(触发重 place 消残影)"
-        );
-        Ok(())
-    }
-
-    /// 回归:全屏下关闭**停靠**浮层(queue,贴右不碰封面)**不应**清空封面协议 —— 清了会白白
-    /// 触发封面重新解码 / 终端协议编码,造成关闭动画途中全局卡顿。
-    #[test]
-    fn fullscreen_queue_close_keeps_cover_protocol() -> color_eyre::Result<()> {
-        use mineral_model::MediaUrl;
-
-        use crate::test_support::app_in_fullscreen;
-
-        let mut app = app_in_fullscreen()?;
-
-        let url = MediaUrl::remote("https://x.y/c.jpg")?;
-        app.state
-            .resources
-            .images
-            .insert_test_terminal_image(&url, (10, 10));
-
-        // 开「停靠」队列浮层并推满进场,再关闭并推满退场 → 出栈。
-        app.overlays.push(super::AppOverlay::queue(/*sel*/ 0));
-        for _ in 0..40 {
-            app.tick_overlays();
-        }
-        app.overlays.close_top();
-        for _ in 0..40 {
-            app.tick_overlays();
-        }
-
-        assert!(
-            !app.state.resources.images.terminal_images.is_empty(),
-            "停靠浮层(queue)出栈不应清空封面协议(贴右不碰封面,清了徒增重编码卡顿)"
-        );
-        Ok(())
-    }
 
     /// 启动扩大:进入扩大转场(非退场),推进到满后清空转场、不退出、转入正常运行。
     #[test]

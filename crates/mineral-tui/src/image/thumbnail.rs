@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
-use mineral_common::revision::Revision;
+use image::DynamicImage;
 use mineral_model::MediaUrl;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::encode::EncodeRequest;
+use super::encode::{EncodeIdentity, EncodeInput, EncodeRequest};
 use super::graphics::GraphicsProtocol;
+use super::key::TerminalImageKey;
 use super::kitty::KittyImageHandle;
 use super::{ImageEngine, ImageRenderPhase};
 
@@ -16,16 +17,13 @@ use super::{ImageEngine, ImageRenderPhase};
 #[derive(Clone)]
 pub(crate) struct InlineImage {
     /// 编码成品的缓存身份。
-    key: super::key::TerminalImageKey,
+    key: TerminalImageKey,
 
     /// 已就绪的 Kitty 图片引用。
     image: Arc<KittyImageHandle>,
 
     /// 占位字符的原始区域。
     area: Rect,
-
-    /// 编码所属终端协议代次，切换协议后不能继续使用。
-    generation: Revision,
 }
 
 impl InlineImage {
@@ -54,20 +52,8 @@ impl ImageEngine {
     /// 保留当前已就绪缩略图的呈现输入；未就绪图片不进入旧端快照。
     pub(crate) fn inline_image(&self, url: &MediaUrl, area: Rect) -> Option<InlineImage> {
         let key = self.thumbnail_preview_key(url);
-        let mut image = None;
-        self.terminal_images
-            .render_if_ready(&key, |cached| image = cached.inline_handle());
-        Some(InlineImage {
-            key,
-            image: image?,
-            area,
-            generation: self.graphics_generation(),
-        })
-    }
-
-    /// 协议变更后，旧端图片描述不再属于当前终端能力。
-    pub(crate) fn inline_is_current(&self, image: &InlineImage) -> bool {
-        image.generation == self.graphics_generation()
+        let image = self.terminal_images.get(&key)?.inline_handle()?;
+        Some(InlineImage { key, image, area })
     }
 
     /// 旧视图仍参与转场时保留其成品，并在实际提交时保证 placement 就绪。
@@ -96,8 +82,9 @@ impl ImageEngine {
         }
         if let Some(url) = url {
             let key = self.thumbnail_preview_key(url);
-            self.terminal_images
-                .render_if_ready(&key, |image| image.render_inline(area, buf));
+            if let Some(image) = self.terminal_images.get(&key) {
+                image.render_inline(area, buf);
+            }
         }
     }
 
@@ -121,32 +108,39 @@ impl ImageEngine {
             self.graphics_placements.push((key, area));
             return;
         }
-        if phase != ImageRenderPhase::Stable || self.encode_pending.contains(&key) {
+        if phase != ImageRenderPhase::Stable {
             return;
         }
-        let mut source = None;
         self.preview_images.observe(&key);
-        self.preview_images.render_if_ready(&key, |preview| {
-            source = preview.halfblock_source().map(Arc::new);
-        });
-        let Some(image) = source.or_else(|| self.cache.get(url).cloned()) else {
+        let Some(input) = self.encode_input(&key) else {
             return;
         };
-        self.encode_pending.insert(key.clone());
-        mineral_log::debug!(target: "cover", url = %url, "prepare inline cover thumbnail");
-        self.request_encode(EncodeRequest {
-            key,
-            generation: self.graphics_generation(),
-            image,
-            target: area,
-        });
+        let identity = EncodeIdentity { key, input };
+        if !self.should_encode(&identity) {
+            return;
+        }
+        let image = match input {
+            EncodeInput::Preview(_) => self
+                .preview_images
+                .get(&identity.key)
+                .map(|preview| Arc::new(DynamicImage::ImageRgba8(preview.pixels().clone()))),
+            EncodeInput::Decoded(_) => self.cache.get(url).cloned(),
+        };
+        if let Some(image) = image {
+            mineral_log::debug!(target: "cover", url = %url, "prepare inline cover thumbnail");
+            self.request_encode(EncodeRequest { identity, image });
+        }
     }
 
     /// 消费本次实际提交所需的协议指令；重复绘制不会调用此入口。
     pub(crate) fn take_graphics_commands(&mut self) -> String {
         let mut commands = String::new();
         for (key, area) in &self.graphics_placements {
-            if let Some(command) = self.terminal_images.placement_command(key, *area) {
+            if let Some(command) = self
+                .terminal_images
+                .get_mut(key)
+                .and_then(|image| image.placement_command(*area))
+            {
                 commands.push_str(&command);
             }
         }

@@ -13,9 +13,6 @@ pub(super) struct RootLayer<'a> {
     /// 本帧只读应用视图。
     pub(super) app: &'a FrameView<'a>,
 
-    /// 常规布局，用于背景避让。
-    pub(super) normal: Areas,
-
     /// 当前稳态页面的布局。
     pub(super) areas: Areas,
 
@@ -57,21 +54,11 @@ impl PaintView for RootLayer<'_> {
             }
         } else if !self.search {
             app.status.dependencies(inputs);
-            app.images.dependencies(
-                inputs,
-                [
-                    app.selected.input.collection_cover.clone(),
-                    app.selected
-                        .input
-                        .track
-                        .and_then(|entry| entry.data.song.cover_url.clone()),
-                ],
-            );
         }
     }
 
     fn paint(&self, frame: &mut Frame<'_>, _area: Rect, env: FrameEnv<'_>) {
-        super::frame::paint_backdrop(frame, self.app, &self.normal, env.config.layout());
+        super::frame::paint_backdrop(frame, self.app);
         if self.full {
             if let Some(cover) = self.areas.cover.filter(|area| !area.is_empty()) {
                 super::frame::draw_fullscreen_cover(frame, cover, self.app);

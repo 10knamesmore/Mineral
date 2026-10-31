@@ -47,11 +47,11 @@ impl crate::app::App {
             ));
         let accent_target = (*dynamic.enabled()).then(|| {
             self.state
-                .resources
-                .images
-                .spectrum_cover
+                .ui
+                .cover
+                .applied_palette
                 .as_ref()
-                .and_then(|url| self.state.resources.images.palettes.get(url))
+                .and_then(|applied| applied.palette.as_ref())
                 .map(|palette| {
                     derive_accents(
                         palette,
@@ -64,18 +64,24 @@ impl crate::app::App {
             .set_target(accent_target.flatten(), &self.theme_base);
         self.theme = Arc::new(self.accent_fade.apply(self.theme_base));
         // 固化型(携带运行态):氛围渐变 retempo 保相位;开关 / 目标按当前已应用色板
-        // 重投(开着且色板在则渐变过去,关了渐变回底色场)。`current_palette` 是随封面
-        // 身份维护的稳定拷贝,对原图 LRU 逐出免疫。
+        // 重投(开着且色板在则渐变过去,关了渐变回底色场)。UI 持有正在使用的色板，
+        // 不依赖原图是否仍在 LRU 中。
         self.ambient.retempo(
             crate::render::anim::ticks32_from_ms(*cfg.ambient().fade_ms(), tick_ms),
             tick_ms,
         );
-        let ambient_palette = self.state.resources.images.current_palette.clone();
+        let ambient_palette = self
+            .state
+            .ui
+            .cover
+            .applied_palette
+            .as_ref()
+            .and_then(|applied| applied.palette.clone());
         self.feed_ambient(ambient_palette.as_ref());
         // 固化型(携带运行态):响度包络只重设时间基准,包络值 / 峰值跟踪保留不跳。
         self.ambient_pulse.retempo(tick_ms);
         // 固化型(携带运行态):在途的切歌封面转场 retempo 保相位(新转场现场折算,不在此列)。
-        if let Some(active) = self.state.resources.images.transition.as_mut() {
+        if let Some(active) = self.state.ui.cover.transition.as_mut() {
             active.anim.retempo(crate::render::anim::ticks16_from_ms(
                 *cfg.cover_transition().duration_ms(),
                 tick_ms,
@@ -198,6 +204,8 @@ fn config_warning_text(warning: &mineral_config::ConfigWarning) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::image::CoverFingerprint;
+    use crate::image::ImageEngine;
     use crate::test_support::app_with_queue;
     use std::sync::Arc;
 
@@ -363,22 +371,15 @@ mod tests {
         Ok(())
     }
 
-    /// 图协议配置热更：替换 terminal backend 并清空终端图片缓存，切回 auto 时恢复
-    /// 启动协商结果。
+    /// 图协议配置热更不改变本次会话的协议，也不清理已准备的终端图片。
     #[test]
-    fn local_config_forces_cover_protocol() -> color_eyre::Result<()> {
+    fn local_cover_protocol_change_waits_for_restart() -> color_eyre::Result<()> {
         use mineral_model::MediaUrl;
 
-        use crate::image::GraphicsProtocol;
-
         let mut app = app_with_queue(/*len*/ 1, /*current_idx*/ 0)?;
+        app.state.resources.images = ImageEngine::disabled_kitty(Arc::clone(&app.state.cfg));
         let negotiated = app.state.resources.images.graphics_protocol();
-        assert_ne!(
-            negotiated,
-            GraphicsProtocol::Sixel,
-            "前置:测试 terminal backend 非 sixel"
-        );
-        // 塞一个终端图片条目，验证 backend 替换会清缓存。
+        // 协议配置更新不能使本次会话已有的成品失效。
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
         app.state
             .resources
@@ -386,16 +387,16 @@ mod tests {
             .insert_test_terminal_image(&url, (10, 10));
 
         app.apply_config(local_config(
-            serde_json::json!({ "cover": { "protocol": "sixel" }  }),
+            serde_json::json!({ "cover": { "protocol": "halfblock" }  }),
         )?);
         assert_eq!(
             app.state.resources.images.graphics_protocol(),
-            GraphicsProtocol::Sixel,
-            "强制档替换 terminal backend"
+            negotiated,
+            "本次会话继续使用启动时确定的协议"
         );
         assert!(
-            app.state.resources.images.terminal_images.is_empty(),
-            "backend 替换应清终端图片缓存"
+            !app.state.resources.images.terminal_images.is_empty(),
+            "修改协议配置不清理终端图片缓存"
         );
 
         app.apply_config(local_config(
@@ -404,7 +405,7 @@ mod tests {
         assert_eq!(
             app.state.resources.images.graphics_protocol(),
             negotiated,
-            "切回 auto 还原启动协商结果(不重探)"
+            "切回 auto 也不重新探测或替换会话协议"
         );
         Ok(())
     }
@@ -426,7 +427,7 @@ mod tests {
             .resources
             .images
             .cache
-            .insert_test(&url, Arc::clone(&source));
+            .insert_test(&url, Arc::clone(&source))?;
         let area = Rect::new(0, 0, 20, 10);
         let render = |images: &mut ImageEngine| {
             images.prepare_and_render(
@@ -446,7 +447,7 @@ mod tests {
             .next()
             .cloned()
             .ok_or_else(|| color_eyre::eyre::eyre!("missing initial cover encode request"))?;
-        assert_eq!(crop_key.cell_fit(), CoverCellFit::Crop);
+        assert_eq!(crop_key.key.cell_fit(), CoverCellFit::Crop);
         app.state
             .resources
             .images
@@ -466,13 +467,17 @@ mod tests {
             let pending = &app.state.resources.images.encode_pending;
             let added = pending.difference(&previous).collect::<Vec<_>>();
             assert_eq!(added.len(), 1);
-            assert!(added.iter().all(|key| key.cell_fit() == expected));
+            assert!(
+                added
+                    .iter()
+                    .all(|request| request.key.cell_fit() == expected)
+            );
             assert!(
                 app.state
                     .resources
                     .images
                     .terminal_images
-                    .contains(&crop_key)
+                    .contains(&crop_key.key)
             );
             assert_ne!(
                 app.state.resources.images.preview_key(&url, area),
@@ -609,7 +614,13 @@ mod tests {
         }
         let palette = CoverPalette::new(vec![Rgb::new(20, 20, 120), Rgb::new(220, 60, 60)])
             .ok_or_else(|| color_eyre::eyre::eyre!("非空色板"))?;
-        app.state.resources.images.palettes.insert(url, palette);
+        let image = Arc::new(crate::test_support::solid_cover(20, 20, 120));
+        let fingerprint = CoverFingerprint::of(&image)?;
+        app.state
+            .resources
+            .images
+            .cache
+            .insert(&url, image, fingerprint, Some(palette));
         app.sync_cover_palette();
         Ok(app)
     }
@@ -697,7 +708,7 @@ mod tests {
         for _ in 0..5 {
             anim.tick();
         }
-        app.state.resources.images.transition = Some(CoverTransition {
+        app.state.ui.cover.transition = Some(CoverTransition {
             from_url: MediaUrl::remote("https://x.y/a.jpg")?,
             to_url: MediaUrl::remote("https://x.y/b.jpg")?,
             advance: None,
@@ -709,8 +720,8 @@ mod tests {
         )?);
         let active = app
             .state
-            .resources
-            .images
+            .ui
+            .cover
             .transition
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("在途转场不应被热更清掉"))?;
@@ -735,7 +746,7 @@ mod tests {
             .resources
             .images
             .cache
-            .insert_test(&url, Arc::new(img));
+            .insert_test(&url, Arc::new(img))?;
         assert!(evicted.is_empty(), "预算内不逐出");
         assert_eq!(app.state.resources.images.cache.len(), 1, "前置:已缓存一张");
         app.apply_config(local_config(

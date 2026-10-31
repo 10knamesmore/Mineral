@@ -98,7 +98,7 @@ fn image_readiness_invalidates_paint_but_retention_does_not() -> color_eyre::Res
         .resources
         .images
         .cache
-        .insert_test(&url, Arc::new(image::DynamicImage::new_rgb8(16, 16)));
+        .insert_test(&url, Arc::new(image::DynamicImage::new_rgb8(16, 16)))?;
     app.prepare_view(area, now, false);
     assert!(crate::view::plan(area, &app.frame_view()).changed_since(&previous));
     let previous = paint_prepared(&app, &mut terminal, area)?;

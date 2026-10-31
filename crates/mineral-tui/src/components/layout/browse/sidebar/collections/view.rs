@@ -7,6 +7,7 @@ use super::window::CollectionWindow;
 use crate::components::frame::FrameEnv;
 use crate::image::ReadyImages;
 use crate::runtime::collection::{CollectionId, CollectionRef};
+use crate::runtime::cover_collage;
 use crate::runtime::state::LibraryData;
 use mineral_model::MediaUrl;
 
@@ -119,7 +120,7 @@ impl<'a> CollectionView<'a> {
     pub(super) fn cover(&self, row: &CollectionRef<'_>) -> Option<MediaUrl> {
         match *row {
             CollectionRef::Playlist(p) => {
-                crate::image::collage::effective_cover_url(self.input.library, self.images, &p.data)
+                cover_collage::effective_cover_url(self.input.library, self.images, &p.data)
             }
             CollectionRef::Album(a) => a.data.cover_url.clone(),
         }

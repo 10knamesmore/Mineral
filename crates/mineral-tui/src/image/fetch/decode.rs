@@ -80,7 +80,7 @@ pub(super) async fn fetch_and_decode(
                     decoded_width = image.width(), decoded_height = image.height(),
                     decoded_bytes = image.as_bytes().len(), "display cover decoded");
             let palette = extract_palette(&image, cfg.kmeans());
-            let fingerprint = CoverFingerprint::of(&image);
+            let fingerprint = CoverFingerprint::of(&image)?;
             Ok(DecodedCover {
                 image,
                 fingerprint,

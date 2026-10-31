@@ -970,7 +970,7 @@ mod tests {
             .resources
             .images
             .cache
-            .insert_test(&url, Arc::new(img));
+            .insert_test(&url, Arc::new(img))?;
 
         let mut t = Terminal::new(TestBackend::new(120, 44))?;
         // 窗内(选中刚变):不投编码。

@@ -2471,12 +2471,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "icy_sixel"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccc0a9c4770bc47b0a933256a496cfb8b6531f753ea9bccb19c6dff0ff7273fc"
-
-[[package]]
 name = "id-arena"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3700,7 +3694,6 @@ name = "mineral-tui"
 version = "0.5.10"
 dependencies = [
  "arboard",
- "arc-swap",
  "async-trait",
  "base64",
  "chrono",
@@ -3710,7 +3703,6 @@ dependencies = [
  "derive-getters",
  "fast_image_resize",
  "futures-util",
- "icy_sixel",
  "image",
  "isahc",
  "jpeg-decoder",

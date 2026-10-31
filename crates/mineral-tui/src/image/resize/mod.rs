@@ -9,6 +9,6 @@ mod tests;
 pub(super) use sampling::resize_exact;
 
 pub(super) use sampling::{
-    fitted_pixels, resize_center_square, resize_to_fill, resize_transparent, scale_to_pixels,
-    thumbnail, thumbnail_exact, thumbnail_to_fill,
+    Error, PixelFit, fitted_pixels, resize_center_square, resize_to_fill, resize_transparent,
+    scale_to_pixels, thumbnail, thumbnail_exact, thumbnail_to_fill,
 };

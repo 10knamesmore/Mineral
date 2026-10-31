@@ -29,7 +29,7 @@ use mineral_protocol::{Subscription, SubscriptionTopic};
 
 use app::App;
 use image::fetch::CoverFetcher;
-use image::graphics::TerminalGraphics;
+use image::graphics::{TerminalGraphics, query_cell_pixels};
 use image::{ImageEngine, KittyImageRegistry};
 use runtime::backend::{Backend, BackendBootstrap, ClientBackend, CompletionQueue};
 use runtime::ui::prefs::{UiPrefs, open_tui_store};
@@ -180,9 +180,10 @@ fn run_app(
         }
     };
     let (kitty_images, kitty_image_events) = KittyImageRegistry::new();
-    let graphics = TerminalGraphics::query(kitty_image_events);
+    let graphics = TerminalGraphics::query(*cfg.cover().protocol(), kitty_image_events);
+    let cell_pixels = query_cell_pixels(graphics.relay());
     tui.manage_kitty_images(kitty_images);
-    let images = ImageEngine::new(Arc::clone(&cfg), cover_fetcher, graphics);
+    let images = ImageEngine::new(Arc::clone(&cfg), cover_fetcher, graphics, cell_pixels);
     let mut app = App::new(
         backend,
         images,
