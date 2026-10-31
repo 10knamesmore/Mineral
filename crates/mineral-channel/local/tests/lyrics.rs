@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::eyre;
+use futures_util::TryStreamExt;
 use lofty::{
     TextEncoding,
     config::WriteOptions,
@@ -34,7 +35,13 @@ fn music_directory(directory: &Path) -> color_eyre::Result<PathBuf> {
 /// Loads complete playlists so all lyric requests use identities from a real scan.
 async fn playlists(library: &LocalLibrary) -> color_eyre::Result<Vec<Playlist>> {
     let mut result = Vec::<Playlist>::new();
-    for playlist in library.my_playlists(CachePolicy::UseCache).await? {
+    for playlist in library
+        .my_playlists(CachePolicy::UseCache)
+        .try_next()
+        .await?
+        .ok_or_else(|| eyre!("expected local snapshot"))?
+        .into_items()
+    {
         let detail = library
             .playlist_detail(&playlist.id, PlaylistLoad::Complete, CachePolicy::UseCache)
             .await?;

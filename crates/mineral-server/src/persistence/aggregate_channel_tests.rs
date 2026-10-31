@@ -1,6 +1,8 @@
 //! Verifies the built-in channel through the daemon’s real library store.
 
 use crate::persistence::ServerStore;
+use color_eyre::eyre::eyre;
+use futures_util::TryStreamExt;
 use mineral_channel_core::{Error, MusicChannel};
 use mineral_model::{CachePolicy, SongId, SourceKind};
 use mineral_test::{song, with_name};
@@ -34,7 +36,12 @@ async fn store_with_favorites() -> color_eyre::Result<(tempfile::TempDir, Server
 async fn my_playlists_is_single_synthetic() -> color_eyre::Result<()> {
     let (_dir, store) = store_with_favorites().await?;
     let ch = MineralChannel::new(Arc::new(store));
-    let lists = ch.my_playlists(CachePolicy::UseCache).await?;
+    let lists = ch
+        .my_playlists(CachePolicy::UseCache)
+        .try_next()
+        .await?
+        .ok_or_else(|| eyre!("expected Favorites list snapshot"))?
+        .into_items();
     assert_eq!(lists.len(), 1);
     let p = lists
         .first()

@@ -9,7 +9,7 @@ use mineral_channel_core::store::{
 use mineral_channel_mineral::favorites_playlist_id;
 use mineral_model::CollectionIndex;
 use mineral_model::{
-    AlbumId, ArtistId, Envelope, Playlist, PlaylistId, Song, SongId, SourceKind, StoreValue,
+    Album, AlbumId, ArtistId, Envelope, Playlist, PlaylistId, Song, SongId, SourceKind, StoreValue,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use sea_orm::{EntityTrait, QueryOrder};
@@ -32,6 +32,26 @@ impl From<Error> for StoreError {
 impl ChannelStore for NamespaceStore {
     fn source(&self) -> SourceKind {
         self.source()
+    }
+
+    async fn get_my_playlists_cache(&self) -> StoreResult<Option<Vec<Playlist>>> {
+        Self::get_my_playlists_cache(self).await.map_err(Into::into)
+    }
+
+    async fn put_my_playlists_cache(&self, playlists: &[Playlist]) -> StoreResult<()> {
+        Self::put_my_playlists_cache(self, playlists)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn get_my_albums_cache(&self) -> StoreResult<Option<Vec<Album>>> {
+        Self::get_my_albums_cache(self).await.map_err(Into::into)
+    }
+
+    async fn put_my_albums_cache(&self, albums: &[Album]) -> StoreResult<()> {
+        Self::put_my_albums_cache(self, albums)
+            .await
+            .map_err(Into::into)
     }
 
     async fn album_name(&self, id: &AlbumId) -> StoreResult<Option<String>> {

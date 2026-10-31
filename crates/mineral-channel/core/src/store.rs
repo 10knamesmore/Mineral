@@ -85,6 +85,18 @@ pub trait NamespaceStore: Send + Sync {
     /// Returns the source fixed when this store was created.
     fn source(&self) -> SourceKind;
 
+    /// Reads the last complete playlist list; None means no snapshot, not an empty list.
+    async fn get_my_playlists_cache(&self) -> StoreResult<Option<Vec<Playlist>>>;
+
+    /// Atomically replaces playlist headers and their order, without changing detail caches.
+    async fn put_my_playlists_cache(&self, playlists: &[Playlist]) -> StoreResult<()>;
+
+    /// Reads the last complete saved-album list without loading tracks.
+    async fn get_my_albums_cache(&self) -> StoreResult<Option<Vec<Album>>>;
+
+    /// Atomically replaces album headers and their order, including an empty list.
+    async fn put_my_albums_cache(&self, albums: &[Album]) -> StoreResult<()>;
+
     /// Reads an album name from this source.
     async fn album_name(&self, id: &AlbumId) -> StoreResult<Option<String>>;
 

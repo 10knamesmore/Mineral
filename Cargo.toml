@@ -54,6 +54,7 @@ authors     = ["wanger <310779211wym@gmail.com>"]
 rust-version = "1.96"
 
 [workspace.dependencies]
+async-stream       = "0.3"
 arboard            = { version = "3.6", default-features = false, features = ["wayland-data-control", "image-data"] }
 color-eyre         = "0.6"
 base64             = "0.22"

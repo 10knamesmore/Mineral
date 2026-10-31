@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use color_eyre::eyre::eyre;
+use futures_util::TryStreamExt;
 use mineral_channel_core::{MusicChannel, PlaylistLoad};
 use mineral_channel_local::LocalLibrary;
 use mineral_model::{BitRate, CachePolicy, Playlist, Song, SongId, SourceKind};
@@ -23,7 +24,13 @@ fn open(directory: &Path, store: &ServerStore) -> LocalLibrary {
 /// Fully materialize the local playlists through the channel interface.
 async fn playlists(library: &LocalLibrary) -> color_eyre::Result<Vec<Playlist>> {
     let mut result = Vec::new();
-    for playlist in library.my_playlists(CachePolicy::UseCache).await? {
+    for playlist in library
+        .my_playlists(CachePolicy::UseCache)
+        .try_next()
+        .await?
+        .ok_or_else(|| eyre!("expected local snapshot"))?
+        .into_items()
+    {
         let detail = library
             .playlist_detail(&playlist.id, PlaylistLoad::Complete, CachePolicy::UseCache)
             .await?;
@@ -200,7 +207,16 @@ async fn one_time_load_identity_lyrics_and_playback() -> color_eyre::Result<()> 
     drop(opened);
     drop(library);
     let restored = open(temp.path(), &store);
-    assert_eq!(restored.my_playlists(CachePolicy::UseCache).await?.len(), 2);
+    assert_eq!(
+        restored
+            .my_playlists(CachePolicy::UseCache)
+            .try_next()
+            .await?
+            .ok_or_else(|| eyre!("expected local snapshot"))?
+            .into_items()
+            .len(),
+        2
+    );
     std::fs::remove_file(root.join("moved.wav"))?;
     let restored = open(temp.path(), &store);
     assert!(matches!(
@@ -261,7 +277,7 @@ async fn unavailable_root_can_be_loaded_later() -> color_eyre::Result<()> {
         vec![root.clone()],
     );
     let Err(mineral_channel_core::Error::Storage { source }) =
-        library.my_playlists(CachePolicy::UseCache).await
+        library.my_playlists(CachePolicy::UseCache).try_next().await
     else {
         return Err(eyre!("expected local storage failure"));
     };
@@ -274,6 +290,15 @@ async fn unavailable_root_can_be_loaded_later() -> color_eyre::Result<()> {
     );
     std::fs::create_dir(&root)?;
     audio(&root.join("appeared.wav"))?;
-    assert_eq!(library.my_playlists(CachePolicy::UseCache).await?.len(), 1);
+    assert_eq!(
+        library
+            .my_playlists(CachePolicy::UseCache)
+            .try_next()
+            .await?
+            .ok_or_else(|| eyre!("expected local snapshot"))?
+            .into_items()
+            .len(),
+        1
+    );
     Ok(())
 }

@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, MusicChannel, Page, PageResult, PlaylistDetail,
-    PlaylistLoad,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, MusicChannel, Page,
+    PageResult, PlaylistDetail, PlaylistLoad,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -28,6 +29,8 @@ pub struct AppleMusicChannel {
     metadata: MetadataClient,
 
     config: AppleMusicConfig,
+
+    persist: Option<Arc<dyn NamespaceStore>>,
 }
 
 impl AppleMusicChannel {
@@ -39,9 +42,10 @@ impl AppleMusicChannel {
     ) -> Result<Self> {
         let account = AccountClient::new(config, auth)?;
         Ok(Self {
-            metadata: MetadataClient::new(account.clone(), config, persist),
+            metadata: MetadataClient::new(account.clone(), config, persist.clone()),
             account,
             config: config.clone(),
+            persist,
         })
     }
 }
@@ -112,15 +116,16 @@ impl MusicChannel for AppleMusicChannel {
         Ok(self.metadata.lyrics(id).await?)
     }
 
-    async fn my_albums(&self, _cache: CachePolicy) -> mineral_channel_core::Result<Vec<Album>> {
-        Ok(self.metadata.my_albums().await?)
+    fn my_albums(&self, cache: CachePolicy) -> CollectionStream<'_, Album> {
+        albums_with_cache(self.persist.as_deref(), cache, async {
+            Ok(self.metadata.my_albums().await?)
+        })
     }
 
-    async fn my_playlists(
-        &self,
-        _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<Vec<Playlist>> {
-        Ok(self.metadata.my_playlists().await?)
+    fn my_playlists(&self, cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        playlists_with_cache(self.persist.as_deref(), cache, async {
+            Ok(self.metadata.my_playlists().await?)
+        })
     }
 
     async fn playlist_detail(

@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use mineral_channel_core::collection::fresh_collection;
 use mineral_channel_core::store::LibraryStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, Page,
+    PageResult, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind};
@@ -106,17 +108,16 @@ impl MusicChannel for MineralChannel {
         Err(Error::NotSupported)
     }
 
-    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
-        let mut playlists = vec![self.build_favorites(/*with_songs*/ false).await?];
-        playlists.extend(
-            self.library
-                .user_playlists()
-                .await
-                .map_err(|source| Error::Storage {
+    fn my_playlists(&self, _cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        fresh_collection(async {
+            let mut playlists = vec![self.build_favorites(/*with_songs*/ false).await?];
+            playlists.extend(self.library.user_playlists().await.map_err(|source| {
+                Error::Storage {
                     source: Box::new(source),
-                })?,
-        );
-        Ok(playlists)
+                }
+            })?);
+            Ok(playlists)
+        })
     }
 
     async fn playlist_detail(

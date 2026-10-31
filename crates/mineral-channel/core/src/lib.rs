@@ -5,6 +5,10 @@
 
 /// channel 能力声明。
 pub mod caps;
+/// Collection snapshots and cache-first producers.
+pub mod collection;
+use collection::fresh_collection;
+pub use collection::{CollectionSnapshot, CollectionStream};
 /// channel 公共错误类型与 `Result` 别名。
 pub mod error;
 /// 列表分页参数与单页结果。
@@ -172,14 +176,16 @@ pub trait MusicChannel: Send + Sync {
     /// 这是跨 channel 聚合当前用户歌单的入口。实例已绑定用户身份时可转发给
     /// [`Self::user_playlists`];没有当前用户歌单能力或未登录时返回 [`Error::NotSupported`]。
     ///
-    /// 聚合层把 `NotSupported` 视为该 channel 空贡献,并继续从其他 channel 拉取。
-    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
-        Err(Error::NotSupported)
+    /// `UseCache` 可先产出缓存，再刷新并产出新列表；`Reload` 只产出新列表。
+    /// 消费到流结束才完成请求；丢弃流会取消后续读取。错误后流结束。
+    fn my_playlists(&self, _cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        fresh_collection(async { Err(Error::NotSupported) })
     }
 
     /// 拉取该 channel 当前账号收藏的全部专辑，保留来源返回的顺序。
-    async fn my_albums(&self, _cache: CachePolicy) -> Result<Vec<Album>> {
-        Err(Error::NotSupported)
+    /// 缓存、刷新与取消语义同 [`Self::my_playlists`]。
+    fn my_albums(&self, _cache: CachePolicy) -> CollectionStream<'_, Album> {
+        fresh_collection(async { Err(Error::NotSupported) })
     }
 
     // ---------- 用户数据 / 装饰(可选) ----------

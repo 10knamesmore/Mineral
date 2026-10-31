@@ -1,6 +1,7 @@
 //! Database entities owned by this store.
 
 pub(crate) mod album_cache;
+pub(crate) mod library_lists;
 pub(crate) mod playlist_cache;
 pub(crate) mod playlist_entries;
 pub(crate) mod session_queue;

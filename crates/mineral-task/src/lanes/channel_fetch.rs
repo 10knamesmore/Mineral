@@ -1,18 +1,21 @@
 //! ChannelFetch lane:per-channel 多 worker,两档优先级。
 
-use std::mem::take;
 use std::sync::Arc;
+use std::time::Instant;
 
-use mineral_channel_core::MusicChannel;
+use async_stream::try_stream;
+use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 use mineral_channel_core::store::{LibraryStore, NamespaceStore};
-use mineral_model::{CachePolicy, SourceKind};
+use mineral_channel_core::{Error, MusicChannel, Result};
+use mineral_model::{CachePolicy, SearchKind, SourceKind};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::collection_read::CollectionReader;
-use crate::event::TaskEvent;
+use crate::event::{SearchPayload, TaskEvent};
 use crate::id::{Priority, TaskId};
 use crate::kind::{ChannelFetchKind, ChannelFetchKindTag};
 use crate::ongoing::Ongoing;
@@ -187,9 +190,8 @@ async fn next_job(
     }
 }
 
-/// 执行一个 job:已取消则直接 `Cancelled`,否则跑 [`execute`] 并把终态送回 `done_tx`。
-/// 搜索与艺人专辑页失败或取消时回带对应分页请求，所有终态另发 [`TaskEvent::FetchDone`]。
-/// 事件均在通知 `done_tx` 前写入 buffer。
+/// 逐项发布执行结果；取消或失败后停止消费，发布终态，再通知 done_tx。
+/// 搜索与艺人专辑页在失败或取消时均回带请求；详情只在失败时发布失败事件。
 async fn run_job(
     channel: &Arc<dyn MusicChannel>,
     job: Job,
@@ -205,22 +207,49 @@ async fn run_job(
         cache,
         read_cache,
     } = job;
-    let event_tx = Arc::new(Mutex::new(Vec::new()));
-    let started = std::time::Instant::now();
+    let started = Instant::now();
+    let mut results = execute(channel.as_ref(), &kind, cache, reader);
+    let outcome = loop {
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => break TaskOutcome::Cancelled,
+            result = results.next() => result,
+        };
+        match result {
+            Some(Ok(event)) => {
+                // 刷新也在同一把锁内取消任务并清除旧结果。
+                let mut published = published.lock();
+                if cancel.is_cancelled() {
+                    break TaskOutcome::Cancelled;
+                }
+                if cache == CachePolicy::Reload {
+                    read_cache.record_fresh_result(&kind, &event);
+                }
+                published.push(event);
+            }
+            Some(Err(error)) => {
+                if matches!(&kind, ChannelFetchKind::RemotePlayCount { .. }) {
+                    mineral_log::debug!(target: "channel_fetch", ?kind, error = mineral_log::chain(&error), "remote play count unavailable");
+                } else {
+                    mineral_log::warn!(target: "channel_fetch", ?kind, error = mineral_log::chain(&error), "channel fetch failed");
+                }
+                break TaskOutcome::Failed;
+            }
+            None => break TaskOutcome::Ok,
+        }
+    };
+    drop(results);
+    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut published = published.lock();
     let outcome = if cancel.is_cancelled() {
         TaskOutcome::Cancelled
     } else {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => TaskOutcome::Cancelled,
-            out = execute(channel, &kind, &event_tx, cache, reader) => out,
-        }
+        outcome
     };
-    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     if outcome != TaskOutcome::Ok {
         match &kind {
-            ChannelFetchKind::PlaylistDetail { id, load } => {
-                event_tx.lock().push(TaskEvent::PlaylistDetailFailed {
+            ChannelFetchKind::PlaylistDetail { id, load } if outcome == TaskOutcome::Failed => {
+                published.push(TaskEvent::PlaylistDetailFailed {
                     id: id.clone(),
                     load: *load,
                 })
@@ -230,19 +259,17 @@ async fn run_job(
                 kind,
                 query,
                 page,
-            } => event_tx.lock().push(TaskEvent::SearchPageFailed {
+            } => published.push(TaskEvent::SearchPageFailed {
                 source: *source,
                 kind: *kind,
                 query: query.clone(),
                 page: *page,
             }),
-            ChannelFetchKind::AlbumDetail { id } => {
-                event_tx
-                    .lock()
-                    .push(TaskEvent::AlbumDetailFailed { id: id.clone() });
+            ChannelFetchKind::AlbumDetail { id } if outcome == TaskOutcome::Failed => {
+                published.push(TaskEvent::AlbumDetailFailed { id: id.clone() });
             }
             ChannelFetchKind::ArtistAlbums { id, page } => {
-                event_tx.lock().push(TaskEvent::ArtistAlbumsPageFailed {
+                published.push(TaskEvent::ArtistAlbumsPageFailed {
                     id: id.clone(),
                     page: *page,
                 });
@@ -251,7 +278,7 @@ async fn run_job(
         }
     }
     // 埋点信号:取数收束(fetches)。server 记录后不转发 client。
-    event_tx.lock().push(TaskEvent::FetchDone {
+    published.push(TaskEvent::FetchDone {
         kind: ChannelFetchKindTag::of(&kind),
         source: kind.source(),
         target_ref: kind.target_ref(),
@@ -259,282 +286,127 @@ async fn run_job(
         outcome,
         latency_ms,
     });
-    // A refresh cancels under this same lock, including jobs whose results were already buffered.
-    let mut published = published.lock();
-    let mut staged = take(&mut *event_tx.lock());
-    if cancel.is_cancelled() {
-        staged.retain(|event| {
-            matches!(
-                event,
-                TaskEvent::FetchDone { .. }
-                    | TaskEvent::SearchPageFailed { .. }
-                    | TaskEvent::ArtistAlbumsPageFailed { .. }
-            )
-        });
-    } else if cache == CachePolicy::Reload && outcome == TaskOutcome::Ok {
-        read_cache.record_fresh_result(&kind, &staged);
-    }
-    published.extend(staged);
-    let _ = done_tx.send(if cancel.is_cancelled() {
-        TaskOutcome::Cancelled
-    } else {
-        outcome
-    });
+    let _ = done_tx.send(outcome);
 }
 
-/// 真正调 channel 的实现:按 kind 分派。事实结果包成 [`TaskEvent`] 写进事件 buffer;
-/// 失败统一变 `Failed`。
-async fn execute(
-    channel: &Arc<dyn MusicChannel>,
-    kind: &ChannelFetchKind,
-    event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
+type FetchEventStream<'a> = BoxStream<'a, Result<TaskEvent>>;
+
+/// 将 channel 结果映射为事件；列表可产出多份快照，其他请求产出一个结果。
+/// 队列发布、取消和任务终态由调用方处理。
+fn execute<'a>(
+    channel: &'a dyn MusicChannel,
+    kind: &'a ChannelFetchKind,
     cache: CachePolicy,
-    reader: &CollectionReader,
-) -> TaskOutcome {
-    match kind {
-        ChannelFetchKind::MyAlbums { source } => match channel.my_albums(cache).await {
-            Ok(albums) => {
-                mineral_log::info!(target: "channel_fetch", ?source, albums = albums.len(), "saved album list fetched");
-                event_tx.lock().push(TaskEvent::AlbumsFetched {
-                    source: *source,
-                    albums,
-                });
-                TaskOutcome::Ok
-            }
-            Err(error) => {
-                mineral_log::warn!(target: "channel_fetch", ?source, op = "my_albums", error = mineral_log::chain(&error), "channel fetch failed");
-                TaskOutcome::Failed
-            }
-        },
-        ChannelFetchKind::MyPlaylists { source } => match channel.my_playlists(cache).await {
-            Ok(playlists) => {
-                event_tx.lock().push(TaskEvent::PlaylistsFetched {
-                    source: *source,
-                    playlists,
-                });
-                TaskOutcome::Ok
-            }
-            Err(e) => {
-                mineral_log::warn!(
-                    target: "channel_fetch",
-                    ?source,
-                    op = "my_playlists",
-                    error = mineral_log::chain(&e),
-                    "channel fetch failed"
-                );
-                TaskOutcome::Failed
-            }
-        },
-        ChannelFetchKind::PlaylistDetail { id, load } => {
-            match reader.playlist(channel.as_ref(), id, *load, cache).await {
-                Ok(detail) => {
-                    event_tx.lock().push(TaskEvent::PlaylistDetailFetched {
-                        id: id.clone(),
-                        load: *load,
-                        detail: Box::new(detail),
-                    });
-                    TaskOutcome::Ok
-                }
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "channel_fetch",
-                        source = ?id.namespace(),
-                        op = "playlist_detail",
-                        playlist_id = id.as_str(),
-                        error = mineral_log::chain(&e),
-                        "channel fetch failed"
-                    );
-                    TaskOutcome::Failed
+    reader: &'a CollectionReader,
+) -> FetchEventStream<'a> {
+    Box::pin(try_stream! {
+        match kind {
+            ChannelFetchKind::MyAlbums { source } => {
+                let mut snapshots = channel.my_albums(cache);
+                while let Some(snapshot) = snapshots.next().await {
+                    yield TaskEvent::AlbumsFetched {
+                        source: *source,
+                        albums: snapshot?.into_items(),
+                    };
                 }
             }
-        }
-        ChannelFetchKind::Lyrics { song_id } => match channel.lyrics(song_id).await {
-            Ok(lyrics) => {
-                event_tx.lock().push(TaskEvent::LyricsReady {
+            ChannelFetchKind::MyPlaylists { source } => {
+                let mut snapshots = channel.my_playlists(cache);
+                while let Some(snapshot) = snapshots.next().await {
+                    yield TaskEvent::PlaylistsFetched {
+                        source: *source,
+                        playlists: snapshot?.into_items(),
+                    };
+                }
+            }
+            ChannelFetchKind::PlaylistDetail { id, load } => {
+                let detail = reader.playlist(channel, id, *load, cache).await?;
+                yield TaskEvent::PlaylistDetailFetched {
+                    id: id.clone(),
+                    load: *load,
+                    detail: Box::new(detail),
+                };
+            }
+            ChannelFetchKind::Lyrics { song_id } => {
+                let lyrics = channel.lyrics(song_id).await?;
+                yield TaskEvent::LyricsReady {
                     song_id: song_id.clone(),
                     lyrics,
-                });
-                TaskOutcome::Ok
+                };
             }
-            Err(e) => {
-                mineral_log::warn!(
-                    target: "channel_fetch",
-                    source = ?song_id.namespace(),
-                    op = "lyrics",
-                    song_id = song_id.as_str(),
-                    error = mineral_log::chain(&e),
-                    "channel fetch failed"
-                );
-                TaskOutcome::Failed
+            ChannelFetchKind::RemotePlayCount { song_id } => {
+                let count = channel.remote_play_count(song_id).await?;
+                yield TaskEvent::RemotePlayCountFetched {
+                    song_id: song_id.clone(),
+                    count,
+                };
             }
-        },
-        ChannelFetchKind::RemotePlayCount { song_id } => {
-            match channel.remote_play_count(song_id).await {
-                Ok(count) => {
-                    event_tx.lock().push(TaskEvent::RemotePlayCountFetched {
-                        song_id: song_id.clone(),
-                        count,
-                    });
-                    TaskOutcome::Ok
-                }
-                Err(e) => {
-                    // 装饰性尽力查询:未登录 / 不支持 / 网络失败都无害,debug 即可,不污染 warn。
-                    mineral_log::debug!(
-                        target: "channel_fetch",
-                        source = ?song_id.namespace(),
-                        op = "remote_play_count",
-                        song_id = song_id.as_str(),
-                        error = mineral_log::chain(&e),
-                        "remote play count unavailable"
-                    );
-                    TaskOutcome::Failed
-                }
+            ChannelFetchKind::Search {
+                source,
+                kind,
+                query,
+                page,
+            } => {
+                let (payload, has_more) = match kind {
+                    SearchKind::Song => {
+                        let hits = channel.search_songs(query, *page).await?;
+                        (SearchPayload::Songs(hits.items), hits.has_more)
+                    }
+                    SearchKind::Album => {
+                        let hits = channel.search_albums(query, *page).await?;
+                        (SearchPayload::Albums(hits.items), hits.has_more)
+                    }
+                    SearchKind::Playlist => {
+                        let hits = channel.search_playlists(query, *page).await?;
+                        (SearchPayload::Playlists(hits.items), hits.has_more)
+                    }
+                    SearchKind::Artist => {
+                        let hits = channel.search_artists(query, *page).await?;
+                        (SearchPayload::Artists(hits.items), hits.has_more)
+                    }
+                    SearchKind::User => Err(Error::NotSupported)?,
+                };
+                yield TaskEvent::SearchResults {
+                    source: *source,
+                    kind: *kind,
+                    query: query.clone(),
+                    page: *page,
+                    payload,
+                    has_more,
+                };
             }
-        }
-        ChannelFetchKind::Search {
-            source,
-            kind,
-            query,
-            page,
-        } => {
-            // 每 arm 把 PageResult 拆成 (载荷, 显式翻页信号) 一并透传给 client。
-            let result = match kind {
-                mineral_model::SearchKind::Song => {
-                    channel.search_songs(query, *page).await.map(|hits| {
-                        (
-                            crate::event::SearchPayload::Songs(hits.items),
-                            hits.has_more,
-                        )
-                    })
-                }
-                mineral_model::SearchKind::Album => {
-                    channel.search_albums(query, *page).await.map(|hits| {
-                        (
-                            crate::event::SearchPayload::Albums(hits.items),
-                            hits.has_more,
-                        )
-                    })
-                }
-                mineral_model::SearchKind::Playlist => {
-                    channel.search_playlists(query, *page).await.map(|hits| {
-                        (
-                            crate::event::SearchPayload::Playlists(hits.items),
-                            hits.has_more,
-                        )
-                    })
-                }
-                mineral_model::SearchKind::Artist => {
-                    channel.search_artists(query, *page).await.map(|hits| {
-                        (
-                            crate::event::SearchPayload::Artists(hits.items),
-                            hits.has_more,
-                        )
-                    })
-                }
-                // User 搜索无 UI 消费方,caps 也不会声明它
-                mineral_model::SearchKind::User => Err(mineral_channel_core::Error::NotSupported),
-            };
-            match result {
-                Ok((payload, has_more)) => {
-                    event_tx.lock().push(TaskEvent::SearchResults {
-                        source: *source,
-                        kind: *kind,
-                        query: query.clone(),
-                        page: *page,
-                        payload,
-                        has_more,
-                    });
-                    TaskOutcome::Ok
-                }
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "channel_fetch",
-                        ?source,
-                        op = "search",
-                        ?kind,
-                        query,
-                        error = mineral_log::chain(&e),
-                        "channel fetch failed"
-                    );
-                    TaskOutcome::Failed
-                }
-            }
-        }
-        ChannelFetchKind::ArtistDetail { id } => match channel.artist_detail(id).await {
-            Ok(artist) => {
-                event_tx.lock().push(TaskEvent::ArtistDetailFetched {
+            ChannelFetchKind::ArtistDetail { id } => {
+                let artist = channel.artist_detail(id).await?;
+                yield TaskEvent::ArtistDetailFetched {
                     id: id.clone(),
                     artist: Box::new(artist),
-                });
-                TaskOutcome::Ok
+                };
             }
-            Err(e) => {
-                mineral_log::warn!(
+            ChannelFetchKind::ArtistAlbums { id, page } => {
+                let result = channel.artist_albums(id, *page).await?;
+                mineral_log::debug!(
                     target: "channel_fetch",
                     source = ?id.namespace(),
-                    op = "artist_detail",
                     artist_id = id.as_str(),
-                    error = mineral_log::chain(&e),
-                    "channel fetch failed"
+                    ?page,
+                    albums = result.items.len(),
+                    has_more = ?result.has_more,
+                    "artist albums page fetched"
                 );
-                TaskOutcome::Failed
+                yield TaskEvent::ArtistAlbumsFetched {
+                    id: id.clone(),
+                    page: *page,
+                    albums: result.items,
+                    has_more: result.has_more,
+                };
             }
-        },
-        ChannelFetchKind::ArtistAlbums { id, page } => {
-            match channel.artist_albums(id, *page).await {
-                Ok(result) => {
-                    mineral_log::debug!(
-                        target: "channel_fetch",
-                        source = ?id.namespace(),
-                        artist_id = id.as_str(),
-                        ?page,
-                        albums = result.items.len(),
-                        has_more = ?result.has_more,
-                        "artist albums page fetched"
-                    );
-                    event_tx.lock().push(TaskEvent::ArtistAlbumsFetched {
-                        id: id.clone(),
-                        page: *page,
-                        albums: result.items,
-                        has_more: result.has_more,
-                    });
-                    TaskOutcome::Ok
-                }
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "channel_fetch",
-                        source = ?id.namespace(),
-                        op = "artist_albums",
-                        artist_id = id.as_str(),
-                        ?page,
-                        error = mineral_log::chain(&e),
-                        "channel fetch failed"
-                    );
-                    TaskOutcome::Failed
-                }
+            ChannelFetchKind::AlbumDetail { id } => {
+                let album = reader.album(channel, id, cache).await?;
+                yield TaskEvent::AlbumDetailFetched {
+                    id: id.clone(),
+                    album: Box::new(album),
+                };
             }
         }
-        ChannelFetchKind::AlbumDetail { id } => {
-            match reader.album(channel.as_ref(), id, cache).await {
-                Ok(album) => {
-                    event_tx.lock().push(TaskEvent::AlbumDetailFetched {
-                        id: id.clone(),
-                        album: Box::new(album),
-                    });
-                    TaskOutcome::Ok
-                }
-                Err(e) => {
-                    mineral_log::warn!(
-                        target: "channel_fetch",
-                        source = ?id.namespace(),
-                        op = "album_detail",
-                        album_id = id.as_str(),
-                        error = mineral_log::chain(&e),
-                        "channel fetch failed"
-                    );
-                    TaskOutcome::Failed
-                }
-            }
-        }
-    }
+    })
 }

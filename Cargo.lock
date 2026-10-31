@@ -3242,10 +3242,12 @@ dependencies = [
 name = "mineral-channel-core"
 version = "0.6.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "chrono",
  "color-eyre",
  "derive-getters",
+ "futures-util",
  "mineral-model",
  "rustc-hash 2.1.2",
  "serde",
@@ -3262,6 +3264,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "color-eyre",
+ "futures-util",
  "hex",
  "lofty",
  "mineral-channel-core",
@@ -3667,6 +3670,7 @@ dependencies = [
 name = "mineral-task"
 version = "0.6.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "color-eyre",
  "futures-util",

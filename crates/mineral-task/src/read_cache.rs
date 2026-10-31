@@ -41,10 +41,10 @@ impl ReadCache {
         }
     }
 
-    /// Called under the result-publication lock, after checking the job's cancellation token.
-    pub(crate) fn record_fresh_result(&self, kind: &ChannelFetchKind, events: &[TaskEvent]) {
+    /// Called for each successful Reload result under the publication lock, after checking cancellation.
+    pub(crate) fn record_fresh_result(&self, kind: &ChannelFetchKind, event: &TaskEvent) {
         if matches!(kind, ChannelFetchKind::PlaylistDetail { .. })
-            && !events.iter().any(|event| matches!(event, TaskEvent::PlaylistDetailFetched { detail, .. } if detail.complete))
+            && !matches!(event, TaskEvent::PlaylistDetailFetched { detail, .. } if detail.complete)
         {
             return;
         }

@@ -14,7 +14,7 @@ use crate::outcome::TaskOutcome;
 use crate::write::{PlaylistWriteOp, WriteError};
 use mineral_model::{CollectionCategory, RefreshScope};
 
-/// 任务完成时,channel 中央事件 buffer 推给 client 消费的载荷。
+/// 任务结果与服务端快照；列表请求可在刷新完成前发布缓存。
 ///
 /// 搜索或艺人专辑页失败、取消时，分别发 [`TaskEvent::SearchPageFailed`] 或
 /// [`TaskEvent::ArtistAlbumsPageFailed`]，client 据此清除待收取页标记。
@@ -22,7 +22,7 @@ use mineral_model::{CollectionCategory, RefreshScope};
 /// 所有 channel 取数终态另发 [`TaskEvent::FetchDone`] 供 server 记录埋点，详细错误进 mineral-log。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TaskEvent {
-    /// `MyPlaylists` 任务成功:某 channel 当前用户的歌单列表已到。
+    /// 某来源的一份完整歌单列表；同一请求可先发布缓存，再发布远端结果。
     PlaylistsFetched {
         /// 来源(source)。
         source: SourceKind,
@@ -219,7 +219,7 @@ pub enum TaskEvent {
         latency_ms: u64,
     },
 
-    /// 某来源的账号收藏专辑已拉取，交给服务端保存和合并。
+    /// 某来源的一份完整收藏专辑列表；缓存与远端结果分别交给服务端合并。
     AlbumsFetched {
         /// 音乐来源。
         source: SourceKind,

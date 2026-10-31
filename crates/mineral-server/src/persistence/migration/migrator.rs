@@ -14,6 +14,7 @@ impl MigratorTrait for ServerMigrator {
             Box::new(super::m20261007_album_cache::Migration),
             Box::new(super::m20261026_album_release_date::Migration),
             Box::new(super::m20261029_entity_web_urls::Migration),
+            Box::new(super::m20261030_library_list_cache::Migration),
         ]
     }
 }

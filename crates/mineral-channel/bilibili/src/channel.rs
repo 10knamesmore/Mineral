@@ -4,9 +4,14 @@
 //! `mineral_channel_core::Error`。B站取流需先经 view 定位分 P 的 cid,再打 playurl,故
 //! Playback provider resolve 每首两跳(view + playurl);详情/搜索是单跳。
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use mineral_channel_core::collection::{fresh_collection, playlists_with_cache};
+use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, Page,
+    PageResult, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -36,6 +41,8 @@ pub struct BilibiliChannel {
 
     /// 登录用户 mid;`None`(guest)时 `my_playlists` 返回 `NotSupported`。
     user_id: Option<UserId>,
+
+    persist: Option<Arc<dyn NamespaceStore>>,
 }
 
 impl BilibiliChannel {
@@ -50,6 +57,7 @@ impl BilibiliChannel {
         Ok(Self {
             transport: Transport::new(config)?,
             user_id: None,
+            persist: None,
         })
     }
 
@@ -58,16 +66,19 @@ impl BilibiliChannel {
     /// # Params:
     ///   - `config`: B站源配置
     ///   - `auth`: 登录凭证三件套
+    ///   - `persist`: 本来源的列表缓存；None 时只请求远端。
     ///
     /// # Return:
     ///   带登录态的 channel 实例;transport 构建失败时 `Err`。
     pub fn with_credential(
         config: &BilibiliConfig,
         auth: &StoredBilibiliAuth,
+        persist: Option<Arc<dyn NamespaceStore>>,
     ) -> crate::Result<Self> {
         Ok(Self {
             transport: Transport::from_credential(config, auth)?,
             user_id: Some(UserId::new(SourceKind::BILIBILI, auth.dede_user_id.clone())),
+            persist,
         })
     }
 
@@ -285,20 +296,22 @@ impl MusicChannel for BilibiliChannel {
         Ok(mineral_channel_core::PlaylistDetail::complete(playlist))
     }
 
-    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
+    fn my_playlists(&self, cache: CachePolicy) -> CollectionStream<'_, Playlist> {
         // 需登录(mid 来自凭证);guest 无 mid → NotSupported(上层视为该源不贡献歌单)。
         let Some(uid) = self.user_id.as_ref() else {
-            return Err(Error::NotSupported);
+            return fresh_collection(async { Err(Error::NotSupported) });
         };
-        let folders = api::fav::created_folders(&self.transport, uid.as_str())
-            .await
-            .map_err(map_err)?;
-        Ok(folders
-            .list
-            .unwrap_or_default()
-            .into_iter()
-            .map(convert::fav_folder_to_playlist)
-            .collect())
+        playlists_with_cache(self.persist.as_deref(), cache, async {
+            let folders = api::fav::created_folders(&self.transport, uid.as_str())
+                .await
+                .map_err(map_err)?;
+            Ok(folders
+                .list
+                .unwrap_or_default()
+                .into_iter()
+                .map(convert::fav_folder_to_playlist)
+                .collect())
+        })
     }
 }
 

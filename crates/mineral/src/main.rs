@@ -222,7 +222,7 @@ fn build_sources(
         ),
     }
     // B站 guest 模式无需登录即可搜索/详情/取流,故恒尝试构建。
-    match build_bilibili(sources.bilibili()) {
+    match build_bilibili(persist, sources.bilibili()) {
         Ok(pair) => {
             channels.push(pair.channel);
             providers.push(pair.provider);
@@ -263,12 +263,20 @@ fn build_apple_music(
 /// guest 模式可访问搜索、详情与取流等公开端点；登录态额外提供我的收藏夹与高码率。
 ///
 /// # Params:
+///   - `persist`: 服务端存储；只向 B站注入其来源空间。
 ///   - `bilibili`: B站源段配置(timeout / proxy / 并发)。
-fn build_bilibili(bilibili: &mineral_server::config::BilibiliSection) -> Result<SourcePair> {
+fn build_bilibili(
+    persist: &ServerStore,
+    bilibili: &mineral_server::config::BilibiliSection,
+) -> Result<SourcePair> {
     let bc = mineral_cli::bilibili_config_from(bilibili);
     // 有存储凭证 → 带登录态(解锁我的收藏夹 / 高码率);否则 guest。
     let channel = match mineral_channel_bilibili::load_stored()? {
-        Some(auth) => BilibiliChannel::with_credential(&bc, &auth)?,
+        Some(auth) => BilibiliChannel::with_credential(
+            &bc,
+            &auth,
+            Some(Arc::new(persist.scope(SourceKind::BILIBILI))),
+        )?,
         None => BilibiliChannel::new(&bc)?,
     };
     let concrete = Arc::new(channel);

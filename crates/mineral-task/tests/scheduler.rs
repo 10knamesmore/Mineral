@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult, Result};
+use mineral_channel_core::collection::fresh_collection;
+use mineral_channel_core::{
+    ChannelCaps, CollectionStream, Error, MusicChannel, Page, PageResult, Result,
+};
 use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
@@ -115,9 +118,11 @@ impl MusicChannel for FakeChannel {
             lines: mineral_model::parse_lrc("[00:01.00]hello\n[00:02.50]world"),
         })
     }
-    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
-        self.maybe_wait().await;
-        Ok(self.playlists.clone())
+    fn my_playlists(&self, _cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        fresh_collection(async {
+            self.maybe_wait().await;
+            Ok(self.playlists.clone())
+        })
     }
 }
 

@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
+use mineral_channel_core::collection::fresh_collection;
+use mineral_channel_core::{ChannelCaps, CollectionStream, Error, MusicChannel, Page, PageResult};
 use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, Artist, Lyrics, PlaybackMediaInfo, Playlist, PlaylistId, Song, SongId,
@@ -255,10 +256,7 @@ impl MusicChannel for RecordingChannel {
         self.liked_ids.clone().ok_or(Error::NotSupported)
     }
 
-    async fn my_playlists(
-        &self,
-        _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<Vec<Playlist>> {
-        self.playlists.clone().ok_or(Error::NotSupported)
+    fn my_playlists(&self, _cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        fresh_collection(async { self.playlists.clone().ok_or(Error::NotSupported) })
     }
 }

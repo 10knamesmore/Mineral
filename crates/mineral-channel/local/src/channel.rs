@@ -1,8 +1,10 @@
 //! Narrow local channel surface: songs, playlists, lyrics and playback only.
 
 use async_trait::async_trait;
+use mineral_channel_core::collection::fresh_collection;
 use mineral_channel_core::{
-    ArtistSections, ChannelCaps, Error, MusicChannel, PlaylistDetail, PlaylistLoad, Result,
+    ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, PlaylistDetail,
+    PlaylistLoad, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -42,13 +44,15 @@ impl MusicChannel for LocalLibrary {
             .collect()
     }
 
-    async fn my_playlists(&self, cache: CachePolicy) -> Result<Vec<Playlist>> {
-        let catalog = self.read_catalog(cache).await?;
-        Ok(catalog
-            .playlists
-            .iter()
-            .map(|playlist| catalog.playlist(playlist, false))
-            .collect())
+    fn my_playlists(&self, cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        fresh_collection(async move {
+            let catalog = self.read_catalog(cache).await?;
+            Ok(catalog
+                .playlists
+                .iter()
+                .map(|playlist| catalog.playlist(playlist, false))
+                .collect())
+        })
     }
 
     async fn playlist_detail(

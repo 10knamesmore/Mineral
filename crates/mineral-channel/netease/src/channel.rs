@@ -6,9 +6,11 @@
 
 use async_trait::async_trait;
 use isahc::cookies::{Cookie, CookieJar};
+use mineral_channel_core::collection::{albums_with_cache, fresh_collection, playlists_with_cache};
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, MusicChannel, Page, PageResult, Result,
+    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, MusicChannel, Page,
+    PageResult, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -390,41 +392,43 @@ impl MusicChannel for NeteaseChannel {
             .map_err(map_err)
     }
 
-    async fn my_playlists(&self, _cache: CachePolicy) -> Result<Vec<Playlist>> {
-        match self.user_id.as_ref() {
-            Some(uid) => self.user_playlists(uid).await,
-            None => Err(Error::NotSupported),
-        }
+    fn my_playlists(&self, cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        let Some(uid) = self.user_id.as_ref() else {
+            return fresh_collection(async { Err(Error::NotSupported) });
+        };
+        playlists_with_cache(self.persist.as_deref(), cache, self.user_playlists(uid))
     }
 
-    async fn my_albums(&self, _cache: CachePolicy) -> Result<Vec<Album>> {
+    fn my_albums(&self, cache: CachePolicy) -> CollectionStream<'_, Album> {
         if self.user_id.is_none() {
-            return Err(Error::NotSupported);
+            return fresh_collection(async { Err(Error::NotSupported) });
         }
-        const PAGE_SIZE: usize = 50;
-        let mut albums = Vec::new();
-        let mut offset = 0;
-        loop {
-            let page = api::album::saved(&self.transport, offset, PAGE_SIZE)
-                .await
-                .map_err(map_err)?;
-            let count = page.data.len();
-            mineral_log::debug!(target: "netease", offset, count, more = page.has_more,
+        albums_with_cache(self.persist.as_deref(), cache, async {
+            const PAGE_SIZE: usize = 50;
+            let mut albums = Vec::new();
+            let mut offset = 0;
+            loop {
+                let page = api::album::saved(&self.transport, offset, PAGE_SIZE)
+                    .await
+                    .map_err(map_err)?;
+                let count = page.data.len();
+                mineral_log::debug!(target: "netease", offset, count, more = page.has_more,
                 "saved album page fetched");
-            albums.extend(
-                page.data
-                    .into_iter()
-                    .map(convert::saved_album_to_model)
-                    .collect::<NeteaseResult<Vec<_>>>()
-                    .map_err(map_err)?,
-            );
-            if !page.has_more {
-                break;
+                albums.extend(
+                    page.data
+                        .into_iter()
+                        .map(convert::saved_album_to_model)
+                        .collect::<NeteaseResult<Vec<_>>>()
+                        .map_err(map_err)?,
+                );
+                if !page.has_more {
+                    break;
+                }
+                offset += PAGE_SIZE;
             }
-            offset += PAGE_SIZE;
-        }
-        mineral_log::info!(target: "netease", albums = albums.len(), "saved albums fetched");
-        Ok(albums)
+            mineral_log::info!(target: "netease", albums = albums.len(), "saved albums fetched");
+            Ok(albums)
+        })
     }
 
     /// 拉网易云账号远端红心的歌曲 ID 集合(纯远端)。
@@ -519,6 +523,7 @@ impl PlaybackProvider for NeteaseChannel {
 mod tests {
     use std::time::Duration;
 
+    use futures_util::TryStreamExt;
     use mineral_channel_core::{Error, MusicChannel};
     use mineral_model::{CachePolicy, SongId, SourceKind};
 
@@ -605,7 +610,7 @@ mod tests {
             "匿名 liked_song_ids 应 NotSupported(纯远端,不降级本地)"
         );
         assert!(matches!(
-            channel.my_albums(CachePolicy::UseCache).await,
+            channel.my_albums(CachePolicy::UseCache).try_next().await,
             Err(Error::NotSupported)
         ));
         let id = SongId::new(SourceKind::NETEASE, "10001");

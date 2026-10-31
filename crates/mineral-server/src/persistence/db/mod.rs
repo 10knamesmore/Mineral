@@ -4,6 +4,7 @@ pub(crate) mod schema;
 
 mod album_cache;
 mod envelope;
+mod library_lists;
 mod namespace;
 pub(crate) mod rows;
 mod session;

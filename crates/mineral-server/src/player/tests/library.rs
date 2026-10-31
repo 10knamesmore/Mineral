@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use crate::persistence::ServerStore;
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
+use mineral_channel_core::collection::fresh_collection;
+use mineral_channel_core::{ChannelCaps, CollectionStream, Error, MusicChannel, Page, PageResult};
 use mineral_model::{
     Album, AlbumId, CachePolicy, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind,
 };
@@ -107,16 +108,15 @@ impl MusicChannel for WritableChannel {
             .build())
     }
 
-    async fn my_playlists(
-        &self,
-        _cache: CachePolicy,
-    ) -> mineral_channel_core::Result<Vec<Playlist>> {
-        Ok(vec![
-            Playlist::builder()
-                .id(PlaylistId::new(SourceKind::NETEASE, "created-1"))
-                .name(String::from("新歌单"))
-                .build(),
-        ])
+    fn my_playlists(&self, _cache: CachePolicy) -> CollectionStream<'_, Playlist> {
+        fresh_collection(async {
+            Ok(vec![
+                Playlist::builder()
+                    .id(PlaylistId::new(SourceKind::NETEASE, "created-1"))
+                    .name(String::from("新歌单"))
+                    .build(),
+            ])
+        })
     }
 }
 

@@ -27,6 +27,7 @@ uuid = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
+futures-util = { workspace = true }
 mineral-server = { workspace = true }
 color-eyre = { workspace = true }
 tempfile = "3"
