@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号 x.y.z(不含 v 前缀,如 0.4.3)"
+        description: "version x.y.z(etc 0.4.3)"
         required: true
         type: string
       headline:
@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       publish_crates:
-        description: "发布到 crates.io（首次手动分批上传时关闭）"
+        description: "release to crates.io"
         required: true
         default: true
         type: boolean
