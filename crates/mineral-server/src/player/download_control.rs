@@ -1,25 +1,15 @@
 //! 会话下载的提交、取消、状态查询与关停等待。
 
-use mineral_common::revision::Revision;
-use mineral_protocol::{DownloadId, DownloadSummary, DownloadTarget, SongDownloadView};
-use tokio::sync::watch;
+use mineral_protocol::{DownloadId, DownloadTarget};
+use tokio::sync::{oneshot, watch};
 
 use super::PlayerCore;
+use crate::download::{DownloadSnapshot, StopError};
 
 impl PlayerCore {
-    /// Returns the current small download summary.
-    pub(crate) fn download_summary(&self) -> DownloadSummary {
-        self.inner.downloads.summary()
-    }
-
-    /// Returns the current flat Song download snapshot.
-    pub(crate) fn download_snapshot(&self) -> Vec<SongDownloadView> {
-        self.inner.downloads.snapshot()
-    }
-
-    /// 下载明细变更订阅端(领域发布器用)。
-    pub(crate) fn download_changes(&self) -> watch::Receiver<Revision> {
-        self.inner.downloads.changes()
+    /// 下载管理任务合并发布的只读快照，供领域发布器使用。
+    pub(crate) fn download_snapshots(&self) -> watch::Receiver<DownloadSnapshot> {
+        self.inner.downloads.snapshots()
     }
 
     /// Submits a Song or playlist to the session download manager.
@@ -27,13 +17,13 @@ impl PlayerCore {
         self.inner.downloads.submit(target)
     }
 
-    /// Stops one queued or active Song download.
-    pub(crate) fn stop_download(&self, id: &DownloadId) -> Result<(), crate::download::StopError> {
-        self.inner.downloads.stop(id)
+    /// Waits for Stop acceptance, not for an active writer to exit.
+    pub(crate) async fn stop_download(&self, id: &DownloadId) -> Result<(), StopError> {
+        self.inner.downloads.stop(id).await
     }
 
     /// Cancels and waits for all active Song downloads during daemon shutdown.
-    pub(crate) async fn shutdown_downloads(&self) {
-        self.inner.downloads.shutdown().await;
+    pub(crate) async fn shutdown_downloads(&self) -> Result<(), oneshot::error::RecvError> {
+        self.inner.downloads.shutdown().await
     }
 }

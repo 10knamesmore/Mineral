@@ -239,6 +239,7 @@ async fn handle_request(
         return;
     }
     let result = match request.request {
+        Request::StopDownload(id) => dispatch::execute_stop_download(client, &id).await,
         Request::SetAudioOutput(target) => match client.set_audio_output(target).await {
             Ok(()) => mineral_protocol::OperationResult::Applied,
             Err(error) => dispatch::failure(&error, dispatch::audio_failure_kind(&error)),

@@ -1,4 +1,4 @@
-//! Terminal download effects outside the lifecycle state lock.
+//! Terminal download state and side effects, applied once by the manager task.
 
 use std::path::PathBuf;
 
@@ -6,10 +6,11 @@ use mineral_model::{BitRate, Song};
 use mineral_protocol::{DownloadFailure, DownloadStatus};
 
 use super::super::{DownloadOutcome, SkipCause};
-use super::DownloadManager;
+use super::lifecycle::DownloadRuntime;
 use super::scheduler::AdmittedAttempt;
+use super::state::ManagerState;
 
-/// Completion side effects detached from state mutation.
+/// Terminal result and its notification, tagging, and statistics effects.
 pub(super) enum CompletionEffect {
     /// Final export committed.
     Downloaded {
@@ -72,129 +73,112 @@ impl CompletionEffect {
     }
 }
 
-impl DownloadManager {
-    /// Reconciles one completion and runs after-commit side effects outside the state lock.
-    pub(super) fn finish_attempt(
-        &self,
-        attempt: &AdmittedAttempt,
-        outcome: Result<DownloadOutcome, crate::download::TransferError>,
-    ) {
-        let effect = match outcome {
-            Ok(DownloadOutcome::Downloaded {
-                path,
-                quality,
-                format,
-                hooked,
-            }) => CompletionEffect::Downloaded {
-                path,
-                quality,
-                format,
-                hooked,
-            },
-            Ok(DownloadOutcome::Skipped { cause, quality }) => {
-                CompletionEffect::Skipped { cause, quality }
-            }
-            Err(_error) if attempt.cancellation.is_cancelled() => CompletionEffect::Stopped,
-            Err(error) => CompletionEffect::Failed { error },
-        };
-        let status = effect.status();
-        {
-            let mut state = self.inner.state.lock();
-            if state.active.remove(&attempt.id).is_none() {
-                return;
-            }
-            state.mark_terminal(&attempt.id, status, effect.failure());
-            state.finish_wave_if_idle();
+/// Applies a completed attempt once; a successful export wins over a concurrent Stop.
+pub(super) fn finish_attempt(
+    state: &mut ManagerState,
+    runtime: &DownloadRuntime,
+    attempt: &AdmittedAttempt,
+    outcome: Result<DownloadOutcome, crate::download::TransferError>,
+) {
+    let effect = match outcome {
+        Ok(DownloadOutcome::Downloaded {
+            path,
+            quality,
+            format,
+            hooked,
+        }) => CompletionEffect::Downloaded {
+            path,
+            quality,
+            format,
+            hooked,
+        },
+        Ok(DownloadOutcome::Skipped { cause, quality }) => {
+            CompletionEffect::Skipped { cause, quality }
         }
-        self.run_completion_effect(attempt, effect);
-        self.inner.wake.notify_one();
-        self.bump();
-        self.inner.quiesced.notify_waiters();
-    }
-
-    /// Emits logs, events, tags, and stats implied by a committed terminal result.
-    fn run_completion_effect(&self, attempt: &AdmittedAttempt, effect: CompletionEffect) {
-        match effect {
-            CompletionEffect::Downloaded {
-                path,
-                quality,
-                format,
+        Err(_error) if attempt.cancellation.is_cancelled() => CompletionEffect::Stopped,
+        Err(error) => CompletionEffect::Failed { error },
+    };
+    state.active.remove(&attempt.id);
+    state.mark_terminal(&attempt.id, effect.status(), effect.failure());
+    match effect {
+        CompletionEffect::Downloaded {
+            path,
+            quality,
+            format,
+            hooked,
+        } => {
+            runtime.notify.download_completed(&attempt.song);
+            runtime
+                .tagging
+                .enqueue(attempt.song.clone(), path.clone(), quality);
+            record_download(
+                &runtime.stats,
+                &attempt.song,
+                quality.as_str(),
+                format.as_ref().map(mineral_model::AudioFormat::as_str),
+                mineral_stats::DownloadOutcome::Downloaded,
                 hooked,
-            } => {
-                self.inner.runtime.notify.download_completed(&attempt.song);
-                self.inner
-                    .runtime
-                    .tagging
-                    .enqueue(attempt.song.clone(), path.clone(), quality);
-                record_download(
-                    &self.inner.runtime.stats,
-                    &attempt.song,
-                    quality.as_str(),
-                    format.as_ref().map(mineral_model::AudioFormat::as_str),
-                    mineral_stats::DownloadOutcome::Downloaded,
-                    hooked,
-                    Some(path.display().to_string()),
-                );
-                mineral_log::info!(
-                    target: "download",
-                    download_id = %attempt.id,
-                    song_id = %attempt.song.id.qualified(),
-                    source = attempt.song.source().name(),
-                    path = %path.display(),
-                    "download export committed"
-                );
-            }
-            CompletionEffect::Skipped { cause, quality } => {
-                mineral_log::info!(
-                    target: "download",
-                    download_id = %attempt.id,
-                    song_id = %attempt.song.id.qualified(),
-                    source = attempt.song.source().name(),
-                    reason = ?cause,
-                    "download skipped"
-                );
-                let hooked = match cause {
-                    SkipCause::AlreadyExists => mineral_stats::DownloadHook::None,
-                    SkipCause::HookVeto => mineral_stats::DownloadHook::Skip,
-                };
-                record_download(
-                    &self.inner.runtime.stats,
-                    &attempt.song,
-                    quality.as_str(),
-                    None,
-                    mineral_stats::DownloadOutcome::Skipped,
-                    hooked,
-                    None,
-                );
-            }
-            CompletionEffect::Failed { error } => {
-                mineral_log::warn!(
-                    target: "download",
-                    download_id = %attempt.id,
-                    song_id = %attempt.song.id.qualified(),
-                    source = attempt.song.source().name(),
-                    error = mineral_log::chain(&error),
-                    "download failed"
-                );
-                record_download(
-                    &self.inner.runtime.stats,
-                    &attempt.song,
-                    attempt.quality.as_str(),
-                    None,
-                    mineral_stats::DownloadOutcome::Failed,
-                    mineral_stats::DownloadHook::None,
-                    None,
-                );
-            }
-            CompletionEffect::Stopped => {
-                mineral_log::info!(
-                    target: "download",
-                    download_id = %attempt.id,
-                    song_id = %attempt.song.id.qualified(),
-                    source = attempt.song.source().name(),
-                    "download Stop quiesced"
-                );
-            }
+                Some(path.display().to_string()),
+            );
+            mineral_log::info!(
+                target: "download",
+                download_id = %attempt.id,
+                song_id = %attempt.song.id.qualified(),
+                source = attempt.song.source().name(),
+                path = %path.display(),
+                "download export committed"
+            );
+        }
+        CompletionEffect::Skipped { cause, quality } => {
+            mineral_log::info!(
+                target: "download",
+                download_id = %attempt.id,
+                song_id = %attempt.song.id.qualified(),
+                source = attempt.song.source().name(),
+                reason = ?cause,
+                "download skipped"
+            );
+            let hooked = match cause {
+                SkipCause::AlreadyExists => mineral_stats::DownloadHook::None,
+                SkipCause::HookVeto => mineral_stats::DownloadHook::Skip,
+            };
+            record_download(
+                &runtime.stats,
+                &attempt.song,
+                quality.as_str(),
+                None,
+                mineral_stats::DownloadOutcome::Skipped,
+                hooked,
+                None,
+            );
+        }
+        CompletionEffect::Failed { error } => {
+            mineral_log::warn!(
+                target: "download",
+                download_id = %attempt.id,
+                song_id = %attempt.song.id.qualified(),
+                source = attempt.song.source().name(),
+                error = mineral_log::chain(&error),
+                "download failed"
+            );
+            record_download(
+                &runtime.stats,
+                &attempt.song,
+                attempt.quality.as_str(),
+                None,
+                mineral_stats::DownloadOutcome::Failed,
+                mineral_stats::DownloadHook::None,
+                None,
+            );
+        }
+        CompletionEffect::Stopped => {
+            mineral_log::info!(
+                target: "download",
+                download_id = %attempt.id,
+                song_id = %attempt.song.id.qualified(),
+                source = attempt.song.source().name(),
+                "download Stop quiesced"
+            );
         }
     }
 }

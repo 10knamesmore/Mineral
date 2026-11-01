@@ -8,7 +8,7 @@ mod transfer;
 
 pub(crate) use capture::{CaptureHarvest, harvest_capture};
 pub(crate) use environment::{DownloadEnv, open_env};
-pub(crate) use manager::{DownloadManager, DownloadRuntime, StopError};
+pub(crate) use manager::{DownloadManager, DownloadRuntime, DownloadSnapshot, StopError};
 pub(crate) use partials::cleanup_orphan_partials;
 pub(crate) use transfer::{
     DownloadAttempt, DownloadOutcome, Error as TransferError, SkipCause, TransferUpdate,

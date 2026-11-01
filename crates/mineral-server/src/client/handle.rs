@@ -11,6 +11,7 @@ use mineral_task::{Priority, Scheduler, SearchPayload, TaskEvent, TaskKind};
 use tokio::sync::watch;
 
 use super::wire::{edited_song_id, queue_context_from_wire, stats_queue_op};
+use crate::download::StopError;
 use crate::player::PlayerCore;
 
 /// 同进程 client handle:持 `PlayerCore` 的 Arc 句柄,所有调用直接 forward。
@@ -537,12 +538,12 @@ impl ClientHandle {
         self.player.download(target)
     }
 
-    /// Stop 一个下载。
+    /// 等待下载管理任务受理 Stop；活动 writer 随后协作退出。
     ///
     /// # Params:
     ///   - `id`: 下载 id
-    pub(crate) fn stop_download(&self, id: &DownloadId) -> Result<(), crate::download::StopError> {
-        self.player.stop_download(id)
+    pub(crate) async fn stop_download(&self, id: &DownloadId) -> Result<(), StopError> {
+        self.player.stop_download(id).await
     }
 
     /// 上报终端 UI 状态。

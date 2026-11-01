@@ -178,7 +178,9 @@ impl Server {
     /// 消费 server 句柄。daemon 关停路径在 accept loop 结束后调用,
     /// 随后由 Tokio runtime 退出终止其余后台任务。
     pub async fn shutdown(self) {
-        self.player.shutdown_downloads().await;
+        if let Err(error) = self.player.shutdown_downloads().await {
+            mineral_log::error!(target: "download", error = mineral_log::chain(&error), "download manager exited without confirming writer shutdown");
+        }
         drop(self);
     }
 

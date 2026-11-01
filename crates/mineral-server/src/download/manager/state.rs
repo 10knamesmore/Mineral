@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use mineral_common::revision::Revision;
 use mineral_model::{BitRate, SongId};
@@ -13,6 +14,14 @@ use tokio_util::sync::CancellationToken;
 
 /// Maximum terminal rows retained for the current daemon session.
 const TERMINAL_LIMIT: usize = 100;
+
+/// Coalesced read-only state published by the manager task.
+#[derive(Clone)]
+pub(crate) struct DownloadSnapshot {
+    pub(crate) summary: DownloadSummary,
+
+    pub(crate) rows: Arc<Vec<SongDownloadView>>,
+}
 
 /// Mutable manager-owned state.
 pub(super) struct ManagerState {
@@ -102,7 +111,7 @@ impl ManagerState {
     }
 
     /// Returns the small per-tick summary.
-    pub(super) fn summary(&self) -> DownloadSummary {
+    fn summary(&self) -> DownloadSummary {
         let queued = self
             .rows
             .values()
@@ -123,7 +132,7 @@ impl ManagerState {
     }
 
     /// Returns active, queued, then newest-first terminal rows.
-    pub(super) fn snapshot(&self) -> Vec<SongDownloadView> {
+    pub(super) fn snapshot(&self) -> DownloadSnapshot {
         let mut rows = self
             .rows
             .values()
@@ -135,7 +144,8 @@ impl ManagerState {
                 row.admission_order,
             )
         });
-        rows.into_iter()
+        let rows = rows
+            .into_iter()
             .chain(
                 self.terminal
                     .iter()
@@ -143,7 +153,11 @@ impl ManagerState {
                     .filter_map(|id| self.rows.get(id)),
             )
             .map(|row| row.view.clone())
-            .collect()
+            .collect();
+        DownloadSnapshot {
+            summary: self.summary(),
+            rows: Arc::new(rows),
+        }
     }
 
     /// Starts a result wave when the manager was previously settled.

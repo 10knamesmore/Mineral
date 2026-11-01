@@ -7,3 +7,4 @@ mod scheduler;
 mod state;
 
 pub(crate) use lifecycle::{DownloadManager, DownloadRuntime, StopError};
+pub(crate) use state::DownloadSnapshot;

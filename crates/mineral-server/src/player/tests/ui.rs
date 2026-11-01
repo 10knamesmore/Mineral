@@ -46,15 +46,16 @@ fn service_update(
 /// RPC failures preserve their business category without inspecting error text.
 #[tokio::test]
 async fn rpc_failure_categories_follow_operation_state() -> color_eyre::Result<()> {
-    use mineral_protocol::{DownloadId, FailureKind, OperationResult, Request};
+    use mineral_protocol::{DownloadId, FailureKind, OperationResult};
 
     let (core, _events_rx) = core_with_hub()?;
     let client = crate::ClientHandle::new(core);
 
-    let stop = crate::ipc::dispatch::execute_sync(
+    let stop = crate::ipc::dispatch::execute_stop_download(
         &client,
-        Request::StopDownload(DownloadId::new("missing".to_owned())),
-    );
+        &DownloadId::new("missing".to_owned()),
+    )
+    .await;
     assert!(
         matches!(stop, OperationResult::Failed(failure) if failure.kind == FailureKind::NotFound)
     );

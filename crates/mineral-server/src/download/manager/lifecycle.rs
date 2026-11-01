@@ -1,27 +1,31 @@
-//! Shared download services, session control, and observable lifecycle state.
+//! Download commands and read-only snapshots; only the manager task changes lifecycle state.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use mineral_channel_core::MusicChannel;
-use mineral_common::revision::Revision;
 use mineral_model::BitRate;
 use mineral_playback::PlaybackRegistry;
-use mineral_protocol::{DownloadId, DownloadStatus, DownloadSummary, SongDownloadView};
-use parking_lot::Mutex;
-use tokio::sync::{Notify, watch};
-use tokio_util::sync::CancellationToken;
+use mineral_protocol::{DownloadId, DownloadStatus, DownloadTarget};
+use tokio::sync::{mpsc, oneshot, watch};
 
-use super::state::ManagerState;
+use super::scheduler::run_downloads;
+use super::state::{DownloadSnapshot, ManagerState};
 
-/// A requested download identity is no longer known to the manager.
+/// Failure to accept a Stop request.
 #[derive(Debug, thiserror::Error)]
-#[error("download identity not found")]
-pub(crate) struct StopError;
+pub(crate) enum StopError {
+    /// The requested identity is not retained by the manager.
+    #[error("download identity not found")]
+    NotFound,
+
+    /// The manager has shut down before accepting the request.
+    #[error("download manager unavailable")]
+    Unavailable(#[from] oneshot::error::RecvError),
+}
 
 /// Immutable services used by download attempts and playlist expansion.
-#[derive(Clone)]
 pub(crate) struct DownloadRuntime {
     /// Permanent export root; `None` makes Song attempts fail as unavailable.
     pub(crate) music_dir: Option<PathBuf>,
@@ -48,178 +52,135 @@ pub(crate) struct DownloadRuntime {
     pub(crate) speed_tick: Duration,
 }
 
-/// Cloneable handle to the only Song download lifecycle owner.
-#[derive(Clone)]
-pub(crate) struct DownloadManager {
-    /// Shared manager state and scheduler signals.
-    pub(super) inner: Arc<ManagerInner>,
+/// Commands processed in channel order by the download manager task.
+pub(super) enum Command {
+    Submit(DownloadTarget),
+
+    Configure {
+        quality: BitRate,
+
+        max_concurrent: usize,
+    },
+
+    /// Acknowledges the state transition and cancellation request, not writer exit.
+    Stop {
+        id: DownloadId,
+
+        reply: oneshot::Sender<Result<(), StopError>>,
+    },
+
+    /// Acknowledges only after all active attempts, including their writers, have exited.
+    Shutdown(oneshot::Sender<()>),
 }
 
-/// Shared manager implementation.
-pub(super) struct ManagerInner {
-    /// Immutable execution services.
-    pub(super) runtime: DownloadRuntime,
+/// Cloneable command sender and latest coalesced download snapshot.
+#[derive(Clone)]
+pub(crate) struct DownloadManager {
+    commands: mpsc::UnboundedSender<Command>,
 
-    /// Mutable lifecycle state.
-    pub(super) state: Mutex<ManagerState>,
-
-    /// Wakes the admission loop after submit, completion, Stop, or config change.
-    pub(super) wake: Notify,
-
-    /// 明细变更 generation:订阅者被唤醒后拉取快照 / 增量。
-    pub(super) changes: watch::Sender<Revision>,
-
-    /// Wakes graceful shutdown waiters after active-attempt changes.
-    pub(super) quiesced: Notify,
-
-    /// Stops new admission and the scheduler loop.
-    pub(super) shutdown: CancellationToken,
+    snapshots: watch::Receiver<DownloadSnapshot>,
 }
 
 impl DownloadManager {
-    /// Creates the manager and starts its admission loop.
-    ///
-    /// # Params:
-    ///   - `runtime`: Immutable execution services.
-    ///   - `quality`: Quality applied to new submissions.
-    ///   - `max_concurrent`: Maximum active Song attempts, validated as positive by config loading.
+    /// Starts the lifecycle owner; config loading validates a positive concurrency limit.
     pub(crate) fn spawn(runtime: DownloadRuntime, quality: BitRate, max_concurrent: usize) -> Self {
-        let (changes, _changes_rx) = watch::channel(Revision::default());
-        let manager = Self {
-            inner: Arc::new(ManagerInner {
-                runtime,
-                state: Mutex::new(ManagerState::new(quality, max_concurrent)),
-                wake: Notify::new(),
-                changes,
-                quiesced: Notify::new(),
-                shutdown: CancellationToken::new(),
-            }),
-        };
-        if let Some(root) = manager.inner.runtime.music_dir.as_deref() {
+        if let Some(root) = runtime.music_dir.as_deref() {
             crate::download::cleanup_orphan_partials(root);
         }
-        let scheduler = manager.clone();
-        tokio::spawn(async move { scheduler.run_scheduler().await });
-        manager
+        let state = ManagerState::new(quality, max_concurrent);
+        let (snapshots_tx, snapshots) = watch::channel(state.snapshot());
+        let (commands, commands_rx) = mpsc::unbounded_channel();
+        tokio::spawn(run_downloads(runtime, state, commands_rx, snapshots_tx));
+        Self {
+            commands,
+            snapshots,
+        }
     }
 
-    /// Applies download config to future admission without cancelling active attempts.
-    ///
-    /// # Params:
-    ///   - `quality`: Quality for later submissions.
-    ///   - `max_concurrent`: New active cap, validated as positive by config loading.
+    /// Queues a Song submission or playlist expansion without waiting for admission.
+    pub(crate) fn submit(&self, target: DownloadTarget) {
+        let _ = self.commands.send(Command::Submit(target));
+    }
+
+    /// Changes future admissions; active attempts keep their quality and are not cancelled.
     pub(crate) fn set_config(&self, quality: BitRate, max_concurrent: usize) {
-        let mut state = self.inner.state.lock();
-        state.quality = quality;
-        state.max_concurrent = max_concurrent;
-        drop(state);
-        self.inner.wake.notify_one();
-        self.bump();
+        let _ = self.commands.send(Command::Configure {
+            quality,
+            max_concurrent,
+        });
     }
 
-    /// 明细变更订阅端(初值为当前 generation)。
-    pub(crate) fn changes(&self) -> watch::Receiver<Revision> {
-        self.inner.changes.subscribe()
+    /// Observes coalesced state without accessing the manager's mutable rows.
+    pub(crate) fn snapshots(&self) -> watch::Receiver<DownloadSnapshot> {
+        self.snapshots.clone()
     }
 
-    /// 发布一次明细变更(无订阅者时静默)。
-    pub(super) fn bump(&self) {
-        self.inner
-            .changes
-            .send_modify(|revision| *revision = revision.next());
+    /// Waits until Stop is accepted; running attempts may still be stopping on return.
+    pub(crate) async fn stop(&self, id: &DownloadId) -> Result<(), StopError> {
+        let (reply, accepted) = oneshot::channel();
+        let _ = self.commands.send(Command::Stop {
+            id: id.clone(),
+            reply,
+        });
+        accepted.await?
     }
 
-    /// Returns the small per-tick summary.
-    pub(crate) fn summary(&self) -> DownloadSummary {
-        self.inner.state.lock().summary()
+    /// Cancels work and waits for the manager to finish every active writer.
+    pub(crate) async fn shutdown(&self) -> Result<(), oneshot::error::RecvError> {
+        let (reply, finished) = oneshot::channel();
+        let _ = self.commands.send(Command::Shutdown(reply));
+        finished.await
     }
+}
 
-    /// Returns active, queued, then newest-first terminal rows.
-    pub(crate) fn snapshot(&self) -> Vec<SongDownloadView> {
-        self.inner.state.lock().snapshot()
-    }
-
-    /// Stops a known download; terminal rows are unchanged and unknown IDs return an error.
-    pub(crate) fn stop(&self, id: &DownloadId) -> Result<(), StopError> {
-        let mut cancellation = None::<CancellationToken>;
-        let mut queued_stop = false;
-        let song_id = {
-            let mut state = self.inner.state.lock();
-            let row = state.rows.get(id).ok_or(StopError)?;
-            let status = row.view.status;
-            let song_id = row.view.song.id.clone();
-            match status {
-                DownloadStatus::Queued => {
-                    queued_stop = true;
-                    state.mark_terminal(id, DownloadStatus::Stopped, None);
-                }
-                DownloadStatus::Resolving
-                | DownloadStatus::Downloading
-                | DownloadStatus::Finalizing => {
-                    if let Some(row) = state.rows.get_mut(id) {
-                        row.view.status = DownloadStatus::Stopping;
-                        row.view.speed_bps = 0;
-                    }
-                    cancellation = state.active.get(id).cloned();
-                }
-                DownloadStatus::Stopping
-                | DownloadStatus::Stopped
-                | DownloadStatus::Downloaded
-                | DownloadStatus::AlreadyPresent
-                | DownloadStatus::SkippedByHook
-                | DownloadStatus::Failed => {}
+/// Stops queued work immediately or asks an active attempt to stop; terminal rows are unchanged.
+pub(super) fn stop_download(state: &mut ManagerState, id: &DownloadId) -> Result<(), StopError> {
+    let row = state.rows.get_mut(id).ok_or(StopError::NotFound)?;
+    let song_id = row.view.song.id.clone();
+    let queued = row.view.status == DownloadStatus::Queued;
+    match row.view.status {
+        DownloadStatus::Queued => state.mark_terminal(id, DownloadStatus::Stopped, None),
+        DownloadStatus::Resolving | DownloadStatus::Downloading | DownloadStatus::Finalizing => {
+            row.view.status = DownloadStatus::Stopping;
+            row.view.speed_bps = 0;
+            if let Some(token) = state.active.get(id) {
+                token.cancel();
             }
-            state.finish_wave_if_idle();
-            song_id
-        };
-        if let Some(token) = cancellation {
-            token.cancel();
         }
-        mineral_log::info!(
-            target: "download",
-            download_id = %id,
-            song_id = %song_id.qualified(),
-            source = song_id.namespace().name(),
-            queued = queued_stop,
-            "download Stop accepted"
-        );
-        self.inner.wake.notify_one();
-        self.bump();
-        Ok(())
+        DownloadStatus::Stopping
+        | DownloadStatus::Stopped
+        | DownloadStatus::Downloaded
+        | DownloadStatus::AlreadyPresent
+        | DownloadStatus::SkippedByHook
+        | DownloadStatus::Failed => {}
     }
+    mineral_log::info!(
+        target: "download",
+        download_id = %id,
+        song_id = %song_id.qualified(),
+        source = song_id.namespace().name(),
+        queued,
+        "download Stop accepted"
+    );
+    Ok(())
+}
 
-    /// Cancels all work and waits for active writers to quiesce.
-    pub(crate) async fn shutdown(&self) {
-        self.inner.shutdown.cancel();
-        let tokens = {
-            let mut state = self.inner.state.lock();
-            let queued = state
-                .rows
-                .iter()
-                .filter(|(_, row)| row.view.status == DownloadStatus::Queued)
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>();
-            for id in queued {
-                state.mark_terminal(&id, DownloadStatus::Stopped, None);
-            }
-            let active_ids = state.active.keys().cloned().collect::<Vec<_>>();
-            for id in active_ids {
-                if let Some(row) = state.rows.get_mut(&id) {
-                    row.view.status = DownloadStatus::Stopping;
-                    row.view.speed_bps = 0;
-                }
-            }
-            state.active.values().cloned().collect::<Vec<_>>()
-        };
-        for token in tokens {
-            token.cancel();
+/// Stops admission before the manager drains its running futures.
+pub(super) fn stop_all(state: &mut ManagerState) {
+    let queued = state
+        .rows
+        .iter()
+        .filter(|(_, row)| row.view.status == DownloadStatus::Queued)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    for id in queued {
+        state.mark_terminal(&id, DownloadStatus::Stopped, None);
+    }
+    for (id, token) in &state.active {
+        if let Some(row) = state.rows.get_mut(id) {
+            row.view.status = DownloadStatus::Stopping;
+            row.view.speed_bps = 0;
         }
-        loop {
-            let quiesced = self.inner.quiesced.notified();
-            if self.inner.state.lock().active.is_empty() {
-                break;
-            }
-            quiesced.await;
-        }
+        token.cancel();
     }
 }

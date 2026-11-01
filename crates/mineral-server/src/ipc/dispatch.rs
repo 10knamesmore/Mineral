@@ -4,9 +4,12 @@
 //! 不依赖 spawn 调度碰巧有序;查询与脚本 / 数据库慢操作并发执行,结果经 id 配对。
 //! 跨 client 以 daemon 的接受次序仲裁(各自 read loop 串行)。
 
-use mineral_protocol::{FailureKind, OperationFailure, OperationResult, Request, Response};
+use mineral_protocol::{
+    DownloadId, FailureKind, OperationFailure, OperationResult, Request, Response,
+};
 
 use crate::client::ClientHandle;
+use crate::download::StopError;
 
 /// 需要并发执行的慢请求(自带业务语义)。
 pub(crate) enum AsyncRequest {
@@ -140,10 +143,6 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
             client.download(target);
             OperationResult::Accepted
         }
-        Request::StopDownload(id) => match client.stop_download(&id) {
-            Ok(()) => OperationResult::Applied,
-            Err(error) => failure(&error, FailureKind::NotFound),
-        },
         Request::ChannelCaps => query(Response::ChannelCaps(client.channel_caps())),
         Request::ServiceInfo => query(Response::ServiceInfo(client.service_info())),
         Request::DaemonInfo => query(Response::DaemonInfo {
@@ -168,6 +167,23 @@ pub(crate) fn execute_sync(client: &ClientHandle, request: Request) -> Operation
                 kind: FailureKind::Internal,
                 detail: "操作失败".to_owned(),
             })
+        }
+    }
+}
+
+/// 在有序请求路径等待 Stop 受理，保持它与后续下载操作的顺序。
+pub(crate) async fn execute_stop_download(
+    client: &ClientHandle,
+    id: &DownloadId,
+) -> OperationResult {
+    match client.stop_download(id).await {
+        Ok(()) => OperationResult::Applied,
+        Err(error) => {
+            let kind = match error {
+                StopError::NotFound => FailureKind::NotFound,
+                StopError::Unavailable(_) => FailureKind::Unavailable,
+            };
+            failure(&error, kind)
         }
     }
 }
