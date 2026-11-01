@@ -92,7 +92,7 @@ pub struct SearchPage {
     reveal_seg: Option<PromptSegment>,
 
     /// per-source 搜索会话（query/kind/结果/光标独立，切 source 恢复）。
-    sessions: FxHashMap<SourceKind, SearchSession>,
+    pub(crate) sessions: FxHashMap<SourceKind, SearchSession>,
 
     /// source / kind 下拉的配置白名单(见 [`SearchWhitelist`])。
     whitelist: SearchWhitelist,
@@ -195,6 +195,7 @@ impl SearchPage {
     }
 
     /// 标记当前会话某 kind 首页搜索在飞（submit 落地时由 App 调）。
+    #[cfg(test)]
     pub(crate) fn mark_loading(&mut self, kind: SearchKind) {
         if let Some(session) = self.current_mut() {
             session.mark_in_flight(kind);
@@ -491,7 +492,7 @@ impl SearchPage {
 
 #[cfg(test)]
 mod tests {
-    use mineral_channel_core::{ChannelCaps, Page};
+    use mineral_channel_core::ChannelCaps;
     use mineral_model::{SearchKind, SourceKind};
     use mineral_task::SearchPayload;
     use rustc_hash::FxHashMap;
@@ -530,12 +531,7 @@ mod tests {
         assert!(rs.current_loading(), "提交后当前 kind 在飞 → loading");
         if let Some(session) = rs.current_mut() {
             // 首页到货 0 条:仍算「搜完了」,清 loading(渲染层转 no results)。
-            session.apply_page(
-                SearchKind::Song,
-                SearchPayload::Songs(Vec::new()),
-                Page::default(),
-                /*has_more*/ None,
-            );
+            session.apply_page(SearchKind::Song, SearchPayload::Songs(Vec::new()), 0, true);
         }
         assert!(!rs.current_loading(), "首页到货 → 清 loading");
         Ok(())

@@ -501,7 +501,6 @@ fn container_context(container: &ContainerRef) -> mineral_protocol::QueueContext
 
 #[cfg(test)]
 mod tests {
-    use mineral_channel_core::Page;
     use mineral_model::{Album, AlbumId, Artist, ArtistId, SourceKind};
     use mineral_protocol::QueueContextWire;
     use mineral_task::TaskEvent;
@@ -773,9 +772,9 @@ mod tests {
         // 专辑那路到货:不兑现。
         app.fulfill_pending_container(&TaskEvent::ArtistAlbumsFetched {
             id: aid.clone(),
-            page: Page::default(),
+            batch: 0,
             albums: Vec::new(),
-            has_more: None,
+            complete: true,
         });
         assert!(
             queue_ops

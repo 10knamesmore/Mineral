@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use color_eyre::eyre::eyre;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use mineral_channel_core::MusicChannel;
 use mineral_channel_local::LocalLibrary;
 use mineral_model::{BitRate, CachePolicy, Playlist, Song, SongId, SourceKind};
@@ -107,10 +107,8 @@ async fn one_time_load_identity_lyrics_and_playback() -> color_eyre::Result<()> 
     scope.set_loved(&first.id, true).await?;
     assert!(library.caps().searchable().is_empty());
     assert!(matches!(
-        library
-            .search_songs("first", mineral_channel_core::Page::default())
-            .await,
-        Err(mineral_channel_core::Error::NotSupported)
+        library.search_songs("first").next().await,
+        Some(Err(mineral_channel_core::Error::NotSupported))
     ));
 
     // Replacing tags at the same path retains identity and refreshes generic favorite metadata.

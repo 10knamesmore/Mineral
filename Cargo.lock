@@ -3594,6 +3594,7 @@ name = "mineral-server"
 version = "0.6.0"
 dependencies = [
  "arc-swap",
+ "async-stream",
  "async-trait",
  "bytes",
  "color-eyre",

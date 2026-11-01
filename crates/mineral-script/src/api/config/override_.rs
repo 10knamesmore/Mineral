@@ -142,10 +142,8 @@ mod tests {
         lua.load(r#"local mineral = require("mineral.daemon"); mineral.config.override("audio.volume", 2)"#)
             .exec()?;
         assert_eq!(
-            drain_cmds(&mut cmd_rx),
-            vec![ScriptCmd::ConfigOverride {
-                ops: vec![op("audio.volume", BusValue::Int(2))],
-            }]
+            sole_override_ops(&mut cmd_rx)?,
+            vec![op("audio.volume", BusValue::Int(2))]
         );
         Ok(())
     }
@@ -156,12 +154,10 @@ mod tests {
         lua.load(r#"local mineral = require("mineral.daemon"); mineral.config.override("audio.volume", nil)"#)
             .exec()?;
         assert_eq!(
-            drain_cmds(&mut cmd_rx),
-            vec![ScriptCmd::ConfigOverride {
-                ops: vec![ConfigOverrideOp {
-                    path: "audio.volume".to_owned(),
-                    value: None,
-                }],
+            sole_override_ops(&mut cmd_rx)?,
+            vec![ConfigOverrideOp {
+                path: "audio.volume".to_owned(),
+                value: None,
             }],
             "nil 必须收敛成撤销(None),不得发 Some(Nil)"
         );

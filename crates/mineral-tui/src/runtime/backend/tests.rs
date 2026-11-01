@@ -33,7 +33,6 @@ async fn shared_submitter_delivers_tasks_after_socket_backpressure() -> color_ey
                 source: SourceKind::NETEASE,
                 kind: mineral_model::SearchKind::Song,
                 query: "query".to_owned(),
-                page: mineral_channel_core::Page::default(),
             }),
         ];
         let (client_socket, server_socket) = tokio::net::UnixStream::pair()?;

@@ -11,7 +11,9 @@ use rustc_hash::FxHashMap;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use super::artist_albums::pump_artist_albums;
 use super::playlist::pump_playlist;
+use super::search::pump_search;
 use super::session::SessionServices;
 use super::updates::{
     pump_downloads_detail, pump_downloads_summary, pump_events, pump_pcm, pump_playback,
@@ -75,6 +77,40 @@ impl Subscriptions {
         let mut flush_events = None;
         let mut advance = None;
         let (handle, pcm) = match &request.topic {
+            SubscriptionTopic::ArtistAlbums(id) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                advance = Some(tx);
+                (
+                    tokio::spawn(pump_artist_albums(
+                        client.clone(),
+                        request.id,
+                        id.clone(),
+                        rx,
+                        out.clone(),
+                    )),
+                    None,
+                )
+            }
+            SubscriptionTopic::Search {
+                source,
+                kind,
+                query,
+            } => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                advance = Some(tx);
+                (
+                    tokio::spawn(pump_search(
+                        client.clone(),
+                        request.id,
+                        *source,
+                        *kind,
+                        query.clone(),
+                        rx,
+                        out.clone(),
+                    )),
+                    None,
+                )
+            }
             SubscriptionTopic::Playlist(id) => {
                 let (tx, rx) = mpsc::unbounded_channel();
                 advance = Some(tx);

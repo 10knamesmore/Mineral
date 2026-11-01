@@ -1,6 +1,5 @@
 //! 将搜索分页与实体详情回包应用到匹配的会话和详情帧。
 
-use mineral_channel_core::Page;
 use mineral_model::{Album, AlbumId, Artist, ArtistId, SearchKind, SourceKind};
 use mineral_task::SearchPayload;
 
@@ -9,21 +8,21 @@ use super::AppState;
 impl AppState {
     /// 把一页搜索结果落进配对的会话：按事件自带 `source` 找会话、`query` 配对（源级，
     /// 改 query 作废全部 kind 桶），事件自带 `kind` 决定存哪个桶——这样切 kind 时旧 kind
-    /// 的飞行响应也能落对桶，per-kind 缓存才完整。首页（`offset == 0`）建桶、翻页 append。
+    /// 的飞行响应也能落对桶。首批建桶，后续批次追加。
     ///
     /// # Params:
     ///   - `source` / `kind` / `query`: 回带的请求三元组（source 找会话、query 配对、kind 选桶）
-    ///   - `page`: 分页参数（`offset == 0` 首页建桶，否则 append）
+    ///   - `batch`: 从零开始的批次序号
     ///   - `payload`: 结果载荷
-    ///   - `has_more`: 源的显式翻页信号
+    ///   - `complete`: 来源是否已经读完
     pub(super) fn apply_search_results(
         &mut self,
         source: SourceKind,
         kind: SearchKind,
         query: &str,
-        page: Page,
+        batch: u64,
         payload: &SearchPayload,
-        has_more: Option<bool>,
+        complete: bool,
     ) {
         // caps 先读，随后 session 借走 channel_search。仅首页建桶时设置默认分区；
         // 续页保留已操作的详情导航，新选中实体的默认分区由结果桶保存的能力初始化。
@@ -38,10 +37,10 @@ impl AppState {
         if session.query() != query {
             return;
         }
-        if !session.apply_page(kind, payload.clone(), page, has_more) {
+        if !session.apply_page(kind, payload.clone(), batch, complete) {
             return;
         }
-        if page.offset == 0
+        if batch == 0
             && let Some(sections) = sections
         {
             mineral_log::debug!(target: "tui", ?source, ?kind, "initialize search detail sections");
@@ -49,18 +48,18 @@ impl AppState {
         }
     }
 
-    /// 按请求的 source、kind、query 与分页参数释放失败续页；切 source / kind 后仍更新原桶。
+    /// 按 source、kind、query 与批次序号释放失败请求；切 source / kind 后仍更新原桶。
     pub(super) fn apply_search_page_failed(
         &mut self,
         source: SourceKind,
         kind: SearchKind,
         query: &str,
-        page: Page,
+        batch: u64,
     ) {
         if let Some(session) = self.ui.channel_search.session_for_mut(source)
             && session.query() == query
         {
-            session.fail_page(kind, page);
+            session.fail_page(kind, batch);
         }
     }
 
@@ -71,25 +70,41 @@ impl AppState {
         }
     }
 
-    /// 将艺人专辑分页应用到匹配的保留帧；每帧只接受首页或自己的待收取页。
+    /// 共享列表接收批次，再同步到各个保留帧。
     pub(super) fn apply_artist_albums(
         &mut self,
         id: &ArtistId,
         albums: &[Album],
-        page: Page,
-        has_more: Option<bool>,
+        batch: u64,
+        complete: bool,
     ) {
-        mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, loaded = albums.len(), ?has_more, "receive artist albums page");
-        for results in self.ui.channel_search.retained_results_mut() {
-            results.fill_artist_albums(id, albums, page, has_more);
+        let listing = self
+            .models
+            .library
+            .artist_albums
+            .entry(id.clone())
+            .or_default();
+        if listing
+            .albums
+            .accept_batch(albums.to_vec(), batch, complete)
+        {
+            self.sync_artist_albums(id);
         }
     }
 
-    /// 释放匹配保留帧中的失败续页，下次近底导航重试原页。
-    pub(super) fn apply_artist_albums_page_failed(&mut self, id: &ArtistId, page: Page) {
-        mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, "artist albums page failed or cancelled");
-        for results in self.ui.channel_search.retained_results_mut() {
-            results.fail_artist_albums_page(id, page);
+    /// 失败只释放对应批次，后续导航继续原订阅。
+    pub(super) fn apply_artist_albums_page_failed(&mut self, id: &ArtistId, batch: u64) {
+        if let Some(listing) = self.models.library.artist_albums.get_mut(id) {
+            listing.albums.fail_batch(batch);
+            self.sync_artist_albums(id);
+        }
+    }
+
+    pub(crate) fn sync_artist_albums(&mut self, id: &ArtistId) {
+        if let Some(listing) = self.models.library.artist_albums.get(id) {
+            for results in self.ui.channel_search.retained_results_mut() {
+                results.fill_artist_albums(id, &listing.albums);
+            }
         }
     }
 
@@ -204,7 +219,7 @@ mod tests {
     /// 搜索续页追加艺人时保留已选分区、光标和滚动位置，离屏回包也不重置。
     #[test]
     fn artist_search_page_preserves_detail_navigation() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
+        use crate::test_support::artist_albums;
         use mineral_task::{SearchPayload, TaskEvent};
 
         use crate::runtime::state::{ArtistSection, EntityRef};
@@ -215,9 +230,9 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind: SearchKind::Artist,
                 query: "q".to_owned(),
-                page: Page::new(0, 1),
+                batch: 0,
                 payload: SearchPayload::Artists(vec![artist_fixture("first")]),
-                has_more: Some(true),
+                complete: false,
             });
             assert_eq!(current_frame(&state)?.section, ArtistSection::Hot);
             let results = state
@@ -225,7 +240,8 @@ mod tests {
                 .channel_search
                 .active_results_mut()
                 .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?;
-            assert_eq!(results.request_next_page(), Some(Page::new(1, 1)));
+            assert_eq!(results.next_batch(), Some(1));
+            results.batch_requested(1);
             let frame = results
                 .detail
                 .current_mut()
@@ -233,13 +249,12 @@ mod tests {
             let mut artist = artist_fixture("first");
             artist.songs = crate::test_support::endserenading(2);
             frame.set_artist_detail(Box::new(artist));
-            frame.set_artist_albums(
+            frame.set_artist_albums(artist_albums(
                 (0..8)
                     .map(|index| album_fixture(&format!("album-{index}")))
                     .collect(),
-                Page::default(),
-                Some(false),
-            );
+                true,
+            ));
             frame.cycle_section(8);
             frame.list_mut().place(6, 2);
             frame.nudge_description(3);
@@ -254,9 +269,9 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind: SearchKind::Artist,
                 query: "q".to_owned(),
-                page: Page::new(1, 1),
+                batch: 1,
                 payload: SearchPayload::Artists(vec![artist_fixture("second")]),
-                has_more: Some(false),
+                complete: true,
             });
             if switch_kind {
                 state.ui.channel_search.select_kind(SearchKind::Artist);
@@ -298,7 +313,7 @@ mod tests {
     /// 只提供 Albums 的来源在首页及续页艺人的新详情帧中都默认展示 Albums。
     #[test]
     fn album_only_source_initializes_first_and_later_artist_frames() -> color_eyre::Result<()> {
-        use mineral_channel_core::{ArtistSectionKind, ArtistSections, ChannelCaps, Page};
+        use mineral_channel_core::{ArtistSectionKind, ArtistSections, ChannelCaps};
         use mineral_model::{Artist, ArtistId};
         use mineral_task::{SearchPayload, TaskEvent};
 
@@ -331,23 +346,29 @@ mod tests {
                         .channel_search
                         .active_results_mut()
                         .ok_or_else(|| color_eyre::eyre::eyre!("缺少艺人结果"))?
-                        .request_next_page(),
-                    Some(Page::new(1, 1))
+                        .next_batch(),
+                    Some(1)
                 );
+                state
+                    .ui
+                    .channel_search
+                    .current_mut()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("缺少搜索会话"))?
+                    .batch_requested(SearchKind::Artist, 1);
             }
             let id = ArtistId::new(SourceKind::BILIBILI, format!("uploader-{offset}"));
             state.apply(&TaskEvent::SearchResults {
                 source: SourceKind::BILIBILI,
                 kind: SearchKind::Artist,
                 query: "q".to_owned(),
-                page: Page::new(offset, 1),
+                batch: offset,
                 payload: SearchPayload::Artists(vec![
                     Artist::builder()
                         .id(id.clone())
                         .name(format!("UP {offset}"))
                         .build(),
                 ]),
-                has_more: Some(offset == 0),
+                complete: offset != 0,
             });
             let results = state
                 .ui
@@ -371,7 +392,6 @@ mod tests {
     #[test]
     fn album_response_reaches_retained_source_and_kind() -> color_eyre::Result<()> {
         use crate::runtime::state::DetailData;
-        use mineral_channel_core::Page;
         use mineral_task::{SearchPayload, TaskEvent};
 
         for switch_source in [false, true] {
@@ -381,9 +401,9 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind: SearchKind::Album,
                 query: "q".to_owned(),
-                page: Page::default(),
+                batch: 0,
                 payload: SearchPayload::Albums(vec![album.clone()]),
-                has_more: None,
+                complete: false,
             });
             mark_detail_requested(&mut s)?;
             if switch_source {
@@ -408,8 +428,8 @@ mod tests {
                 session.apply_page(
                     SearchKind::Album,
                     SearchPayload::Albums(vec![other_album]),
-                    Page::default(),
-                    None,
+                    0,
+                    false,
                 );
             } else {
                 s.ui.channel_search.select_kind(SearchKind::Artist);
@@ -450,7 +470,6 @@ mod tests {
     #[test]
     fn artist_responses_merge_while_frame_is_inactive() -> color_eyre::Result<()> {
         use crate::runtime::state::{DetailData, EntityRef};
-        use mineral_channel_core::Page;
         use mineral_task::{SearchPayload, TaskEvent};
 
         for albums_first in [false, true] {
@@ -461,9 +480,9 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind: SearchKind::Artist,
                 query: "q".to_owned(),
-                page: Page::default(),
+                batch: 0,
                 payload: SearchPayload::Artists(vec![artist.clone()]),
-                has_more: None,
+                complete: false,
             });
             mark_detail_requested(&mut s)?;
             artist.songs = crate::test_support::endserenading(2);
@@ -473,9 +492,9 @@ mod tests {
             };
             let albums_event = TaskEvent::ArtistAlbumsFetched {
                 id: artist.id.clone(),
-                page: Page::default(),
+                batch: 0,
                 albums: vec![album.clone()],
-                has_more: None,
+                complete: true,
             };
             let (first, second) = if albums_first {
                 (&albums_event, &detail_event)
@@ -497,8 +516,8 @@ mod tests {
                     .apply_page(
                         SearchKind::Album,
                         SearchPayload::Albums(vec![album.clone()]),
-                        Page::default(),
-                        None,
+                        0,
+                        false,
                     );
             }
             s.apply(second);
@@ -537,7 +556,6 @@ mod tests {
     #[test]
     fn repeated_album_response_preserves_retained_song_navigation() -> color_eyre::Result<()> {
         use crate::runtime::state::DetailData;
-        use mineral_channel_core::Page;
         use mineral_model::{AlbumRef, AlbumTrack};
         use mineral_task::{SearchPayload, TaskEvent};
 
@@ -555,12 +573,7 @@ mod tests {
         s.ui.channel_search
             .current_mut()
             .ok_or_else(|| color_eyre::eyre::eyre!("应有搜索会话"))?
-            .apply_page(
-                SearchKind::Song,
-                SearchPayload::Songs(vec![song]),
-                Page::default(),
-                None,
-            );
+            .apply_page(SearchKind::Song, SearchPayload::Songs(vec![song]), 0, false);
         mark_detail_requested(&mut s)?;
         album.tracks = AlbumTrack::enumerate(songs);
         s.apply(&TaskEvent::AlbumDetailFetched {
@@ -586,8 +599,8 @@ mod tests {
             .apply_page(
                 SearchKind::Album,
                 SearchPayload::Albums(vec![album_fixture("al1")]),
-                Page::default(),
-                None,
+                0,
+                false,
             );
         mark_detail_requested(&mut s)?;
         album.description = "updated description".to_owned();
@@ -613,7 +626,6 @@ mod tests {
     #[test]
     fn rebuilt_artist_frame_with_partial_response_still_prefetches() -> color_eyre::Result<()> {
         use crate::runtime::state::DetailData;
-        use mineral_channel_core::Page;
         use mineral_task::{SearchPayload, TaskEvent};
 
         let mut s = state_searching("q", SearchKind::Artist)?;
@@ -624,8 +636,8 @@ mod tests {
             .apply_page(
                 SearchKind::Artist,
                 SearchPayload::Artists(vec![artist.clone(), artist_fixture("ar2")]),
-                Page::default(),
-                None,
+                0,
+                false,
             );
         mark_detail_requested(&mut s)?;
         let detail_event = TaskEvent::ArtistDetailFetched {
@@ -642,9 +654,9 @@ mod tests {
         s.ui.channel_search.select_kind(SearchKind::Album);
         s.apply(&TaskEvent::ArtistAlbumsFetched {
             id: artist.id.clone(),
-            page: Page::default(),
+            batch: 0,
             albums: vec![album_fixture("al1")],
-            has_more: None,
+            complete: true,
         });
         s.ui.channel_search.select_kind(SearchKind::Artist);
         assert!(
@@ -684,7 +696,6 @@ mod tests {
     #[test]
     fn playlist_response_reaches_inactive_kind_and_library() -> color_eyre::Result<()> {
         use crate::runtime::state::DetailData;
-        use mineral_channel_core::Page;
         use mineral_model::{Playlist, PlaylistEntry, PlaylistId};
         use mineral_task::{SearchPayload, TaskEvent};
 
@@ -697,9 +708,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Playlist,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Playlists(vec![playlist.clone()]),
-            has_more: None,
+            complete: false,
         });
         mark_detail_requested(&mut s)?;
         s.ui.channel_search.select_kind(SearchKind::Song);
@@ -732,7 +743,6 @@ mod tests {
     /// 编辑中的新词不继承旧请求 loading，过期回包也不能恢复旧结果。
     #[test]
     fn editing_pending_query_stays_idle_after_stale_response() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
         use mineral_task::{SearchPayload, TaskEvent};
 
         for insert in [false, true] {
@@ -757,9 +767,9 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind: SearchKind::Song,
                 query: "hello".to_owned(),
-                page: Page::default(),
+                batch: 0,
                 payload: SearchPayload::Songs(crate::test_support::endserenading(2)),
-                has_more: None,
+                complete: false,
             });
             for kind in [SearchKind::Song, SearchKind::Album] {
                 s.ui.channel_search.select_kind(kind);
@@ -785,7 +795,6 @@ mod tests {
     /// 不匹配的 AlbumSongs(别的专辑 id)不污染当前帧。
     #[test]
     fn mismatched_album_songs_dropped() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
         use mineral_model::AlbumId;
         use mineral_task::{SearchPayload, TaskEvent};
 
@@ -794,9 +803,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![album_fixture("al1")]),
-            has_more: None,
+            complete: false,
         });
         s.apply(&TaskEvent::AlbumDetailFetched {
             fresh: true,

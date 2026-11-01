@@ -10,19 +10,20 @@
 
 use crate::image::graphics::GraphicsProtocol;
 use crate::runtime::backend::Backend;
-use mineral_channel_core::Page;
 use mineral_client::operation::SubmitError;
-use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{ArtistId, MediaUrl, PlaylistId, SearchKind, Song, SongId, SourceKind};
 use mineral_protocol::{AdvanceSubscription, SubscriptionDemand, SubscriptionTopic};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::runtime::collection::{CollectionGroup, CollectionId, CollectionRef};
-use crate::runtime::state::{AppState, DetailFetch, LibraryData, View};
+use crate::runtime::state::{AppState, DetailFetch, LibraryData, SearchPage, View};
 
 /// 每 tick 调一次:封面 + 歌单/专辑 tracks + 选中歌本地完整播放次数三路 prefetch,
 /// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::runtime::cover_collage`])。
 /// `queue_covers` 来自浮层的过滤视图,与 Browse 和在播候选合并后统一提交。
 pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(SourceKind, MediaUrl)>) {
+    release_search_subscriptions(&mut state.ui.channel_search, client);
+    release_artist_album_subscriptions(state, client);
     release_playlist_subscriptions(state, client);
     request_covers(state, queue_covers);
     request_playback_cover_decodes(state);
@@ -35,6 +36,118 @@ pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(Sourc
         .resources
         .collages
         .prepare(&state.models.library, &mut state.resources.images);
+}
+
+/// 查询失效或读完后释放订阅；提交失败的释放仍留在原会话中。
+fn release_search_subscriptions(page: &mut SearchPage, client: &dyn Backend) {
+    for (source, session) in &mut page.sessions {
+        session.subscriptions.retain(|kind, subscription| {
+            !subscription.release_requested
+                || client
+                    .unsubscribe(&SubscriptionTopic::Search {
+                        source: *source,
+                        kind: *kind,
+                        query: subscription.query.clone(),
+                    })
+                    .is_err()
+        });
+    }
+}
+
+/// 搜索首批创建订阅，续读沿用原订阅；成功提交后才标记等待。
+pub(crate) fn request_search(
+    client: &dyn Backend,
+    page: &mut SearchPage,
+    source: SourceKind,
+    kind: SearchKind,
+    query: String,
+    batch: u64,
+) -> Result<(), SubmitError> {
+    let Some(session) = page.session_for_mut(source) else {
+        return Ok(());
+    };
+    if let Some(subscription) = session.subscriptions.get(&kind)
+        && (batch == 0 || subscription.release_requested)
+    {
+        client.unsubscribe(&SubscriptionTopic::Search {
+            source,
+            kind,
+            query: subscription.query.clone(),
+        })?;
+        session.subscriptions.remove(&kind);
+    }
+    let subscription = match session.subscriptions.get(&kind) {
+        Some(subscription) => subscription.id,
+        None => {
+            let id = client.subscribe(SubscriptionTopic::Search {
+                source,
+                kind,
+                query: query.clone(),
+            })?;
+            session.subscribed(kind, id, query);
+            id
+        }
+    };
+    client.advance(AdvanceSubscription {
+        subscription,
+        demand: SubscriptionDemand::Next,
+        priority: Priority::User,
+    })?;
+    session.batch_requested(kind, batch);
+    Ok(())
+}
+
+/// 没有真实详情帧再使用艺人时释放数据；完整列表只释放订阅。
+fn release_artist_album_subscriptions(state: &mut AppState, client: &dyn Backend) {
+    let page = &mut state.ui.channel_search;
+    state.models.library.artist_albums.retain(|id, listing| {
+        let retained = page
+            .retained_results_mut()
+            .any(|results| results.detail.contains_artist(id));
+        if (!retained || !listing.albums.has_more())
+            && listing.subscription.is_some()
+            && client
+                .unsubscribe(&SubscriptionTopic::ArtistAlbums(id.clone()))
+                .is_ok()
+        {
+            listing.subscription = None;
+        }
+        retained || listing.subscription.is_some()
+    });
+}
+
+/// 首批建立共享订阅；已有数据直接交给新详情帧，续批只推进一次。
+pub(crate) fn request_artist_albums(
+    client: &dyn Backend,
+    state: &mut AppState,
+    id: &ArtistId,
+    batch: u64,
+    priority: Priority,
+) -> Result<(), SubmitError> {
+    let listing = state
+        .models
+        .library
+        .artist_albums
+        .entry(id.clone())
+        .or_default();
+    if listing.albums.next_batch() == Some(batch) {
+        let subscription = match listing.subscription {
+            Some(subscription) => subscription,
+            None => {
+                let subscription = client.subscribe(SubscriptionTopic::ArtistAlbums(id.clone()))?;
+                listing.subscription = Some(subscription);
+                subscription
+            }
+        };
+        client.advance(AdvanceSubscription {
+            subscription,
+            demand: SubscriptionDemand::Next,
+            priority,
+        })?;
+        listing.albums.batch_requested(batch);
+    }
+    state.sync_artist_albums(id);
+    Ok(())
 }
 
 /// 合并队列光标、Browse 与在播位置的封面候选,共用图片引擎的预取入口。
@@ -363,6 +476,11 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
         DetailFetch::AlbumDetail(_) => Priority::User,
         DetailFetch::PlaylistDetail(_) | DetailFetch::Artist(_) => Priority::Background,
     };
+    if let DetailFetch::Artist(id) = &fetch
+        && request_artist_albums(client, state, id, 0, priority).is_err()
+    {
+        return;
+    }
     if submit_detail_tasks(client, &mut state.models.library, fetch, priority).is_err() {
         return;
     }
@@ -436,7 +554,7 @@ fn collect_detail_cover_candidates(
 }
 
 /// 按调用方的优先级派详情任务；手动操作使用 User，自动预览由调用方区分实体。
-/// artist 两路：详情 + 专辑列表；其余单路。
+/// 艺人这里只读取热门曲详情；专辑列表由详情帧通过订阅按需读取。
 pub(crate) fn submit_detail_tasks(
     client: &dyn Backend,
     library: &mut crate::runtime::state::LibraryData,
@@ -456,14 +574,7 @@ pub(crate) fn submit_detail_tasks(
         }
         DetailFetch::Artist(id) => {
             client.submit_task(
-                TaskKind::ChannelFetch(ChannelFetchKind::ArtistDetail { id: id.clone() }),
-                priority,
-            );
-            client.submit_task(
-                TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
-                    id,
-                    page: Page::default(),
-                }),
+                TaskKind::ChannelFetch(ChannelFetchKind::ArtistDetail { id }),
                 priority,
             );
         }
@@ -586,7 +697,7 @@ mod tests {
     use super::{collect_cover_candidates, collect_detail_cover_candidates, request_play_count};
     use crate::image::graphics::GraphicsProtocol;
     use crate::runtime::state::{AppState, ArtistSection, DetailFrame, EntityRef, View};
-    use crate::test_support::{TestClient, state_with_mixed_tracks};
+    use crate::test_support::{TestClient, artist_albums, state_with_mixed_tracks};
     use mineral_common::revision::Revision;
 
     /// 浏览停留和进入歌单只加载首批；接近底部才推进原订阅。
@@ -1169,7 +1280,7 @@ mod tests {
     fn searching_album_state() -> color_eyre::Result<AppState> {
         use std::time::{Duration, Instant};
 
-        use mineral_channel_core::{ChannelCaps, Page};
+        use mineral_channel_core::ChannelCaps;
         use mineral_model::{AlbumId, SearchKind};
         use mineral_task::{SearchPayload, TaskEvent};
         use rustc_hash::FxHashMap;
@@ -1201,9 +1312,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![album]),
-            has_more: None,
+            complete: false,
         });
         // 把选中时刻推到过去，越过 detail 驻留防抖窗（checked_sub 防单调时钟下溢）。
         state.ui.channel_search.last_sel_change = Instant::now()
@@ -1303,7 +1414,7 @@ mod tests {
                     .collect::<color_eyre::Result<Vec<Album>>>()?;
                 artist.songs = songs;
                 frame.set_artist_detail(Box::new(artist));
-                frame.set_artist_albums(albums, mineral_channel_core::Page::default(), None);
+                frame.set_artist_albums(artist_albums(albums, true));
             }
             SearchKind::User => {
                 color_eyre::eyre::bail!("用户结果没有 detail 曲目或专辑列表");

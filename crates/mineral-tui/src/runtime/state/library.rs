@@ -7,17 +7,21 @@ use std::collections::hash_map::Entry;
 use std::time::Instant;
 
 use mineral_common::revision::Revision;
-use mineral_model::{AlbumId, Lyrics, PlaylistId, SongId, SourceKind};
+use mineral_model::{AlbumId, ArtistId, Lyrics, PlaylistId, SongId, SourceKind};
 use mineral_protocol::SubscriptionDemand;
 use mineral_task::Priority;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use super::ArtistAlbumListing;
 use super::playlist_tracks::{CollectionTracks, PlaylistRequests};
 use crate::runtime::collection::CollectionId;
 use crate::runtime::view_model::{AlbumView, PlaylistView};
 
 /// 数据镜像/缓存域([`AppState`](crate::runtime::state::AppState) 的数据域)。
 pub struct LibraryData {
+    /// 保留的艺人详情共用一份专辑列表与订阅；最后一帧离开后释放。
+    pub(crate) artist_albums: FxHashMap<ArtistId, ArtistAlbumListing>,
+
     /// 服务端合并后的收藏专辑列表。
     pub albums: Vec<AlbumView>,
 
@@ -176,6 +180,7 @@ impl LibraryData {
     /// 构造空数据域(全部缓存为空,等 server 事件增量填充)。
     pub(crate) fn new() -> Self {
         Self {
+            artist_albums: FxHashMap::default(),
             playlists: Vec::new(),
             albums: Vec::new(),
             album_tracks: FxHashMap::default(),

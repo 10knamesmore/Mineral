@@ -135,8 +135,8 @@ impl SearchPage {
         }
         frame
             .request_artist_albums_page()
-            .map_or(SearchEffect::None, |(id, page)| {
-                SearchEffect::FetchArtistAlbums { id, page }
+            .map_or(SearchEffect::None, |(id, batch)| {
+                SearchEffect::FetchArtistAlbums { id, batch }
             })
     }
 
@@ -380,7 +380,7 @@ impl SearchPage {
         self.fetch_more_effect()
     }
 
-    /// 登记当前桶待收取的续页并生成提交意图；等待回包期间不重复请求。
+    /// 生成当前桶的续读意图；提交成功后才登记待收取批次。
     fn fetch_more_effect(&mut self) -> SearchEffect {
         let Some(source) = self.source else {
             return SearchEffect::None;
@@ -394,14 +394,14 @@ impl SearchPage {
         let Some(results) = session.kind_results_mut() else {
             return SearchEffect::None;
         };
-        let Some(page) = results.request_next_page() else {
+        let Some(batch) = results.next_batch() else {
             return SearchEffect::None;
         };
         SearchEffect::FetchMore {
             source,
             kind: session.kind,
             query: session.query().to_owned(),
-            page,
+            batch,
         }
     }
 }
@@ -437,7 +437,6 @@ fn play_from(songs: Vec<Song>, target: usize) -> DetailActivate {
 
 #[cfg(test)]
 mod tests {
-    use mineral_channel_core::Page;
     use mineral_model::{AlbumId, SearchKind, SourceKind};
     use mineral_task::{SearchPayload, TaskEvent};
 
@@ -457,14 +456,14 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
                     .build(),
             ]),
-            has_more: None,
+            complete: false,
         });
         let songs = crate::test_support::endserenading(4);
         let want = songs.get(2).map(|s| s.id.clone());
@@ -520,14 +519,14 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![
                 Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
                     .build(),
             ]),
-            has_more: None,
+            complete: false,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
             fresh: true,
@@ -565,9 +564,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Artist,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Artists(vec![artist.clone()]),
-            has_more: None,
+            complete: false,
         });
         let aid = ArtistId::new(SourceKind::NETEASE, "ar");
         app.state.apply(&TaskEvent::ArtistDetailFetched {
@@ -576,8 +575,8 @@ mod tests {
         });
         app.state.apply(&TaskEvent::ArtistAlbumsFetched {
             id: aid,
-            page: Page::default(),
-            has_more: None,
+            batch: 0,
+            complete: true,
             albums: vec![
                 Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
@@ -668,14 +667,14 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
                     .build(),
             ]),
-            has_more: None,
+            complete: false,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
             fresh: true,
@@ -727,9 +726,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Song,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Songs(songs),
-            has_more: None,
+            complete: false,
         });
         app.state.ui.channel_search.set_focus(SearchFocus::Results);
         if let Some(kr) = app.state.ui.channel_search.active_results_mut() {
@@ -770,14 +769,14 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
                     .build(),
             ]),
-            has_more: None,
+            complete: false,
         });
         app.state.ui.channel_search.set_focus(SearchFocus::Results);
         let eff = app
@@ -817,14 +816,14 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![
                 mineral_model::Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
                     .name("al1".to_owned())
                     .build(),
             ]),
-            has_more: None,
+            complete: false,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
             fresh: true,
@@ -881,9 +880,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Song,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Songs(crate::test_support::endserenading(3)),
-            has_more: None,
+            complete: false,
         });
         app.state.ui.channel_search.set_focus(SearchFocus::Results);
         app.state
@@ -947,7 +946,7 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![
                 Album::builder()
                     .id(AlbumId::new(SourceKind::NETEASE, "al1"))
@@ -955,7 +954,7 @@ mod tests {
                     .cover_url(Some(url.clone()))
                     .build(),
             ]),
-            has_more: None,
+            complete: false,
         });
         Ok((app, url))
     }

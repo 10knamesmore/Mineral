@@ -2,12 +2,12 @@
 
 use mineral_channel_core::ChannelCaps;
 use mineral_common::revision::Revision;
-use mineral_model::{RefreshScope, Song, SongId, SourceKind};
+use mineral_model::{RefreshScope, SearchKind, Song, SongId, SourceKind};
 use mineral_protocol::{
     DownloadId, DownloadTarget, Event, PlayMode, PlayQueueError, PlayerSync, PlayerVersions,
     QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
-use mineral_task::{Priority, Scheduler, TaskEvent, TaskKind};
+use mineral_task::{Priority, Scheduler, SearchPayload, TaskEvent, TaskKind};
 use tokio::sync::watch;
 
 use super::wire::{edited_song_id, queue_context_from_wire, stats_queue_op};
@@ -511,6 +511,18 @@ impl ClientHandle {
     /// Source execution queues shared by finite tasks and subscription streams.
     pub(crate) fn scheduler(&self) -> Scheduler {
         self.player.inner.scheduler.clone()
+    }
+
+    pub(crate) fn record_search_result(
+        &self,
+        source: SourceKind,
+        kind: SearchKind,
+        query: &str,
+        batch: u64,
+        payload: &SearchPayload,
+    ) {
+        self.player
+            .record_search_result(source, kind, query, batch, payload);
     }
 
     pub(crate) fn refresh_collections(&self, scope: &RefreshScope) {

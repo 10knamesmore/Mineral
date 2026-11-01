@@ -4,9 +4,10 @@
 //! 运行时防线。
 
 use async_trait::async_trait;
-use mineral_channel_core::{ChannelCaps, Error, MusicChannel, Page, PageResult};
+use futures_util::StreamExt;
+use mineral_channel_core::{ChannelCaps, Error, MusicChannel};
 use mineral_model::CachePolicy;
-use mineral_model::{Album, ArtistId, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_model::{ArtistId, Lyrics, PlaylistId, Song, SongId, SourceKind};
 
 /// 只实现必需方法的最小桩 channel,所有可选能力全部走 trait 默认实现。
 struct BareChannel;
@@ -26,30 +27,6 @@ impl MusicChannel for BareChannel {
                 mineral_channel_core::ArtistSectionKind::Albums,
             ]))
             .build()
-    }
-
-    async fn search_songs(
-        &self,
-        _query: &str,
-        _page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_albums(
-        &self,
-        _query: &str,
-        _page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Album>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_playlists(
-        &self,
-        _query: &str,
-        _page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
-        Err(Error::NotSupported)
     }
 
     async fn songs_detail(
@@ -105,8 +82,8 @@ async fn artist_albums_defaults_to_not_supported() -> color_eyre::Result<()> {
     let chan = BareChannel;
     let artist = ArtistId::new(SourceKind::LOCAL, "ar-1");
     assert!(matches!(
-        chan.artist_albums(&artist, Page::default()).await,
-        Err(Error::NotSupported)
+        chan.artist_albums(&artist).next().await,
+        Some(Err(Error::NotSupported))
     ));
     Ok(())
 }

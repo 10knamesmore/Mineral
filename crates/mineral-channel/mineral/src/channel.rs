@@ -3,12 +3,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_channel_core::collection::fresh_collection;
-use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::LibraryStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
-    MusicChannel, Page, PageResult, PlaylistDetail, Result,
+    MusicChannel, PlaylistDetail, Result, fresh_collection, fresh_snapshot,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind};
@@ -99,10 +97,6 @@ impl MusicChannel for MineralChannel {
                 ArtistSectionKind::Albums,
             ]))
             .build()
-    }
-
-    async fn search_songs(&self, _query: &str, _page: Page) -> Result<PageResult<Song>> {
-        Err(Error::NotSupported)
     }
 
     async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {

@@ -7,11 +7,11 @@
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use isahc::cookies::{Cookie, CookieJar};
-use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
-    MusicChannel, Page, PageResult, PlaylistDetail, Result,
+    ArtistSectionKind, ArtistSections, BatchStream, ChannelCaps, CollectionStream, Error,
+    FetchStream, MusicChannel, PlaylistDetail, Result, albums_with_cache, page_batches,
+    playlists_with_cache,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -158,58 +158,67 @@ impl MusicChannel for NeteaseChannel {
             .build()
     }
 
-    async fn search_songs(&self, query: &str, page: Page) -> Result<PageResult<Song>> {
-        let dto = api::search::search_songs(&self.transport, query, page.offset, page.limit)
-            .await
-            .map_err(map_err)?;
-        // 响应不带总数/总页数元信息,has_more 留 None(上层按「短页即榨干」推断)。
-        Ok(dto
-            .songs
-            .into_iter()
-            .map(convert::album_song_to_model)
-            .collect::<NeteaseResult<Vec<Song>>>()
-            .map_err(map_err)?
-            .into())
+    fn search_songs<'a>(&'a self, query: &'a str) -> BatchStream<'a, Song> {
+        page_batches(move |page| async move {
+            let dto = api::search::search_songs(&self.transport, query, page.offset, page.limit)
+                .await
+                .map_err(map_err)?;
+            // 响应不带翻页信号，由来源分页适配器按原始条数判断末页。
+            Ok(dto
+                .songs
+                .into_iter()
+                .map(convert::album_song_to_model)
+                .collect::<NeteaseResult<Vec<Song>>>()
+                .map_err(map_err)?
+                .into())
+        })
     }
 
-    async fn search_albums(&self, query: &str, page: Page) -> Result<PageResult<Album>> {
-        let dto = api::search::search_albums(&self.transport, query, page.offset, page.limit)
-            .await
-            .map_err(map_err)?;
-        // 搜索只有元信息,曲目按需走 album_detail(传空 songs)。
-        Ok(dto
-            .albums
-            .into_iter()
-            .map(|a| convert::album_dto_to_model(a, Vec::new()))
-            .collect::<NeteaseResult<Vec<Album>>>()
-            .map_err(map_err)?
-            .into())
+    fn search_albums<'a>(&'a self, query: &'a str) -> BatchStream<'a, Album> {
+        page_batches(move |page| async move {
+            let dto = api::search::search_albums(&self.transport, query, page.offset, page.limit)
+                .await
+                .map_err(map_err)?;
+            // 搜索只有元信息,曲目按需走 album_detail(传空 songs)。
+            Ok(dto
+                .albums
+                .into_iter()
+                .map(|a| convert::album_dto_to_model(a, Vec::new()))
+                .collect::<NeteaseResult<Vec<Album>>>()
+                .map_err(map_err)?
+                .into())
+        })
     }
 
-    async fn search_playlists(&self, query: &str, page: Page) -> Result<PageResult<Playlist>> {
-        let dto = api::search::search_playlists(&self.transport, query, page.offset, page.limit)
-            .await
-            .map_err(map_err)?;
-        Ok(dto
-            .playlists
-            .into_iter()
-            .map(convert::search_playlist_to_model)
-            .collect::<NeteaseResult<Vec<Playlist>>>()
-            .map_err(map_err)?
-            .into())
+    fn search_playlists<'a>(&'a self, query: &'a str) -> BatchStream<'a, Playlist> {
+        page_batches(move |page| async move {
+            let dto =
+                api::search::search_playlists(&self.transport, query, page.offset, page.limit)
+                    .await
+                    .map_err(map_err)?;
+            Ok(dto
+                .playlists
+                .into_iter()
+                .map(convert::search_playlist_to_model)
+                .collect::<NeteaseResult<Vec<Playlist>>>()
+                .map_err(map_err)?
+                .into())
+        })
     }
 
-    async fn search_artists(&self, query: &str, page: Page) -> Result<PageResult<Artist>> {
-        let dto = api::search::search_artists(&self.transport, query, page.offset, page.limit)
-            .await
-            .map_err(map_err)?;
-        Ok(dto
-            .artists
-            .into_iter()
-            .map(convert::search_artist_to_model)
-            .collect::<NeteaseResult<Vec<Artist>>>()
-            .map_err(map_err)?
-            .into())
+    fn search_artists<'a>(&'a self, query: &'a str) -> BatchStream<'a, Artist> {
+        page_batches(move |page| async move {
+            let dto = api::search::search_artists(&self.transport, query, page.offset, page.limit)
+                .await
+                .map_err(map_err)?;
+            Ok(dto
+                .artists
+                .into_iter()
+                .map(convert::search_artist_to_model)
+                .collect::<NeteaseResult<Vec<Artist>>>()
+                .map_err(map_err)?
+                .into())
+        })
     }
 
     /// artist 详情:并发取「详情(简介/计数/热门曲)」与「粉丝数」两端点,聚合成完整 [`Artist`]。
@@ -234,11 +243,13 @@ impl MusicChannel for NeteaseChannel {
         convert::artist_detail_to_model(detail, fans).map_err(map_err)
     }
 
-    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<PageResult<Album>> {
-        let dto = api::artist::albums(&self.transport, id, page.offset, page.limit)
-            .await
-            .map_err(map_err)?;
-        convert::artist_albums_to_model(dto).map_err(map_err)
+    fn artist_albums<'a>(&'a self, id: &'a ArtistId) -> BatchStream<'a, Album> {
+        page_batches(move |page| async move {
+            let dto = api::artist::albums(&self.transport, id, page.offset, page.limit)
+                .await
+                .map_err(map_err)?;
+            convert::artist_albums_to_model(dto).map_err(map_err)
+        })
     }
 
     async fn create_playlist(&self, name: &str) -> Result<Playlist> {

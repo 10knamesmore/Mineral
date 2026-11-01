@@ -25,9 +25,9 @@ fn command_family_maps_to_script_cmds() -> color_eyre::Result<()> {
         "#,
     )
     .exec()?;
-    assert_eq!(
-        drain_cmds(&mut cmd_rx),
-        vec![
+    assert!(matches!(
+        drain_cmds(&mut cmd_rx).as_slice(),
+        [
             ScriptCmd::Toggle,
             ScriptCmd::Next,
             ScriptCmd::Prev,
@@ -35,10 +35,11 @@ fn command_family_maps_to_script_cmds() -> color_eyre::Result<()> {
             ScriptCmd::SeekRel(-5.5),
             ScriptCmd::SeekTo(30.0),
             ScriptCmd::SetMode(PlayMode::RepeatAll),
-            ScriptCmd::Play(SongId::new(SourceKind::NETEASE, "42")),
-            ScriptCmd::Download(SongId::new(SourceKind::LOCAL, "abc")),
-        ]
-    );
+            ScriptCmd::Play(song),
+            ScriptCmd::Download(download),
+        ] if *song == SongId::new(SourceKind::NETEASE, "42")
+            && *download == SongId::new(SourceKind::LOCAL, "abc")
+    ));
     Ok(())
 }
 
@@ -54,13 +55,15 @@ fn volume_and_seek_clamp_out_of_range() -> color_eyre::Result<()> {
         "#,
     )
     .exec()?;
-    assert_eq!(
-        drain_cmds(&mut cmd_rx),
-        vec![
-            ScriptCmd::SetVolume(100),
-            ScriptCmd::SetVolume(0),
-            ScriptCmd::SeekTo(0.0),
-        ],
+    assert!(
+        matches!(
+            drain_cmds(&mut cmd_rx).as_slice(),
+            [
+                ScriptCmd::SetVolume(100),
+                ScriptCmd::SetVolume(0),
+                ScriptCmd::SeekTo(0.0),
+            ]
+        ),
         "音量与负 seek 越界 clamp,不报错"
     );
     Ok(())

@@ -1,7 +1,8 @@
 //! 单个 source 的搜索词编辑、在飞标记与按 kind 保存的分页结果。
 
-use mineral_channel_core::{ArtistSections, Page};
+use mineral_channel_core::ArtistSections;
 use mineral_model::SearchKind;
+use mineral_protocol::SubscriptionId;
 use mineral_task::SearchPayload;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -9,11 +10,26 @@ use crate::runtime::line_input::{InputRequest, LineInput};
 
 use super::KindResults;
 
+/// 搜索会话持有的订阅；编辑搜索词后仍保留身份，直到退订提交成功。
+pub(crate) struct SearchSubscription {
+    /// 当前连接中的订阅身份。
+    pub id: SubscriptionId,
+
+    /// 创建订阅时的搜索词。
+    pub query: String,
+
+    /// 结果已过期或读完，等待释放订阅。
+    pub release_requested: bool,
+}
+
 /// 单个 source 的搜索会话：当前 kind + 输入词（source 级共享）+ per-kind 结果桶。
 ///
 /// 切 source 切的是整个会话（各 source 独立、切回恢复）；`query` 改变作废本会话全部 kind 桶
 /// （旧词的结果整体过期），切 kind 只换当前桶、其余桶保留（同词切回不重搜）。
 pub struct SearchSession {
+    /// 每种搜索各自保留来源流，切换类型不重新请求已有结果。
+    pub(crate) subscriptions: FxHashMap<SearchKind, SearchSubscription>,
+
     /// 当前选中的 kind（kind chip 下拉切换；每 source 记住自己的选择）。
     pub kind: SearchKind,
 
@@ -29,9 +45,21 @@ pub struct SearchSession {
 }
 
 impl SearchSession {
+    pub(crate) fn subscribed(&mut self, kind: SearchKind, id: SubscriptionId, query: String) {
+        self.subscriptions.insert(
+            kind,
+            SearchSubscription {
+                id,
+                query,
+                release_requested: false,
+            },
+        );
+    }
+
     /// 新会话：给定默认 kind、空输入、无结果桶。
     pub(super) fn new(kind: SearchKind) -> Self {
         Self {
+            subscriptions: FxHashMap::default(),
             kind,
             input: LineInput::new(),
             by_kind: FxHashMap::default(),
@@ -135,39 +163,65 @@ impl SearchSession {
         mineral_log::debug!(target: "tui", results = self.by_kind.len(), pending = self.in_flight.len(), "invalidate search results and loading");
         self.by_kind.clear();
         self.in_flight.clear();
+        for subscription in self.subscriptions.values_mut() {
+            subscription.release_requested = true;
+        }
     }
 
-    /// 把一页结果落进 `by_kind[kind]`：首页新建桶，续页仅接收该桶待收取的页；返回是否接收。
+    /// 首批新建桶，后续仅追加该桶正在等待的批次；返回是否接收。
     ///
     /// # Params:
     ///   - `kind`: 事件自带的 kind（决定存哪个桶）
     ///   - `payload`: 结果载荷
-    ///   - `page`: 分页参数（`offset == 0` 为首页）
-    ///   - `has_more`: 源的显式翻页信号（`None` 回退短页推断）
+    ///   - `batch`: 本次搜索中从零开始的批次序号
+    ///   - `complete`: 来源是否已经读完
     pub fn apply_page(
         &mut self,
         kind: SearchKind,
         payload: SearchPayload,
-        page: Page,
-        has_more: Option<bool>,
+        batch: u64,
+        complete: bool,
     ) -> bool {
-        if page.offset == 0 {
+        if self
+            .subscriptions
+            .get(&kind)
+            .is_some_and(|subscription| subscription.release_requested)
+        {
+            return false;
+        }
+        let accepted = if batch == 0 {
             // 首页到货:清 loading（即便 0 条也算「搜完了」→ 渲染层转 no results）。
             self.in_flight.remove(&kind);
             self.by_kind
-                .insert(kind, KindResults::first_page(payload, page.limit, has_more));
+                .insert(kind, KindResults::first_page(payload, complete));
             true
         } else {
             self.by_kind
                 .get_mut(&kind)
-                .is_some_and(|bucket| bucket.append_page(payload, page, has_more))
+                .is_some_and(|bucket| bucket.append_page(payload, batch, complete))
+        };
+        if accepted
+            && complete
+            && let Some(subscription) = self.subscriptions.get_mut(&kind)
+        {
+            subscription.release_requested = true;
+        }
+        accepted
+    }
+
+    /// 发送成功后才进入等待结果状态。
+    pub(crate) fn batch_requested(&mut self, kind: SearchKind, batch: u64) {
+        if batch == 0 {
+            self.mark_in_flight(kind);
+        } else if let Some(bucket) = self.by_kind.get_mut(&kind) {
+            bucket.batch_requested(batch);
         }
     }
 
     /// 释放对应 kind 的失败续页；首页失败保留现有 loading 与手动重新提交行为。
-    pub(crate) fn fail_page(&mut self, kind: SearchKind, page: Page) {
+    pub(crate) fn fail_page(&mut self, kind: SearchKind, batch: u64) {
         if let Some(bucket) = self.by_kind.get_mut(&kind) {
-            bucket.fail_page(page);
+            bucket.fail_page(batch);
         }
     }
 
@@ -182,7 +236,6 @@ impl SearchSession {
 
 #[cfg(test)]
 mod tests {
-    use mineral_channel_core::Page;
     use mineral_model::SearchKind;
     use mineral_task::SearchPayload;
 
@@ -190,7 +243,7 @@ mod tests {
 
     use super::SearchSession;
 
-    /// 5 条歌曲一页（配 limit=5 即满页；endserenading 上限 10 条）。
+    /// 一批五首歌曲。
     fn full_page() -> SearchPayload {
         SearchPayload::Songs(endserenading(5))
     }
@@ -199,12 +252,7 @@ mod tests {
     #[test]
     fn query_change_drops_buckets() {
         let mut s = SearchSession::new(SearchKind::Song);
-        s.apply_page(
-            SearchKind::Song,
-            full_page(),
-            Page::default(),
-            /*has_more*/ None,
-        );
+        s.apply_page(SearchKind::Song, full_page(), 0, false);
         assert!(s.kind_results().is_some(), "搜后有桶");
         s.push_query_char('x');
         assert!(s.kind_results().is_none(), "改 query 作废桶");

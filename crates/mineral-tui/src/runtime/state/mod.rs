@@ -13,7 +13,6 @@ mod list_expansion;
 mod lyric;
 mod nav;
 mod overlay_reveal;
-mod pagination;
 mod player;
 mod playlist_tracks;
 mod search;
@@ -27,7 +26,7 @@ mod view_switch;
 
 pub use application_state::AppState;
 pub(crate) use application_state::spectrum_params;
-pub(crate) use artist_albums::ArtistAlbums;
+pub(crate) use artist_albums::{ArtistAlbumListing, ArtistAlbums};
 pub use browse::BrowsePage;
 pub(crate) use browse::{BrowseModel, LibraryQueueProjection};
 pub use channel_search::{PromptSegment, SearchFocus, SearchPage, SearchSession};

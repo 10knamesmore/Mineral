@@ -52,19 +52,19 @@ impl PlayerCore {
                     source,
                     kind,
                     query,
-                    page,
+                    batch,
                     payload,
-                    has_more,
+                    complete,
                 } => {
-                    // source/kind/page 是 Copy,记录后原样转发给 client。
-                    self.record_search_result(source, kind, &query, page, &payload);
+                    // 记录搜索批次后原样转发给 client。
+                    self.record_search_result(source, kind, &query, batch, &payload);
                     forward.push(TaskEvent::SearchResults {
                         source,
                         kind,
                         query,
-                        page,
+                        batch,
                         payload,
-                        has_more,
+                        complete,
                     });
                 }
                 // 纯埋点信号:记 fetches 后**不转发**(client 不消费)。
@@ -205,14 +205,14 @@ impl PlayerCore {
     ///   - `source`: 搜索来源
     ///   - `kind`: 搜索实体类型
     ///   - `query`: 搜索词原文(记录侧据 search_queries 档决定原文 / 散列 / 不记)
-    ///   - `page`: 分页参数(页码 = offset / limit)
+    ///   - `batch`: 当前搜索中从零开始的批次序号
     ///   - `payload`: 结果载荷(取条数)
     pub(crate) fn record_search_result(
         &self,
         source: mineral_model::SourceKind,
         kind: mineral_model::SearchKind,
         query: &str,
-        page: mineral_channel_core::Page,
+        batch: u64,
         payload: &mineral_task::SearchPayload,
     ) {
         use mineral_model::SearchKind;
@@ -230,7 +230,7 @@ impl PlayerCore {
             SearchPayload::Playlists(v) => v.len(),
             SearchPayload::Artists(v) => v.len(),
         };
-        let page_no = i64::from(page.offset.checked_div(page.limit).unwrap_or(0));
+        let page_no = i64::try_from(batch).unwrap_or(i64::MAX);
         self.inner.stats.record_search(
             mineral_stats::Actor::User,
             query,

@@ -5,10 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mineral_channel_core::collection::fresh_collection;
-use mineral_channel_core::{ChannelCaps, CollectionStream, Error, MusicChannel, Page, PageResult};
+use mineral_channel_core::{ChannelCaps, CollectionStream, Error, MusicChannel, fresh_collection};
 use mineral_model::CachePolicy;
-use mineral_model::{Album, Artist, Lyrics, PlaybackMediaInfo, Playlist, Song, SongId, SourceKind};
+use mineral_model::{Artist, Lyrics, PlaybackMediaInfo, Playlist, Song, SongId, SourceKind};
 use mineral_playback::{
     DirectMedia, MediaReader, OpenOptions, OpenedMedia, PlaybackProvider, PlaybackRegistry,
     PlaybackRequest, PreparedPlayback,
@@ -177,30 +176,6 @@ impl MusicChannel for RecordingChannel {
                 mineral_channel_core::ArtistSectionKind::Albums,
             ]))
             .build()
-    }
-
-    async fn search_songs(
-        &self,
-        _query: &str,
-        _page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_albums(
-        &self,
-        _query: &str,
-        _page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Album>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_playlists(
-        &self,
-        _query: &str,
-        _page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
-        Err(Error::NotSupported)
     }
 
     async fn songs_detail(

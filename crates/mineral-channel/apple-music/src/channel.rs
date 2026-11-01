@@ -3,11 +3,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, FetchStream, MusicChannel,
-    Page, PageResult, PlaylistDetail,
+    ArtistSectionKind, ArtistSections, BatchStream, ChannelCaps, CollectionStream, FetchStream,
+    MusicChannel, PlaylistDetail, albums_with_cache, playlists_with_cache,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -72,36 +71,20 @@ impl MusicChannel for AppleMusicChannel {
             .build()
     }
 
-    async fn search_songs(
-        &self,
-        query: &str,
-        page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Song>> {
-        Ok(self.metadata.search_songs(query, page).await?)
+    fn search_songs<'a>(&'a self, query: &'a str) -> BatchStream<'a, Song> {
+        self.metadata.search_songs(query)
     }
 
-    async fn search_albums(
-        &self,
-        query: &str,
-        page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Album>> {
-        Ok(self.metadata.search_albums(query, page).await?)
+    fn search_albums<'a>(&'a self, query: &'a str) -> BatchStream<'a, Album> {
+        self.metadata.search_albums(query)
     }
 
-    async fn search_artists(
-        &self,
-        query: &str,
-        page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Artist>> {
-        Ok(self.metadata.search_artists(query, page).await?)
+    fn search_artists<'a>(&'a self, query: &'a str) -> BatchStream<'a, Artist> {
+        self.metadata.search_artists(query)
     }
 
-    async fn search_playlists(
-        &self,
-        query: &str,
-        page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
-        Ok(self.metadata.search_playlists(query, page).await?)
+    fn search_playlists<'a>(&'a self, query: &'a str) -> BatchStream<'a, Playlist> {
+        self.metadata.search_playlists(query)
     }
 
     async fn songs_detail(
@@ -144,12 +127,8 @@ impl MusicChannel for AppleMusicChannel {
         Ok(self.metadata.artist_detail(id).await?)
     }
 
-    async fn artist_albums(
-        &self,
-        id: &ArtistId,
-        page: Page,
-    ) -> mineral_channel_core::Result<PageResult<Album>> {
-        Ok(self.metadata.artist_albums(id, page).await?)
+    fn artist_albums<'a>(&'a self, id: &'a ArtistId) -> BatchStream<'a, Album> {
+        self.metadata.artist_albums(id)
     }
 }
 

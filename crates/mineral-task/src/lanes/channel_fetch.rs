@@ -5,14 +5,14 @@ use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Instant;
 
-use async_stream::try_stream;
+use async_stream::{stream, try_stream};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use mineral_channel_core::store::{LibraryStore, NamespaceStore};
 use mineral_channel_core::{
-    Error, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail, Result,
+    BatchStream, Error, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail, Result,
 };
-use mineral_model::{CachePolicy, PlaylistId, SearchKind, SourceKind};
+use mineral_model::{Album, ArtistId, CachePolicy, PlaylistId, SearchKind, SourceKind};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use thiserror::Error as ThisError;
@@ -20,12 +20,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::collection_read::CollectionReader;
-use crate::event::{SearchPayload, TaskEvent};
+use crate::event::TaskEvent;
 use crate::id::{Priority, TaskId};
 use crate::kind::{ChannelFetchKind, ChannelFetchKindTag};
 use crate::ongoing::Ongoing;
 use crate::outcome::TaskOutcome;
 use crate::read_cache::ReadCache;
+use crate::search::{SearchStream, read_search};
 
 /// The source execution queue is unavailable or has stopped.
 #[derive(Debug, ThisError)]
@@ -88,6 +89,24 @@ pub(crate) struct ChannelFetchLane {
 }
 
 impl ChannelFetchLane {
+    /// 生成器持有艺人身份和来源，跨批次保留来源游标。
+    pub fn artist_albums(&self, id: ArtistId) -> BatchStream<'static, Album> {
+        let channel = self
+            .senders
+            .get(&id.namespace())
+            .map(|senders| Arc::clone(&senders.channel));
+        Box::pin(stream! {
+            let Some(channel) = channel else {
+                yield Err(Error::NotSupported);
+                return;
+            };
+            let mut batches = channel.artist_albums(&id);
+            while let Some(batch) = batches.next().await {
+                yield batch;
+            }
+        })
+    }
+
     /// 启动 lane:为每个 channel spawn 一组 worker,各 worker 共享 user/background 队列。
     ///
     /// # Params:
@@ -192,6 +211,29 @@ impl ChannelFetchLane {
             let mut snapshots = reader.playlist(channel.as_ref(), &id, cache);
             while let Some(snapshot) = snapshots.next().await {
                 yield snapshot?;
+            }
+        })
+    }
+
+    /// 查询和来源由生成器拥有，暂停时不占用 worker。
+    pub fn search(
+        &self,
+        source: SourceKind,
+        kind: SearchKind,
+        query: String,
+    ) -> SearchStream<'static> {
+        let channel = self
+            .senders
+            .get(&source)
+            .map(|senders| Arc::clone(&senders.channel));
+        Box::pin(stream! {
+            let Some(channel) = channel else {
+                yield Err(Error::NotSupported);
+                return;
+            };
+            let mut batches = read_search(channel.as_ref(), kind, &query);
+            while let Some(batch) = batches.next().await {
+                yield batch;
             }
         })
     }
@@ -342,20 +384,19 @@ async fn run_job(
                 source,
                 kind,
                 query,
-                page,
             } => published.push(TaskEvent::SearchPageFailed {
                 source: *source,
                 kind: *kind,
                 query: query.clone(),
-                page: *page,
+                batch: 0,
             }),
             ChannelFetchKind::AlbumDetail { id } if outcome == TaskOutcome::Failed => {
                 published.push(TaskEvent::AlbumDetailFailed { id: id.clone() });
             }
-            ChannelFetchKind::ArtistAlbums { id, page } => {
+            ChannelFetchKind::ArtistAlbums { id } => {
                 published.push(TaskEvent::ArtistAlbumsPageFailed {
                     id: id.clone(),
-                    page: *page,
+                    batch: 0,
                 });
             }
             _ => {}
@@ -440,34 +481,16 @@ fn execute<'a>(
                 source,
                 kind,
                 query,
-                page,
             } => {
-                let (payload, has_more) = match kind {
-                    SearchKind::Song => {
-                        let hits = channel.search_songs(query, *page).await?;
-                        (SearchPayload::Songs(hits.items), hits.has_more)
-                    }
-                    SearchKind::Album => {
-                        let hits = channel.search_albums(query, *page).await?;
-                        (SearchPayload::Albums(hits.items), hits.has_more)
-                    }
-                    SearchKind::Playlist => {
-                        let hits = channel.search_playlists(query, *page).await?;
-                        (SearchPayload::Playlists(hits.items), hits.has_more)
-                    }
-                    SearchKind::Artist => {
-                        let hits = channel.search_artists(query, *page).await?;
-                        (SearchPayload::Artists(hits.items), hits.has_more)
-                    }
-                    SearchKind::User => Err(Error::NotSupported)?,
-                };
+                let result = read_search(channel, *kind, query).next().await
+                    .ok_or(Error::InvalidData { field: "search stream ended before complete" })??;
                 yield TaskEvent::SearchResults {
                     source: *source,
                     kind: *kind,
                     query: query.clone(),
-                    page: *page,
-                    payload,
-                    has_more,
+                    batch: 0,
+                    payload: result.payload,
+                    complete: result.complete,
                 };
             }
             ChannelFetchKind::ArtistDetail { id } => {
@@ -477,22 +500,14 @@ fn execute<'a>(
                     artist: Box::new(artist),
                 };
             }
-            ChannelFetchKind::ArtistAlbums { id, page } => {
-                let result = channel.artist_albums(id, *page).await?;
-                mineral_log::debug!(
-                    target: "channel_fetch",
-                    source = ?id.namespace(),
-                    artist_id = id.as_str(),
-                    ?page,
-                    albums = result.items.len(),
-                    has_more = ?result.has_more,
-                    "artist albums page fetched"
-                );
+            ChannelFetchKind::ArtistAlbums { id } => {
+                let result = channel.artist_albums(id).next().await
+                    .ok_or(Error::InvalidData { field: "artist albums stream ended before complete" })??;
                 yield TaskEvent::ArtistAlbumsFetched {
                     id: id.clone(),
-                    page: *page,
+                    batch: 0,
                     albums: result.items,
-                    has_more: result.has_more,
+                    complete: result.complete,
                 };
             }
             ChannelFetchKind::AlbumDetail { id } => {

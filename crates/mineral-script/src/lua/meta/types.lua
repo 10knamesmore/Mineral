@@ -55,6 +55,20 @@ mineral = {}
 ---@field source string 来源名
 ---@field url string|nil 网页分享链接
 
+---@class mineral.SearchBatch
+---@field items mineral.Song[] 本批歌曲
+---@field complete boolean 所有参与来源已经结束
+
+---@class mineral.Search
+local Search = {}
+
+--- 沿用当前搜索进度读取下一批。每次回调执行一次；失败时收到 nil 和错误。
+---@param on_batch fun(batch: mineral.SearchBatch|nil, err: string|nil): nil
+function Search:next(on_batch) end
+
+--- 取消当前读取并释放来源流；句柄回收和 VM 退出也会释放。
+function Search:close() end
+
 --- 歌单条目;数组顺序与来源位置是两件事。
 ---@class mineral.PlaylistEntry
 ---@field index integer 来源歌单中的 0-based 位置,可不连续

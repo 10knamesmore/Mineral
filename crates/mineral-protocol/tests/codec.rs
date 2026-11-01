@@ -378,7 +378,6 @@ async fn round_trip_search_write_queue_caps() -> color_eyre::Result<()> {
             source: SourceKind::NETEASE,
             kind: mineral_model::SearchKind::Artist,
             query: String::from("海阔天空"),
-            page: mineral_channel_core::Page::new(30, 30),
         }),
         Priority::User,
     ))

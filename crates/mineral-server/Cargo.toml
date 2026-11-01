@@ -13,6 +13,7 @@ mineral-common = { workspace = true }
 sea-orm = { workspace = true }
 sea-orm-migration = { workspace = true }
 async-trait = { workspace = true }
+async-stream = { workspace = true }
 mineral-audio        = { workspace = true }
 mineral-channel-core = { workspace = true }
 mineral-config       = { workspace = true }

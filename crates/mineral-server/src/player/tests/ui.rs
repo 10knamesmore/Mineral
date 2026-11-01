@@ -592,7 +592,6 @@ async fn playlist_op_records_to_stats_db() -> color_eyre::Result<()> {
 /// record_search_result:Song 搜索记一条 searches;User 搜索(埋点不覆盖)被跳过。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn search_result_records_songs_skips_user_kind() -> color_eyre::Result<()> {
-    use mineral_channel_core::Page;
     use mineral_model::SearchKind;
     use mineral_task::SearchPayload;
     let dir = tempfile::tempdir()?;
@@ -613,12 +612,12 @@ async fn search_result_records_songs_skips_user_kind() -> color_eyre::Result<()>
         /*script*/ None,
         recorder,
     )?;
-    let page = Page::new(/*offset*/ 30, /*limit*/ 30); // 页码 1
+    let batch = 1;
     core.record_search_result(
         SourceKind::NETEASE,
         SearchKind::Song,
         "test",
-        page,
+        batch,
         &SearchPayload::Songs(vec![song("a"), song("b")]),
     );
     // 用户搜索:埋点不覆盖,应被跳过(不落库)。
@@ -626,7 +625,7 @@ async fn search_result_records_songs_skips_user_kind() -> color_eyre::Result<()>
         SourceKind::NETEASE,
         SearchKind::User,
         "someone",
-        page,
+        batch,
         &SearchPayload::Artists(Vec::new()),
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

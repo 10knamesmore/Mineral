@@ -7,12 +7,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mineral_channel_core::collection::{fresh_collection, playlists_with_cache};
-use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
-    MusicChannel, Page, PageResult, PlaylistDetail, Result,
+    ArtistSectionKind, ArtistSections, BatchStream, ChannelCaps, CollectionStream, Error,
+    FetchStream, MusicChannel, Page, PlaylistDetail, Result, fresh_collection, fresh_snapshot,
+    page_batches, playlists_with_cache,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -173,16 +172,20 @@ impl MusicChannel for BilibiliChannel {
             .build()
     }
 
-    async fn search_albums(&self, query: &str, page: Page) -> Result<PageResult<Album>> {
-        api::search::search_albums(&self.transport, query, page_number(page), page.limit)
-            .await
-            .map_err(map_err)
+    fn search_albums<'a>(&'a self, query: &'a str) -> BatchStream<'a, Album> {
+        page_batches(move |page| async move {
+            api::search::search_albums(&self.transport, query, page_number(page), page.limit)
+                .await
+                .map_err(map_err)
+        })
     }
 
-    async fn search_artists(&self, query: &str, page: Page) -> Result<PageResult<Artist>> {
-        api::search::search_artists(&self.transport, query, page_number(page), page.limit)
-            .await
-            .map_err(map_err)
+    fn search_artists<'a>(&'a self, query: &'a str) -> BatchStream<'a, Artist> {
+        page_batches(move |page| async move {
+            api::search::search_artists(&self.transport, query, page_number(page), page.limit)
+                .await
+                .map_err(map_err)
+        })
     }
 
     async fn songs_detail(&self, ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
@@ -229,18 +232,20 @@ impl MusicChannel for BilibiliChannel {
         convert::card_to_artist(id.clone(), card).map_err(map_err)
     }
 
-    async fn artist_albums(&self, id: &ArtistId, page: Page) -> Result<PageResult<Album>> {
+    fn artist_albums<'a>(&'a self, id: &'a ArtistId) -> BatchStream<'a, Album> {
         // UP 主投稿,每 BV 一张专辑(元信息版,P 数/曲目详情走 album_detail)。
-        let result = api::space::arc_videos(
-            &self.transport,
-            id.as_str(),
-            api::space::ArcOrder::Pubdate,
-            page_number(page),
-            page.limit,
-        )
-        .await
-        .map_err(map_err)?;
-        convert::arc_videos_to_albums(result, page).map_err(map_err)
+        page_batches(move |page| async move {
+            let result = api::space::arc_videos(
+                &self.transport,
+                id.as_str(),
+                api::space::ArcOrder::Pubdate,
+                page_number(page),
+                page.limit,
+            )
+            .await
+            .map_err(map_err)?;
+            convert::arc_videos_to_albums(result, page).map_err(map_err)
+        })
     }
 
     fn playlist_detail<'a>(

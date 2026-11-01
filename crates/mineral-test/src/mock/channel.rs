@@ -4,15 +4,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use async_trait::async_trait;
-use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
-    ArtistSectionKind, ArtistSections, ChannelCaps, Error, FetchStream, MusicChannel, Page,
-    PageResult, Result as ChannelResult,
+    ArtistSectionKind, ArtistSections, ChannelCaps, Error, FetchStream, MusicChannel,
+    Result as ChannelResult, fresh_snapshot,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
-    Album, AlbumId, Artist, ArtistId, AudioFormat, Lyrics, PlaybackMediaInfo, Playlist, Song,
-    SongId, SourceKind,
+    Album, AlbumId, Artist, ArtistId, AudioFormat, Lyrics, PlaybackMediaInfo, Song, SongId,
+    SourceKind,
 };
 use mineral_playback::{
     DirectMedia, DirectPreparedPlayback, PlaybackProvider, PlaybackRequest, PreparedPlayback,
@@ -40,18 +39,6 @@ impl MusicChannel for UrlChannel {
                 ArtistSectionKind::Albums,
             ]))
             .build()
-    }
-
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Album>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Playlist>> {
-        Err(Error::NotSupported)
     }
 
     async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> ChannelResult<Vec<Song>> {
@@ -182,18 +169,6 @@ impl MusicChannel for CannedChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Song>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_albums(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Album>> {
-        Err(Error::NotSupported)
-    }
-
-    async fn search_playlists(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Playlist>> {
-        Err(Error::NotSupported)
-    }
-
     async fn songs_detail(&self, ids: &[SongId], _cache: CachePolicy) -> ChannelResult<Vec<Song>> {
         Ok(self
             .detail_songs
@@ -237,10 +212,6 @@ impl MusicChannel for DetailChannel {
                 ArtistSectionKind::Albums,
             ]))
             .build()
-    }
-
-    async fn search_songs(&self, _q: &str, _p: Page) -> ChannelResult<PageResult<Song>> {
-        Err(Error::NotSupported)
     }
 
     async fn songs_detail(&self, ids: &[SongId], _cache: CachePolicy) -> ChannelResult<Vec<Song>> {

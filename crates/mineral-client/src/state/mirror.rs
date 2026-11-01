@@ -280,6 +280,15 @@ struct SubscriptionState {
     last_version: Option<Revision>,
 }
 
+/// 保留事件归属，退订时一并移除尚未消费的旧订阅结果。
+struct BufferedEvent {
+    /// 本地查询回执没有订阅身份。
+    subscription: Option<SubscriptionId>,
+
+    /// 原有业务事件。
+    event: Event,
+}
+
 /// 镜像内部可变状态。
 struct MirrorState {
     /// 播放镜像。
@@ -301,7 +310,7 @@ struct MirrorState {
     service_info: Option<mineral_protocol::ServiceInfo>,
 
     /// 待消费事件。
-    events: VecDeque<Event>,
+    events: VecDeque<BufferedEvent>,
 
     /// 因容量丢弃的事件数。
     events_dropped: u64,
@@ -423,15 +432,18 @@ impl Mirror {
     #[must_use]
     pub fn drain_events(&self) -> Vec<Event> {
         let mut state = self.state.write();
-        state.events.drain(..).collect()
+        state
+            .events
+            .drain(..)
+            .map(|buffered| buffered.event)
+            .collect()
     }
 
     /// Discard pre-acknowledgement collection results before submitting replacement reads.
     pub fn discard_collection_events(&self, scope: &RefreshScope) {
-        self.state
-            .write()
-            .events
-            .retain(|event| !matches!(event, Event::Task(task) if task.affected_by(scope)));
+        self.state.write().events.retain(
+            |buffered| !matches!(&buffered.event, Event::Task(task) if task.affected_by(scope)),
+        );
     }
 
     /// 取走 PCM 近期窗口；断续标记须另行调用 [`Self::take_pcm_discontinuity`] 消费。
@@ -500,6 +512,9 @@ impl Mirror {
     ///   - `id`: 订阅 id
     pub(crate) fn unregister_subscription(&self, id: SubscriptionId) {
         let mut state = self.state.write();
+        state
+            .events
+            .retain(|buffered| buffered.subscription != Some(id));
         if state
             .subscriptions
             .remove(&id)
@@ -602,7 +617,10 @@ impl Mirror {
                 if let Event::ServiceInfoChanged { info } = event.as_ref() {
                     state.service_info = Some(info.clone());
                 }
-                state.events.push_back(*event);
+                state.events.push_back(BufferedEvent {
+                    subscription: Some(id),
+                    event: *event,
+                });
                 while state.events.len() > self.event_capacity {
                     state.events.pop_front();
                     state.events_dropped = state.events_dropped.saturating_add(1);
@@ -619,7 +637,10 @@ impl Mirror {
     ///   - `event`: 事件
     pub(crate) fn push_event(&self, event: Event) {
         let mut state = self.state.write();
-        state.events.push_back(event);
+        state.events.push_back(BufferedEvent {
+            subscription: None,
+            event,
+        });
         while state.events.len() > self.event_capacity {
             state.events.pop_front();
             state.events_dropped = state.events_dropped.saturating_add(1);

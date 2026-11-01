@@ -1,11 +1,9 @@
 //! Narrow local channel surface: songs, playlists, lyrics and playback only.
 
 use async_trait::async_trait;
-use mineral_channel_core::collection::fresh_collection;
-use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
     ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream, MusicChannel,
-    PlaylistDetail, Result,
+    PlaylistDetail, Result, fresh_collection, fresh_snapshot,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{

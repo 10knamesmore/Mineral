@@ -4,9 +4,10 @@
 
 use mineral_model::{BitRate, PlaylistEntry, Song, SongId};
 use mineral_protocol::PlayMode;
+use tokio::sync::{mpsc, oneshot};
 
 /// 脚本发往 daemon 的音乐命令与 session 配置覆盖。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ScriptCmd {
     /// 播放 / 暂停切换。
     Toggle,
@@ -89,7 +90,7 @@ pub enum ScriptCmd {
         query: QueryId,
     },
 
-    /// 按关键词搜索歌曲;结果以 [`ResolveValue::Songs`] 回投 `query`。
+    /// 创建歌曲搜索流；每次推进通过已有查询回执返回一批结果。
     LibrarySearch {
         /// 搜索关键词。
         term: String,
@@ -97,14 +98,11 @@ pub enum ScriptCmd {
         /// 限定来源；`None` 跨全部来源聚合，单个 channel 失败跳过。
         source: Option<mineral_model::SourceKind>,
 
-        /// 起始偏移(从 0 起)。
-        offset: u32,
+        /// 每次 next 登记的一次性查询回执。
+        requests: mpsc::UnboundedReceiver<QueryId>,
 
-        /// 单页返回上限。
-        limit: u32,
-
-        /// 结果回投句柄。
-        query: QueryId,
+        /// 句柄关闭、回收或 VM 释放时结束当前读取。
+        closed: oneshot::Receiver<()>,
     },
 
     /// 解析歌曲的 direct media；没有直链时回投查询错误。
@@ -152,8 +150,17 @@ pub enum ResolveValue {
     /// per-song 持久值(`store.get`)。
     Store(mineral_protocol::StoreValue),
 
-    /// 无 collection membership 的歌曲列表(`queue.list` / `library.search`)。
+    /// 无 collection membership 的歌曲列表(`queue.list`)。
     Songs(Vec<Song>),
+
+    /// 搜索流的一批歌曲，供 Lua next 的回调消费。
+    SearchBatch {
+        /// 本批歌曲；跨源搜索按来源注册顺序合并各源的一批。
+        items: Vec<Song>,
+
+        /// 所有参与来源都已结束。
+        complete: bool,
+    },
 
     /// 歌单 membership 列表，每项保留 0-based canonical index。
     PlaylistEntries(Vec<PlaylistEntry>),

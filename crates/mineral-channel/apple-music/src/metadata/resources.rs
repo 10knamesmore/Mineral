@@ -1,6 +1,6 @@
 //! Executes explicit metadata operations and batches missing catalog relationships.
 
-use mineral_channel_core::{Page, PageResult};
+use mineral_channel_core::Page;
 use rustc_hash::FxHashMap;
 use serde::de::DeserializeOwned;
 
@@ -27,38 +27,26 @@ impl MetadataClient {
             .ok_or(Error::Http { status: 404 })
     }
 
-    /// Apple's search cap is 25; follow page boundaries until the requested prefix is filled.
+    /// 请求一份来源搜索页；下一次请求直接使用返回的 continuation。
     pub(super) async fn search_resources<T: MetadataResource>(
         &self,
         query: &str,
-        page: Page,
-    ) -> Result<PageResult<T>> {
-        let mut next = Some(PageCursor::First);
-        let mut resources = Vec::new();
-        while u32::try_from(resources.len())? < page.limit {
-            let Some(cursor) = next.take() else {
-                break;
-            };
-            let request = match &cursor {
-                PageCursor::Next(continuation) => Request::Next {
-                    continuation,
-                    kind: PageKind::Search(T::KIND),
-                    limit: Some((page.limit - u32::try_from(resources.len())?).min(25)),
-                },
-                PageCursor::First => Request::Search {
-                    kind: T::KIND,
-                    query,
-                    page,
-                },
-            };
-            let mut response: SearchResponse = self.fetch(request).await?;
-            let Some(result) = response.take::<T>()? else {
-                break;
-            };
-            resources.extend(result.data);
-            next = result.next.map(PageCursor::Next);
-        }
-        Ok(PageResult::new(resources, next.is_some()))
+        cursor: &PageCursor,
+    ) -> Result<Option<ResourcePage<T>>> {
+        let request = match cursor {
+            PageCursor::Next(continuation) => Request::Next {
+                continuation,
+                kind: PageKind::Search(T::KIND),
+                limit: None,
+            },
+            PageCursor::First => Request::Search {
+                kind: T::KIND,
+                query,
+                page: Page::default(),
+            },
+        };
+        let mut response: SearchResponse = self.fetch(request).await?;
+        response.take::<T>()
     }
 
     /// Enrich catalog recordings without replacing library membership or reordering duplicates.

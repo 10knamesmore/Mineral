@@ -1,84 +1,76 @@
-//! 累积艺人专辑列表，并跟踪该列表的续页请求与加载状态。
+//! 同一艺人的专辑数据与读取状态共享，详情帧只保留展示快照。
 
-use mineral_channel_core::Page;
 use mineral_model::Album;
+use mineral_protocol::SubscriptionId;
 
-use super::pagination::ListPagination;
+/// LibraryData 持有订阅；所有保留的艺人详情帧共享其读取进度。
+#[derive(Default)]
+pub(crate) struct ArtistAlbumListing {
+    /// 成功建立的订阅，退订入队后才清除。
+    pub subscription: Option<SubscriptionId>,
 
-/// 保存详情帧已收到首页的艺人专辑列表；空列表表示已收取页没有可展示专辑，
-/// 是否结束由分页信号决定。
-///
-/// 详情帧在首页到货时构造，后续只追加已请求的页；随帧保留或销毁，动画副本可克隆。
+    /// 已加载数据和正在等待的批次。
+    pub albums: ArtistAlbums,
+}
+
+/// 艺人专辑的累计内容与批次进度；克隆到详情帧时不转移订阅所有权。
 #[derive(Clone, PartialEq)]
 pub(crate) struct ArtistAlbums {
-    /// 已接受的各页专辑，按回包顺序累积。
+    /// 已接受的专辑，保持来源顺序。
     albums: Vec<Album>,
 
-    /// 首页确定的分页进度与尚未消费回包的续页请求。
-    pagination: ListPagination,
+    /// 下一批序号；None 表示来源已读完。
+    next_batch: Option<u64>,
+
+    /// 已成功提交、尚未收取的批次。
+    pending_batch: Option<u64>,
+}
+
+impl Default for ArtistAlbums {
+    fn default() -> Self {
+        Self {
+            albums: Vec::new(),
+            next_batch: Some(0),
+            pending_batch: None,
+        }
+    }
 }
 
 impl ArtistAlbums {
-    /// 用已收到的首页创建列表与后续分页进度。
-    ///
-    /// # Params:
-    ///   - `albums`: 首页实际返回的专辑。
-    ///   - `page`: 首页请求的分页参数，后续 offset 按其 limit 推进。
-    ///   - `has_more`: 来源的显式翻页信号；`None` 时按短页推断是否收齐。
-    pub(crate) fn first_page(albums: Vec<Album>, page: Page, has_more: Option<bool>) -> Self {
-        Self {
-            pagination: ListPagination::first_page(albums.len(), page, has_more),
-            albums,
-        }
-    }
-
-    /// 已接受的所有专辑，保持列表展示顺序。
     pub(crate) fn items(&self) -> &[Album] {
         &self.albums
     }
 
-    /// 登记下一页请求；正在等待回包或已收齐时返回 `None`。
-    pub(crate) fn request_next_page(&mut self) -> Option<Page> {
-        self.pagination.request_next_page()
+    pub(crate) fn next_batch(&self) -> Option<u64> {
+        self.next_batch.filter(|_| self.pending_batch.is_none())
     }
 
-    /// 追加已请求且符合预期进度的续页；拒绝重复、超前或未请求的页。
-    ///
-    /// # Params:
-    ///   - `albums`: 本页实际返回的专辑。
-    ///   - `page`: 回包对应的分页参数。
-    ///   - `has_more`: 来源的显式翻页信号；`None` 时按短页推断是否收齐。
-    ///
-    /// # Return:
-    ///   接受并追加返回 `true`；拒绝时返回 `false`，列表与分页进度不变。
-    pub(crate) fn append_page(
-        &mut self,
-        albums: Vec<Album>,
-        page: Page,
-        has_more: Option<bool>,
-    ) -> bool {
-        if !self.pagination.accept_page(albums.len(), page, has_more) {
+    pub(crate) fn batch_requested(&mut self, batch: u64) {
+        self.pending_batch = Some(batch);
+    }
+
+    /// 首批建立内容；续批只接受已请求且与当前进度一致的回包。
+    pub(crate) fn accept_batch(&mut self, albums: Vec<Album>, batch: u64, complete: bool) -> bool {
+        if self.next_batch != Some(batch) || (batch != 0 && self.pending_batch != Some(batch)) {
             return false;
         }
         self.albums.extend(albums);
+        self.pending_batch = None;
+        self.next_batch = (!complete).then_some(batch + 1);
         true
     }
 
-    /// 释放匹配的失败续页，保留列表与分页进度以便重试。
-    ///
-    /// # Params:
-    ///   - `page`: 失败或取消任务携带的分页参数；不匹配待收取请求时忽略。
-    pub(crate) fn fail_page(&mut self, page: Page) {
-        self.pagination.fail_page(page);
+    pub(crate) fn fail_batch(&mut self, batch: u64) {
+        if self.pending_batch == Some(batch) {
+            self.pending_batch = None;
+        }
     }
 
-    /// 是否尚未收齐专辑；加载状态不影响此判断。
     pub(crate) fn has_more(&self) -> bool {
-        !self.pagination.exhausted()
+        self.next_batch.is_some()
     }
 
-    /// 是否已登记续页请求且尚未消费成功或失败回包。
     pub(crate) fn is_loading(&self) -> bool {
-        self.pagination.is_loading()
+        self.pending_batch.is_some()
     }
 }

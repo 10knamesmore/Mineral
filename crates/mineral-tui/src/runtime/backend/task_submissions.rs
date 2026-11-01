@@ -104,7 +104,6 @@ impl TaskSubmissions {
 #[cfg(test)]
 mod tests {
     use super::TaskSubmissions;
-    use mineral_channel_core::Page;
     use mineral_client::operation::SubmitError;
     use mineral_model::{AlbumId, ArtistId, PlaylistId, SearchKind, SourceKind};
     use mineral_task::{ChannelFetchKind, Priority, TaskKind};
@@ -126,7 +125,6 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind: SearchKind::Song,
                 query: id,
-                page: Page::default(),
             },
         })
     }

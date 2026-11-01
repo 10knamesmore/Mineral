@@ -96,12 +96,11 @@ function mineral.library.playlists(on_playlists) end
 ---@param on_entries fun(entries: mineral.PlaylistEntry[]|nil, err: string|nil): nil
 function mineral.library.tracks(playlist_id, on_entries) end
 
---- 异步搜索。source 省略时跨源聚合,单源失败跳过;指定无效来源则失败。
+--- 创建按需搜索。source 省略时每次合并各来源的一批,单源失败跳过。
 ---@param query string
----@param opts? { source?: string, offset?: integer, limit?: integer } offset 默认 0,limit 默认 30
----@param on_songs fun(songs: mineral.Song[]|nil, err: string|nil): nil
----@overload fun(query: string, on_songs: fun(songs: mineral.Song[]|nil, err: string|nil): nil): nil
-function mineral.library.search(query, opts, on_songs) end
+---@param opts? { source?: string }
+---@return mineral.Search
+function mineral.library.search(query, opts) end
 
 --- 由歌曲来源的 playback provider 解析资源,失败为 nil + 错误串。
 ---@param song_id string namespace:value

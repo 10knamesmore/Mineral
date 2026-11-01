@@ -30,6 +30,16 @@ pub(super) fn resolve_query(
                 }
                 (mlua::Value::Table(list), mlua::Value::Nil)
             }
+            ResolveValue::SearchBatch { items, complete } => {
+                let list = lua.create_table()?;
+                for (index, song) in items.iter().enumerate() {
+                    list.set(index + 1, song_table(lua, song)?)?;
+                }
+                let batch = lua.create_table()?;
+                batch.set("items", list)?;
+                batch.set("complete", *complete)?;
+                (mlua::Value::Table(batch), mlua::Value::Nil)
+            }
             ResolveValue::PlaylistEntries(entries) => {
                 let list = lua.create_table()?;
                 for (i, entry) in entries.iter().enumerate() {

@@ -249,7 +249,7 @@ impl ScriptPumps {
 }
 
 /// 把原始查询错误回投脚本线程(回调边界再渲染诊断)。
-fn resolve_err(
+pub(super) fn resolve_err(
     player: &PlayerCore,
     query: QueryId,
     error: impl std::error::Error + Send + Sync + 'static,
@@ -261,7 +261,7 @@ fn resolve_err(
 }
 
 /// 把一条查询结果回投脚本线程(无脚本时静默丢——查询本就发不出来)。
-fn resolve_ok(player: &PlayerCore, query: QueryId, value: ResolveValue) {
+pub(super) fn resolve_ok(player: &PlayerCore, query: QueryId, value: ResolveValue) {
     if let Some(sender) = player.script_sender() {
         sender.resolve(query, value);
     }
@@ -300,76 +300,9 @@ fn apply_library_song_url(player: &PlayerCore, song: SongId, query: QueryId) {
     });
 }
 
-/// 跑一次 `library.search` 并回投结果。
-///
-/// 限定源:查不到对应 channel / 该源失败都回 `(nil, err)`。
-/// 不限定:跨全部源聚合,单源失败 warn 跳过(与 `library.playlists` 同语义)。
-///
-/// # Params:
-///   - `term`: 关键词
-///   - `source`: 限定源(`None` = 全源聚合)
-///   - `page`: 分页
-///   - `query`: 回投句柄
-async fn resolve_search(
-    player: &PlayerCore,
-    term: String,
-    source: Option<mineral_model::SourceKind>,
-    page: mineral_channel_core::Page,
-    query: QueryId,
-) {
-    // 埋点页码 = offset / limit(Page 是 Copy,search_songs 后仍可读)。
-    let page_no = i64::from(page.offset.checked_div(page.limit).unwrap_or(0));
-    match source {
-        Some(source) => {
-            let Some(channel) = player.channel_for(source).cloned() else {
-                let error = QueryError::MissingChannel(source);
-                resolve_err(player, query, error);
-                return;
-            };
-            match channel.search_songs(&term, page).await {
-                Ok(hits) => {
-                    record_script_search(player, &term, source, page_no, Some(hits.items.len()));
-                    resolve_ok(player, query, ResolveValue::Songs(hits.items));
-                }
-                Err(e) => {
-                    record_script_search(player, &term, source, page_no, None);
-                    resolve_err(player, query, e);
-                }
-            }
-        }
-        None => {
-            let mut songs = Vec::new();
-            for channel in player.channels() {
-                match channel.search_songs(&term, page).await {
-                    Ok(hits) => {
-                        record_script_search(
-                            player,
-                            &term,
-                            channel.source(),
-                            page_no,
-                            Some(hits.items.len()),
-                        );
-                        songs.extend(hits.items);
-                    }
-                    Err(e) => {
-                        record_script_search(player, &term, channel.source(), page_no, None);
-                        mineral_log::warn!(
-                            target: "script",
-                            source = channel.source().name(),
-                            error = mineral_log::chain(&e),
-                            "library.search: 该源搜索失败,跳过"
-                        );
-                    }
-                }
-            }
-            resolve_ok(player, query, ResolveValue::Songs(songs));
-        }
-    }
-}
-
 /// 记录 `library.search` 的歌曲搜索(actor=script)。
 /// `count` 有值表示成功,`None` 表示失败。
-fn record_script_search(
+pub(super) fn record_script_search(
     player: &PlayerCore,
     term: &str,
     source: mineral_model::SourceKind,
@@ -570,15 +503,16 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
         ScriptCmd::LibrarySearch {
             term,
             source,
-            offset,
-            limit,
-            query,
+            requests,
+            closed,
         } => {
-            let player = player.clone();
-            tokio::spawn(async move {
-                let page = mineral_channel_core::Page::new(offset, limit);
-                resolve_search(&player, term, source, page, query).await;
-            });
+            tokio::spawn(crate::script_search::run(
+                player.clone(),
+                term,
+                source,
+                requests,
+                closed,
+            ));
         }
         ScriptCmd::LibrarySongUrl { song, query } => apply_library_song_url(player, song, query),
         ScriptCmd::ConfigOverride { ops } => {

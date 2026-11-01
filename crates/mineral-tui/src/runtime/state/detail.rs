@@ -4,7 +4,7 @@
 //! 进某专辑看曲目。栈帧携带已有的完整实体（头部立即可画），补充的列表/详情由对应
 //! fetch 任务回填。`frames[0]` 即 root（对应结果列选中行），其上是下钻帧。
 
-use mineral_channel_core::{ArtistSectionKind, ArtistSections, Page};
+use mineral_channel_core::{ArtistSectionKind, ArtistSections};
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, CollectionCategory, MediaUrl, Playlist, PlaylistEntry,
     PlaylistId, RefreshScope, SearchKind, Song, SourceKind,
@@ -25,7 +25,7 @@ pub enum DetailFetch {
     /// 歌单帧 → 曲目（`PlaylistDetail` 任务）。
     PlaylistDetail(PlaylistId),
 
-    /// artist 帧 → 详情(热门曲) + 专辑列表（`ArtistDetail` + `ArtistAlbums` 两任务）。
+    /// artist 帧 → 热门曲详情任务与按需专辑订阅。
     Artist(ArtistId),
 }
 
@@ -643,26 +643,16 @@ impl DetailFrame {
         }
     }
 
-    /// 合并艺人专辑首页或待收取续页，保留热门曲、分区、光标和视口。
-    /// 已有首页后忽略重复首页，避免另一保留帧的预取回包清掉已累积的续页。
-    pub fn set_artist_albums(&mut self, albums: Vec<Album>, page: Page, has_more: Option<bool>) {
-        let Some(DetailData::Artist { albums: slot, .. }) = &mut self.data else {
-            if page.offset == 0 {
+    /// 应用共享专辑列表的展示快照，保留热门曲、分区、光标和视口。
+    pub(crate) fn set_artist_albums(&mut self, albums: ArtistAlbums) {
+        match &mut self.data {
+            Some(DetailData::Artist { albums: slot, .. }) => *slot = Some(albums),
+            _ => {
                 self.data = Some(DetailData::Artist {
                     detail: None,
-                    albums: Some(ArtistAlbums::first_page(albums, page, has_more)),
+                    albums: Some(albums),
                 });
             }
-            return;
-        };
-        match slot {
-            None if page.offset == 0 => {
-                *slot = Some(ArtistAlbums::first_page(albums, page, has_more));
-            }
-            Some(loaded) if page.offset > 0 => {
-                loaded.append_page(albums, page, has_more);
-            }
-            _ => {}
         }
     }
 
@@ -678,8 +668,8 @@ impl DetailFrame {
         }
     }
 
-    /// 在 Albums 区登记下一页；回包到达前不重复请求，热门曲区不触发专辑分页。
-    pub(crate) fn request_artist_albums_page(&mut self) -> Option<(ArtistId, Page)> {
+    /// Albums 区生成续读意图；提交成功后才由共享列表登记 pending。
+    pub(crate) fn request_artist_albums_page(&self) -> Option<(ArtistId, u64)> {
         let (
             EntityRef::Artist(artist),
             ArtistSection::Albums,
@@ -687,23 +677,11 @@ impl DetailFrame {
                 albums: Some(albums),
                 ..
             }),
-        ) = (&self.entity, self.section, &mut self.data)
+        ) = (&self.entity, self.section, &self.data)
         else {
             return None;
         };
-        let page = albums.request_next_page()?;
-        Some((artist.id.clone(), page))
-    }
-
-    /// 失败或取消只释放对应的艺人专辑续页；保留列表，下次近底导航重试原页。
-    pub(crate) fn fail_artist_albums_page(&mut self, page: Page) {
-        if let Some(DetailData::Artist {
-            albums: Some(albums),
-            ..
-        }) = &mut self.data
-        {
-            albums.fail_page(page);
-        }
+        Some((artist.id.clone(), albums.next_batch()?))
     }
 }
 
@@ -794,6 +772,13 @@ impl DetailStack {
     /// 当前帧（可变）；空栈为 `None`。
     pub fn current_mut(&mut self) -> Option<&mut DetailFrame> {
         self.frames.last_mut()
+    }
+
+    /// 真实栈帧是否仍包含该艺人，动画出发帧不延长订阅寿命。
+    pub(crate) fn contains_artist(&self, id: &ArtistId) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| matches!(&frame.entity, EntityRef::Artist(artist) if artist.id == *id))
     }
 
     /// 找出仍保留且对应同一实体详情的帧，包括下钻后留在栈底的父帧。
@@ -901,7 +886,8 @@ mod tests {
     };
     use mineral_task::SearchPayload;
 
-    use mineral_channel_core::{ArtistSectionKind, ArtistSections, Page};
+    use crate::test_support::artist_albums;
+    use mineral_channel_core::{ArtistSectionKind, ArtistSections};
 
     use super::{ArtistSection, DetailFetch, DetailStack, EntityRef};
 
@@ -1094,7 +1080,7 @@ mod tests {
 
         let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
         frame.set_artist_detail(Box::new(detail));
-        frame.set_artist_albums(vec![album0], Page::default(), None);
+        frame.set_artist_albums(artist_albums(vec![album0], true));
 
         frame.section = ArtistSection::Hot;
         assert_eq!(
@@ -1277,7 +1263,7 @@ mod tests {
             .build();
         let mut frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
         frame.set_artist_detail(Box::new(detail));
-        frame.set_artist_albums(vec![album("a0"), album("a1")], Page::default(), None);
+        frame.set_artist_albums(artist_albums(vec![album("a0"), album("a1")], true));
 
         frame.section = ArtistSection::Hot;
         frame.list_mut().set_sel(1);
@@ -1311,7 +1297,7 @@ mod tests {
             .build();
         let mut artist_frame = super::DetailFrame::new(EntityRef::Artist(Box::new(artist("ar"))));
         artist_frame.set_artist_detail(Box::new(detail));
-        artist_frame.set_artist_albums(vec![album("a0")], Page::default(), None);
+        artist_frame.set_artist_albums(artist_albums(vec![album("a0")], true));
         artist_frame.section = ArtistSection::Hot;
         assert_eq!(artist_frame.song_list().len(), 2, "Hot 区 = 热门曲");
         artist_frame.section = ArtistSection::Albums;

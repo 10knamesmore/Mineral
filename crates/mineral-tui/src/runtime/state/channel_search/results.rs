@@ -1,17 +1,16 @@
-//! Search 结果桶:某 (source, kind) 已拉取页的累积、结果列光标、翻页游标与选中实体的
-//! 详情栈。翻页 append 同变体载荷、`exhausted` 由源显式信号或短页推断;光标真移动才把
-//! 详情栈复位到新选中实体。
+//! Search 结果桶保存累计条目、待收取批次、列表光标与详情栈。
+//! 来源明确报告是否读完；光标真正移动时才把详情栈复位到新实体。
 
-use mineral_channel_core::{ArtistSections, Page};
+use mineral_channel_core::ArtistSections;
 use mineral_model::{Album, AlbumId, Artist, ArtistId, PlaylistId};
 use mineral_task::SearchPayload;
 
 use crate::runtime::scroll::list::ScrollList;
 
+use super::super::ArtistAlbums;
 use super::super::detail::{DetailFetch, DetailStack, EntityRef};
-use super::super::pagination::ListPagination;
 
-/// 某个 (source, kind) 的一桶搜索结果：累积页 + 光标 + 翻页游标 + 该实体的详情栈。
+/// 某个 (source, kind) 的结果、批次进度、光标及详情栈。
 ///
 /// 续页按请求顺序追加同一 [`SearchPayload`] 变体；收到成功或失败回包前，同一桶只请求一页。
 pub struct KindResults {
@@ -24,8 +23,11 @@ pub struct KindResults {
     /// 本列表选中标题的滚动状态。
     pub(crate) title: crate::runtime::marquee::Marquee,
 
-    /// 续页进度与待收取请求；随结果桶保留，编辑 query 或重新搜索时一起销毁。
-    pagination: ListPagination,
+    /// 下一批的本地序号；None 表示来源已读完。
+    next_batch: Option<u64>,
+
+    /// 已成功提交、尚未收到结果的批次。
+    pending_batch: Option<u64>,
 
     /// 当前选中实体的详情栈（root 随 `sel` 复位、下钻 push/pop）。
     pub detail: DetailStack,
@@ -37,21 +39,16 @@ pub struct KindResults {
 }
 
 impl KindResults {
-    /// 首页结果（`offset == 0`）：替换、光标归零、判 `exhausted`、detail root 落首项。
-    ///
-    /// # Params:
-    ///   - `payload`: 首页载荷
-    ///   - `limit`: 页大小（后续请求沿用，offset 按它页对齐推进）
-    ///   - `has_more`: 源的显式翻页信号（`None` 回退短页推断）
-    pub(super) fn first_page(payload: SearchPayload, limit: u32, has_more: Option<bool>) -> Self {
-        let count = payload_len(&payload);
+    /// 首批替换结果并建立详情根；完整性直接采用来源结论。
+    pub(super) fn first_page(payload: SearchPayload, complete: bool) -> Self {
         let detail = EntityRef::from_payload(&payload, 0)
             .map_or_else(DetailStack::empty, DetailStack::rooted);
         Self {
             results: payload,
             list: ScrollList::new(),
             title: crate::runtime::marquee::Marquee::default(),
-            pagination: ListPagination::first_page(count, Page::new(0, limit), has_more),
+            next_batch: (!complete).then_some(1),
+            pending_batch: None,
             detail,
             sections: None,
         }
@@ -74,37 +71,42 @@ impl KindResults {
         }
     }
 
-    /// 登记待收取的下一页，供调用方提交任务；已在等待或没有更多结果时不重复请求。
-    pub(crate) fn request_next_page(&mut self) -> Option<Page> {
-        self.pagination.request_next_page()
+    /// 生成续读意图；成功提交后再登记 pending。
+    pub(crate) fn next_batch(&self) -> Option<u64> {
+        self.next_batch.filter(|_| self.pending_batch.is_none())
     }
 
-    /// 只追加当前待收取页；重复、未请求或分页参数不符的回包不改变结果与分页进度。
+    pub(crate) fn batch_requested(&mut self, batch: u64) {
+        self.pending_batch = Some(batch);
+    }
+
+    /// 只追加当前待收取批次；重复或未请求的回包不改变结果与进度。
     /// 返回是否接收，供上层跳过被丢弃回包的其它副作用。
     pub(super) fn append_page(
         &mut self,
         payload: SearchPayload,
-        page: Page,
-        has_more: Option<bool>,
+        batch: u64,
+        complete: bool,
     ) -> bool {
-        if !self
-            .pagination
-            .accept_page(payload_len(&payload), page, has_more)
-        {
+        if self.pending_batch != Some(batch) {
             return false;
         }
+        self.pending_batch = None;
+        self.next_batch = (!complete).then_some(batch + 1);
         extend_payload(&mut self.results, payload);
         true
     }
 
-    /// 失败或取消只释放对应的待收取页，保留游标与结果；下次近底导航可重试同一页。
-    pub(super) fn fail_page(&mut self, page: Page) {
-        self.pagination.fail_page(page);
+    /// 失败只释放对应的待收取批次；下次近底导航重试同一批。
+    pub(super) fn fail_page(&mut self, batch: u64) {
+        if self.pending_batch == Some(batch) {
+            self.pending_batch = None;
+        }
     }
 
     /// 是否已收齐结果，供底标决定是否在已加载数量后显示 `+`。
     pub fn exhausted(&self) -> bool {
-        self.pagination.exhausted()
+        self.next_batch.is_none()
     }
 
     /// 当前结果条数。
@@ -184,39 +186,13 @@ impl KindResults {
         }
     }
 
-    /// 将艺人专辑页交给所有匹配的保留帧，各帧按自己的请求进度接收。
-    ///
-    /// # Params:
-    ///   - `id`: 回包所属艺人，用于匹配保留帧。
-    ///   - `albums`: 本页实际返回的专辑。
-    ///   - `page`: 回包对应的分页参数。
-    ///   - `has_more`: 来源的显式翻页信号。
-    pub fn fill_artist_albums(
-        &mut self,
-        id: &ArtistId,
-        albums: &[Album],
-        page: Page,
-        has_more: Option<bool>,
-    ) {
+    /// 将共享专辑列表的展示快照交给匹配的真实详情帧。
+    pub fn fill_artist_albums(&mut self, id: &ArtistId, albums: &ArtistAlbums) {
         for frame in self
             .detail
             .matching_frames_mut(DetailFetch::Artist(id.clone()))
         {
-            frame.set_artist_albums(albums.to_vec(), page, has_more);
-        }
-    }
-
-    /// 将失败页交给所有匹配的保留帧，释放各帧对应的待收取续页。
-    ///
-    /// # Params:
-    ///   - `id`: 失败任务所属艺人，用于匹配保留帧。
-    ///   - `page`: 失败或取消任务携带的分页参数。
-    pub fn fail_artist_albums_page(&mut self, id: &ArtistId, page: Page) {
-        for frame in self
-            .detail
-            .matching_frames_mut(DetailFetch::Artist(id.clone()))
-        {
-            frame.fail_artist_albums_page(page);
+            frame.set_artist_albums(albums.clone());
         }
     }
 }
@@ -244,7 +220,8 @@ fn extend_payload(dst: &mut SearchPayload, src: SearchPayload) {
 
 #[cfg(test)]
 mod tests {
-    use mineral_channel_core::Page;
+    use futures_util::StreamExt;
+    use mineral_channel_core::{PageResult, page_batches};
     use mineral_model::{SearchKind, SourceKind};
     use mineral_task::SearchPayload;
 
@@ -252,7 +229,7 @@ mod tests {
 
     use super::super::SearchSession;
 
-    /// 5 条歌曲一页（配 limit=5 即满页；endserenading 上限 10 条）。
+    /// 一批五首歌曲。
     fn full_page() -> SearchPayload {
         SearchPayload::Songs(endserenading(5))
     }
@@ -265,69 +242,39 @@ mod tests {
             .build()
     }
 
-    /// 首页满页（= limit）不判榨干、next_offset 页对齐推到 limit；detail root 落首项。
+    /// 未完成首批建立详情根，下一批序号不取决于结果条数。
     #[test]
     fn first_page_full_not_exhausted() -> color_eyre::Result<()> {
         let mut s = SearchSession::new(SearchKind::Song);
-        s.apply_page(
-            SearchKind::Song,
-            full_page(),
-            Page {
-                offset: 0,
-                limit: 5,
-            },
-            /*has_more*/ None,
-        );
+        s.apply_page(SearchKind::Song, full_page(), 0, false);
         let kr = s
             .kind_results()
             .ok_or_else(|| color_eyre::eyre::eyre!("首页应入桶"))?;
         assert_eq!(kr.len(), 5, "5 条入桶");
         assert!(!kr.exhausted(), "满页（= limit）不判榨干");
-        assert_eq!(
-            kr.pagination.expected_page().offset,
-            5,
-            "下一页从 limit 起(页对齐)"
-        );
+        assert_eq!(kr.next_batch(), Some(1), "下一次读取第二批");
         assert_eq!(kr.detail.depth(), 0, "detail root 落首项、无下钻");
         Ok(())
     }
 
-    /// 显式 `has_more` 优先于短页推断:短页 + `Some(true)` 不榨干(页码型源每页实际条数
-    /// 与 limit 无关);满页 + `Some(false)` 也榨干。next_offset 恒页对齐,与实际条数无关。
+    /// 完整性采用来源结论，不从本批条数推测。
     #[test]
     fn explicit_has_more_overrides_short_page_inference() -> color_eyre::Result<()> {
-        // 短页(2 < limit 5)但源明说还有下一页 → 不榨干,next_offset 仍推到 limit。
         let mut s = SearchSession::new(SearchKind::Song);
         s.apply_page(
             SearchKind::Song,
             SearchPayload::Songs(endserenading(2)),
-            Page {
-                offset: 0,
-                limit: 5,
-            },
-            /*has_more*/ Some(true),
+            0,
+            false,
         );
         let kr = s
             .kind_results()
             .ok_or_else(|| color_eyre::eyre::eyre!("首页应入桶"))?;
         assert!(!kr.exhausted(), "源显式 has_more=true → 短页不判榨干");
-        assert_eq!(
-            kr.pagination.expected_page().offset,
-            5,
-            "next_offset 页对齐推进,与实际条数(2)无关"
-        );
+        assert_eq!(kr.next_batch(), Some(1), "本批只有两条也能继续读取");
 
-        // 满页(= limit)但源明说没有下一页 → 榨干。
         let mut s = SearchSession::new(SearchKind::Song);
-        s.apply_page(
-            SearchKind::Song,
-            full_page(),
-            Page {
-                offset: 0,
-                limit: 5,
-            },
-            /*has_more*/ Some(false),
-        );
+        s.apply_page(SearchKind::Song, full_page(), 0, true);
         let kr = s
             .kind_results()
             .ok_or_else(|| color_eyre::eyre::eyre!("首页应入桶"))?;
@@ -335,15 +282,20 @@ mod tests {
         Ok(())
     }
 
-    /// 短页（< 30）判榨干。
-    #[test]
-    fn short_page_marks_exhausted() -> color_eyre::Result<()> {
+    /// offset 来源的短页推断留在适配器中，TUI 只消费完成标记。
+    #[tokio::test]
+    async fn short_page_marks_exhausted() -> color_eyre::Result<()> {
+        let mut stream = page_batches(|_page| async { Ok(PageResult::from(endserenading(5))) });
+        let batch = stream
+            .next()
+            .await
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing batch"))??;
         let mut s = SearchSession::new(SearchKind::Song);
         s.apply_page(
             SearchKind::Song,
-            SearchPayload::Songs(endserenading(5)),
-            Page::default(),
-            /*has_more*/ None,
+            SearchPayload::Songs(batch.items),
+            0,
+            batch.complete,
         );
         let kr = s
             .kind_results()
@@ -352,42 +304,27 @@ mod tests {
         Ok(())
     }
 
-    /// 翻页 append：第二页拼到第一页后、next_offset 页对齐累加(与实际条数无关)；短二页判榨干。
+    /// 后续批次追加，来源完成后停止续读。
     #[test]
     fn append_page_accumulates_and_exhausts() -> color_eyre::Result<()> {
         let mut s = SearchSession::new(SearchKind::Song);
-        s.apply_page(
-            SearchKind::Song,
-            full_page(),
-            Page {
-                offset: 0,
-                limit: 5,
-            },
-            /*has_more*/ None,
-        );
+        s.apply_page(SearchKind::Song, full_page(), 0, false);
         assert_eq!(
-            s.kind_results_mut()
-                .and_then(super::KindResults::request_next_page),
-            Some(Page::new(5, 5))
+            s.kind_results().and_then(super::KindResults::next_batch),
+            Some(1)
         );
+        s.batch_requested(SearchKind::Song, 1);
         s.apply_page(
             SearchKind::Song,
             SearchPayload::Songs(endserenading(2)),
-            Page {
-                offset: 5,
-                limit: 5,
-            },
-            /*has_more*/ None,
+            1,
+            true,
         );
         let kr = s
             .kind_results()
             .ok_or_else(|| color_eyre::eyre::eyre!("桶应在"))?;
         assert_eq!(kr.len(), 7, "两页累积");
-        assert_eq!(
-            kr.pagination.expected_page().offset,
-            10,
-            "offset 页对齐推到 2 × limit"
-        );
+        assert_eq!(kr.next_batch(), None, "完整结果没有下一批");
         assert!(kr.exhausted(), "短二页榨干");
         Ok(())
     }
@@ -402,8 +339,8 @@ mod tests {
         s.apply_page(
             SearchKind::Album,
             SearchPayload::Albums(vec![album("a1"), album("a2")]),
-            Page::default(),
-            /*has_more*/ None,
+            0,
+            true,
         );
         let kr = s
             .kind_results_mut()

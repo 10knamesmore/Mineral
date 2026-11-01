@@ -6,13 +6,14 @@ use crossterm::event::KeyEvent;
 use mineral_channel_core::ChannelCaps;
 use mineral_model::{ArtistId, SearchKind, Song, SourceKind};
 use mineral_protocol::DownloadTarget;
-use mineral_task::{ChannelFetchKind, Priority, TaskKind};
+use mineral_task::Priority;
 use rustc_hash::FxHashMap;
 
 use crate::app::App;
 use crate::app::page::Page;
 use crate::runtime::action::Action;
 use crate::runtime::keymap::Keymap;
+use crate::runtime::prefetch::{request_artist_albums, request_search};
 
 /// Page 决策所需的只读跨页上下文(= React 的 props)。借用而非拥有,故 App 侧必须在调用点
 /// **就地构造**(写明 `&self.state.models.caps` 等字段路径),不能抽成 `self.page_ctx()` 方法——那会整借
@@ -49,7 +50,7 @@ pub(crate) enum SearchEffect {
     /// 下载 Search 当前光标指向的歌曲。
     Download(Box<Song>),
 
-    /// 提交一条首页搜索任务(User 优先级)。
+    /// 创建搜索订阅并请求首批。
     Submit {
         /// 目标 source。
         source: SourceKind,
@@ -61,7 +62,7 @@ pub(crate) enum SearchEffect {
         query: String,
     },
 
-    /// 预取下一页：结果桶已登记待收取页，消费成功或失败回包前不再生成同桶的续页意图。
+    /// 推进已有搜索订阅，成功提交后登记待收取批次。
     FetchMore {
         /// 目标 source。
         source: SourceKind,
@@ -72,17 +73,17 @@ pub(crate) enum SearchEffect {
         /// 查询词(与首页同词,续拉同一桶)。
         query: String,
 
-        /// 待收取页的分页参数，页大小沿用首页。
-        page: mineral_channel_core::Page,
+        /// 本次搜索中待收取的批次序号。
+        batch: u64,
     },
 
-    /// 预取艺人专辑续页，详情帧已登记待收取页。
+    /// 推进艺人专辑订阅，成功提交后登记待收取批次。
     FetchArtistAlbums {
         /// 艺人完整身份，回包据此更新保留的详情帧。
         id: ArtistId,
 
-        /// 待收取页的分页参数。
-        page: mineral_channel_core::Page,
+        /// 本次读取中待收取的批次序号。
+        batch: u64,
     },
 
     /// Search 未接管的动词回落全局 dispatch(transport / 退出确认等照常生效)。
@@ -128,48 +129,51 @@ impl App {
                 kind,
                 query,
             } => {
-                self.client.submit_task(
-                    TaskKind::ChannelFetch(ChannelFetchKind::Search {
-                        source,
-                        kind,
-                        query,
-                        page: mineral_channel_core::Page::default(),
-                    }),
-                    Priority::User,
-                );
-                // 首页在飞：结果区显 searching spinner，到货（含 0 条）由 apply_page 清。
-                self.state.ui.channel_search.mark_loading(kind);
+                if let Err(error) = request_search(
+                    self.client.as_ref(),
+                    &mut self.state.ui.channel_search,
+                    source,
+                    kind,
+                    query,
+                    0,
+                ) {
+                    self.report_submit_error(error);
+                }
             }
             SearchEffect::FetchMore {
                 source,
                 kind,
                 query,
-                page,
+                batch,
             } => {
                 mineral_log::debug!(
                     target: "tui",
                     source = ?source,
                     kind = ?kind,
-                    offset = page.offset,
-                    limit = page.limit,
-                    "提交搜索结果分页预取"
+                    batch,
+                    "推进搜索结果"
                 );
-                self.client.submit_task(
-                    TaskKind::ChannelFetch(ChannelFetchKind::Search {
-                        source,
-                        kind,
-                        query,
-                        page,
-                    }),
-                    Priority::User,
-                );
+                if let Err(error) = request_search(
+                    self.client.as_ref(),
+                    &mut self.state.ui.channel_search,
+                    source,
+                    kind,
+                    query,
+                    batch,
+                ) {
+                    self.report_submit_error(error);
+                }
             }
-            SearchEffect::FetchArtistAlbums { id, page } => {
-                mineral_log::debug!(target: "tui", artist = %id.qualified(), ?page, "request artist albums page");
-                self.client.submit_task(
-                    TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums { id, page }),
+            SearchEffect::FetchArtistAlbums { id, batch } => {
+                if let Err(error) = request_artist_albums(
+                    self.client.as_ref(),
+                    &mut self.state,
+                    &id,
+                    batch,
                     Priority::User,
-                );
+                ) {
+                    self.report_submit_error(error);
+                }
             }
             SearchEffect::Dispatch(action) => self.dispatch(action),
             SearchEffect::None => {}

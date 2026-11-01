@@ -1,6 +1,5 @@
 //! 任务种类与 dedup 键。
 
-use mineral_channel_core::Page;
 use mineral_model::{
     AlbumId, ArtistId, CollectionCategory, PlaylistId, RefreshScope, SearchKind, SongId, SourceKind,
 };
@@ -55,7 +54,7 @@ pub enum ChannelFetchKind {
         song_id: SongId,
     },
 
-    /// 全库搜索某 channel(单页;翻页是新任务,page 进 dedup key)。
+    /// 来源搜索；有限任务读取首批，订阅读取逐批复用同一个流。
     Search {
         /// 目标 channel。
         source: SourceKind,
@@ -65,9 +64,6 @@ pub enum ChannelFetchKind {
 
         /// 关键词。
         query: String,
-
-        /// 分页参数。
-        page: Page,
     },
 
     /// 拉 artist 详情(简介 + 热门曲目;目标 channel 由 `id` 的 namespace 决定)。
@@ -76,13 +72,10 @@ pub enum ChannelFetchKind {
         id: ArtistId,
     },
 
-    /// 拉 artist 的专辑列表(分页;目标 channel 由 `id` 的 namespace 决定)。
+    /// 艺人专辑读取；有限任务取首批，订阅沿用同一流继续读取。
     ArtistAlbums {
         /// artist id(自带 namespace)。
         id: ArtistId,
-
-        /// 分页参数。
-        page: Page,
     },
 
     /// 拉专辑详情(元信息 + 曲目;目标 channel 由 `id` 的 namespace 决定)。
@@ -133,11 +126,10 @@ impl ChannelFetchKind {
                 source,
                 kind,
                 query,
-                page,
-            } => format!("search:{source:?}:{kind:?}:{query}:{}", page.offset),
+            } => format!("search:{source:?}:{kind:?}:{query}"),
             Self::ArtistDetail { id } => format!("artist_detail:{}", id.qualified()),
-            Self::ArtistAlbums { id, page } => {
-                format!("artist_albums:{}:{}", id.qualified(), page.offset)
+            Self::ArtistAlbums { id } => {
+                format!("artist_albums:{}", id.qualified())
             }
             Self::AlbumDetail { id } => format!("album_detail:{}", id.qualified()),
         }

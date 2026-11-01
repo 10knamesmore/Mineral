@@ -1,16 +1,20 @@
 //! 艺人专辑与 UP 主投稿的分页和导航回归。
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::eyre;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use mineral_channel_core::{ArtistSectionKind, ArtistSections, ChannelCaps, Page};
+use mineral_channel_core::{ArtistSectionKind, ArtistSections, ChannelCaps};
 use mineral_model::{Album, AlbumId, Artist, ArtistId, SearchKind, SourceKind};
-use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
+use mineral_protocol::SubscriptionTopic;
+use mineral_task::{SearchPayload, TaskEvent};
 
 use crate::App;
 use crate::runtime::state::{ArtistSection, DetailFrame, EntityRef};
+use crate::test_support::TestClient;
+
+const BATCH_ALBUMS: u64 = 30;
 
 /// 已进入艺人 Albums 区的应用，后端探针保留实际任务提交次数。
 struct ArtistAlbumsTest {
@@ -21,12 +25,12 @@ struct ArtistAlbumsTest {
     artist_id: ArtistId,
 
     /// 后端请求记录，不执行 scheduler 去重。
-    submitted: Arc<Mutex<Vec<TaskKind>>>,
+    submitted: Arc<TestClient>,
 }
 
 impl ArtistAlbumsTest {
     /// 从搜索结果进入详情，走驻留预取请求首页，再注入相应来源的首批专辑。
-    fn new(source: SourceKind, count: u32, has_more: bool) -> color_eyre::Result<Self> {
+    fn new(source: SourceKind, count: u64, has_more: bool) -> color_eyre::Result<Self> {
         let (mut app, submitted) = crate::test_support::app_with_channel_search_probed(vec![
             SearchKind::Artist,
             SearchKind::Album,
@@ -61,25 +65,21 @@ impl ArtistAlbumsTest {
             source,
             kind: SearchKind::Artist,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Artists(vec![artist.clone()]),
-            has_more: Some(false),
+            complete: true,
         });
         test.press(KeyCode::Char('l'));
         test.app.state.ui.channel_search.last_sel_change = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .ok_or_else(|| eyre!("无法设置驻留时间"))?;
         crate::runtime::prefetch::tick(&mut test.app.state, &*test.app.client, Vec::new());
-        assert_eq!(
-            test.requested_pages()?,
-            vec![Page::default()],
-            "驻留预取首页"
-        );
+        assert_eq!(test.request_count()?, 1, "驻留预取首页");
         test.app.state.apply(&TaskEvent::ArtistDetailFetched {
             id: test.artist_id.clone(),
             artist: Box::new(artist),
         });
-        test.receive(Page::default(), count, has_more);
+        test.receive(0, count, has_more);
         if source == SourceKind::NETEASE {
             test.press(KeyCode::Char(']'));
         }
@@ -102,13 +102,13 @@ impl ArtistAlbumsTest {
     }
 
     /// 构造来源内唯一的专辑 ID；第二页不会复用第一页身份。
-    fn album_id(&self, index: u32) -> AlbumId {
+    fn album_id(&self, index: u64) -> AlbumId {
         AlbumId::new(self.artist_id.namespace(), format!("album-{index}"))
     }
 
-    /// 按请求页投递专辑，count 可小于 limit，包括来源明确还有下一页的空页。
-    fn receive(&mut self, page: Page, count: u32, has_more: bool) {
-        let albums = (page.offset..page.offset + count)
+    /// 按批次投递专辑，包含来源明确尚未结束的空批次。
+    fn receive(&mut self, batch: u64, count: u64, has_more: bool) {
+        let albums = (batch * BATCH_ALBUMS..batch * BATCH_ALBUMS + count)
             .map(|index| {
                 Album::builder()
                     .id(self.album_id(index))
@@ -118,9 +118,9 @@ impl ArtistAlbumsTest {
             .collect();
         self.app.state.apply(&TaskEvent::ArtistAlbumsFetched {
             id: self.artist_id.clone(),
-            page,
+            batch,
             albums,
-            has_more: Some(has_more),
+            complete: !has_more,
         });
     }
 
@@ -146,26 +146,31 @@ impl ArtistAlbumsTest {
             .ok_or_else(|| eyre!("缺少详情帧"))
     }
 
-    /// 艺人专辑任务携带的实际页参数，包含驻留预取的首页。
-    fn requested_pages(&self) -> color_eyre::Result<Vec<Page>> {
-        Ok(self
+    /// 所有推进复用同一艺人订阅，探针记录实际提交次数。
+    fn request_count(&self) -> color_eyre::Result<usize> {
+        let subscriptions = self
             .submitted
+            .subscriptions
             .lock()
-            .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
+            .map_err(|e| eyre!("{e}"))?;
+        let matching = subscriptions
             .iter()
-            .filter_map(|task| match task {
-                TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums { id, page })
-                    if *id == self.artist_id =>
-                {
-                    Some(*page)
-                }
-                _ => None,
-            })
-            .collect())
+            .filter(|(_, topic)| *topic == SubscriptionTopic::ArtistAlbums(self.artist_id.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "同一艺人只建立一个订阅");
+        let subscription = matching
+            .first()
+            .ok_or_else(|| eyre!("missing subscription"))?
+            .0;
+        let advances = self.submitted.advances.lock().map_err(|e| eyre!("{e}"))?;
+        Ok(advances
+            .iter()
+            .filter(|request| request.subscription == subscription)
+            .count())
     }
 
     /// 校验完整列表顺序，检测重复追加、漏页及整表替换。
-    fn assert_album_ids(&self, indices: impl IntoIterator<Item = u32>) -> color_eyre::Result<()> {
+    fn assert_album_ids(&self, indices: impl IntoIterator<Item = u64>) -> color_eyre::Result<()> {
         let albums = self
             .frame()?
             .current_album_list()
@@ -188,27 +193,26 @@ impl ArtistAlbumsTest {
 /// 两个来源都能加载第二页并下钻其中的专辑；追加保留选择，重复/超前回包不改分页进度。
 #[test]
 fn artist_and_uploader_pages_append_and_remain_navigable() -> color_eyre::Result<()> {
-    let limit = Page::default().limit;
+    let limit = BATCH_ALBUMS;
     for source in [SourceKind::NETEASE, SourceKind::BILIBILI] {
         let mut test = ArtistAlbumsTest::new(source, limit, true)?;
         test.press(KeyCode::Char('G'));
         test.frame_mut()?.list_mut().place(29, 22);
-        let second = Page::new(limit, limit);
+        let second = 1;
         for key in ['k', 'j', 'G', 'j'] {
             test.press(KeyCode::Char(key));
         }
-        assert_eq!(test.requested_pages()?, vec![Page::default(), second]);
+        assert_eq!(test.request_count()?, 2);
         let before_offset = test.frame()?.list().offset(30, 6);
-        test.receive(Page::default(), limit, false);
-        test.receive(Page::new(2 * limit, limit), limit, false);
-        test.receive(Page::new(limit, limit + 1), limit, false);
+        test.receive(0, limit, false);
+        test.receive(2, limit, false);
         test.assert_album_ids(0..limit)?;
         test.receive(second, limit, false);
         test.receive(second, limit, false);
         test.assert_album_ids(0..2 * limit)?;
         assert_eq!(test.frame()?.list().sel(), 29);
         assert_eq!(test.frame()?.list().offset(60, 6), before_offset);
-        test.receive(Page::default(), limit, true);
+        test.receive(0, limit, true);
         assert_eq!(test.frame()?.list().offset(60, 6), before_offset);
         for _ in 0..5 {
             test.press(KeyCode::Char('j'));
@@ -219,37 +223,31 @@ fn artist_and_uploader_pages_append_and_remain_navigable() -> color_eyre::Result
         );
         test.press(KeyCode::Char('l'));
         assert!(matches!(&test.frame()?.entity, EntityRef::Album(album) if album.id == expected));
-        assert_eq!(test.requested_pages()?, vec![Page::default(), second]);
+        assert_eq!(test.request_count()?, 2);
     }
     Ok(())
 }
 
-/// 显式更多页信号优先于短页和过滤后的空页；offset 按请求页大小推进。
+/// 完成状态不依赖本批条数，短批次和空批次都可以继续读取。
 #[test]
 fn short_and_empty_album_pages_with_more_do_not_end_pagination() -> color_eyre::Result<()> {
-    let limit = Page::default().limit;
+    let limit = BATCH_ALBUMS;
     for first_count in [0, 2] {
         let mut test = ArtistAlbumsTest::new(SourceKind::BILIBILI, first_count, true)?;
         test.press(KeyCode::Char('j'));
-        let second = Page::new(limit, limit);
-        assert_eq!(test.requested_pages()?, vec![Page::default(), second]);
+        let second = 1;
+        assert_eq!(test.request_count()?, 2);
         test.receive(second, 0, true);
         test.press(KeyCode::Char('G'));
-        let third = Page::new(2 * limit, limit);
-        assert_eq!(
-            test.requested_pages()?,
-            vec![Page::default(), second, third]
-        );
+        let third = 2;
+        assert_eq!(test.request_count()?, 3);
         test.receive(third, 1, false);
         test.press(KeyCode::Char('G'));
         test.assert_album_ids((0..first_count).chain([2 * limit]))?;
         assert!(
             matches!(test.frame()?.row_entity(), Some(EntityRef::Album(album)) if album.id == test.album_id(2 * limit))
         );
-        assert_eq!(
-            test.requested_pages()?,
-            vec![Page::default(), second, third]
-        );
+        assert_eq!(test.request_count()?, 3);
     }
     Ok(())
 }
@@ -257,9 +255,9 @@ fn short_and_empty_album_pages_with_more_do_not_end_pagination() -> color_eyre::
 /// 续页回包在下钻及切 source/kind 后仍更新原艺人父帧，返回时保留光标和分页进度。
 #[test]
 fn album_page_reaches_retained_parent_across_source_and_kind_switches() -> color_eyre::Result<()> {
-    let limit = Page::default().limit;
+    let limit = BATCH_ALBUMS;
     let mut test = ArtistAlbumsTest::new(SourceKind::NETEASE, limit, true)?;
-    let second = Page::new(limit, limit);
+    let second = 1;
     test.press(KeyCode::Char('G'));
     test.press(KeyCode::Char('l'));
     test.app
@@ -291,9 +289,26 @@ fn album_page_reaches_retained_parent_across_source_and_kind_switches() -> color
     assert_eq!(test.frame()?.list().sel(), 29);
     assert_eq!(test.frame()?.section, ArtistSection::Albums);
     test.press(KeyCode::Char('G'));
-    assert_eq!(
-        test.requested_pages()?,
-        vec![Page::default(), second, Page::new(2 * limit, limit)]
+    assert_eq!(test.request_count()?, 3);
+    test.back();
+    test.back();
+    test.press(KeyCode::Char('x'));
+    crate::runtime::prefetch::tick(&mut test.app.state, &*test.app.client, Vec::new());
+    assert!(
+        !test
+            .app
+            .state
+            .models
+            .library
+            .artist_albums
+            .contains_key(&test.artist_id)
+    );
+    assert!(
+        test.submitted
+            .unsubscriptions
+            .lock()
+            .map_err(|e| eyre!("{e}"))?
+            .contains(&SubscriptionTopic::ArtistAlbums(test.artist_id.clone()))
     );
     Ok(())
 }
@@ -301,42 +316,36 @@ fn album_page_reaches_retained_parent_across_source_and_kind_switches() -> color
 /// 失败只释放完整艺人 ID 与页匹配的续页；离屏失败可重试，旧失败不能释放新页。
 #[test]
 fn failed_album_page_can_retry_after_returning_to_artist() -> color_eyre::Result<()> {
-    let limit = Page::default().limit;
+    let limit = BATCH_ALBUMS;
     let mut test = ArtistAlbumsTest::new(SourceKind::NETEASE, limit, true)?;
-    let second = Page::new(limit, limit);
-    let third = Page::new(2 * limit, limit);
+    let second = 1;
+    let third = 2;
     test.press(KeyCode::Char('G'));
-    for (id, page) in [
+    for (id, batch) in [
         (ArtistId::new(SourceKind::BILIBILI, "artist"), second),
         (test.artist_id.clone(), third),
     ] {
         test.app
             .state
-            .apply(&TaskEvent::ArtistAlbumsPageFailed { id, page });
+            .apply(&TaskEvent::ArtistAlbumsPageFailed { id, batch });
         test.press(KeyCode::Char('j'));
-        assert_eq!(test.requested_pages()?, vec![Page::default(), second]);
+        assert_eq!(test.request_count()?, 2);
     }
     test.press(KeyCode::Char('l'));
     let failure = TaskEvent::ArtistAlbumsPageFailed {
         id: test.artist_id.clone(),
-        page: second,
+        batch: second,
     };
     test.app.state.apply(&failure);
     test.back();
     test.assert_album_ids(0..limit)?;
     test.press(KeyCode::Char('G'));
-    assert_eq!(
-        test.requested_pages()?,
-        vec![Page::default(), second, second]
-    );
+    assert_eq!(test.request_count()?, 3);
     test.receive(second, limit, true);
     test.press(KeyCode::Char('G'));
     test.app.state.apply(&failure);
     test.press(KeyCode::Char('j'));
-    assert_eq!(
-        test.requested_pages()?,
-        vec![Page::default(), second, second, third]
-    );
+    assert_eq!(test.request_count()?, 4);
     test.receive(third, 1, false);
     test.assert_album_ids(0..2 * limit + 1)?;
     Ok(())
@@ -345,14 +354,14 @@ fn failed_album_page_can_retry_after_returning_to_artist() -> color_eyre::Result
 /// 热门曲和结果列不触发艺人专辑分页；专辑预取半径读取当前热更后的配置。
 #[test]
 fn album_prefetch_uses_current_radius_and_only_the_albums_section() -> color_eyre::Result<()> {
-    let mut test = ArtistAlbumsTest::new(SourceKind::NETEASE, Page::default().limit, true)?;
+    let mut test = ArtistAlbumsTest::new(SourceKind::NETEASE, BATCH_ALBUMS, true)?;
     test.press(KeyCode::Char(']'));
     test.press(KeyCode::Char('G'));
     assert_eq!(test.frame()?.section, ArtistSection::Hot);
-    assert_eq!(test.requested_pages()?, vec![Page::default()]);
+    assert_eq!(test.request_count()?, 1);
     test.back();
     test.press(KeyCode::Char('G'));
-    assert_eq!(test.requested_pages()?, vec![Page::default()]);
+    assert_eq!(test.request_count()?, 1);
     test.press(KeyCode::Char('l'));
     test.press(KeyCode::Char(']'));
     let tree = mineral_config::merge_tree(
@@ -363,11 +372,8 @@ fn album_prefetch_uses_current_radius_and_only_the_albums_section() -> color_eyr
         .apply_config(std::sync::Arc::new(crate::config::tui_from_tree(&tree)?));
     test.frame_mut()?.list_mut().set_sel(25);
     test.press(KeyCode::Char('j'));
-    assert_eq!(test.requested_pages()?, vec![Page::default()]);
+    assert_eq!(test.request_count()?, 1);
     test.press(KeyCode::Char('j'));
-    assert_eq!(
-        test.requested_pages()?,
-        vec![Page::default(), Page::new(30, 30)]
-    );
+    assert_eq!(test.request_count()?, 2);
     Ok(())
 }

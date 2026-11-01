@@ -164,27 +164,27 @@ impl AppState {
                 source,
                 kind,
                 query,
-                page,
+                batch,
                 payload,
-                has_more,
-            } => self.apply_search_results(*source, *kind, query, *page, payload, *has_more),
+                complete,
+            } => self.apply_search_results(*source, *kind, query, *batch, payload, *complete),
             TaskEvent::SearchPageFailed {
                 source,
                 kind,
                 query,
-                page,
-            } => self.apply_search_page_failed(*source, *kind, query, *page),
+                batch,
+            } => self.apply_search_page_failed(*source, *kind, query, *batch),
             TaskEvent::ArtistDetailFetched { id, artist } => self.apply_artist_detail(id, artist),
             TaskEvent::ArtistAlbumsFetched {
                 id,
                 albums,
-                page,
-                has_more,
+                batch,
+                complete,
             } => {
-                self.apply_artist_albums(id, albums, *page, *has_more);
+                self.apply_artist_albums(id, albums, *batch, *complete);
             }
-            TaskEvent::ArtistAlbumsPageFailed { id, page } => {
-                self.apply_artist_albums_page_failed(id, *page);
+            TaskEvent::ArtistAlbumsPageFailed { id, batch } => {
+                self.apply_artist_albums_page_failed(id, *batch);
             }
             TaskEvent::AlbumDetailFetched { id, album, fresh } => {
                 if !*fresh

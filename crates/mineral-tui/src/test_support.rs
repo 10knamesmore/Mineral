@@ -12,7 +12,7 @@ use mineral_client::operation::{Outcome, SubmitError};
 use mineral_client::state::{PlaybackMirror, PlayerMirror};
 use mineral_common::revision::Revision;
 use mineral_model::{
-    MediaUrl, Playlist, PlaylistEntry, PlaylistId, RefreshScope, SearchKind, Song, SongId,
+    Album, MediaUrl, Playlist, PlaylistEntry, PlaylistId, RefreshScope, SearchKind, Song, SongId,
     SourceKind,
 };
 use mineral_protocol::{
@@ -27,7 +27,7 @@ use crate::image::ImageEngine;
 use crate::render::anim::Toggle;
 use crate::render::theme::Theme;
 use crate::runtime::backend::{Backend, BackendBootstrap, Completion, CompletionQueue};
-use crate::runtime::state::{AppState, LyricExtra, View};
+use crate::runtime::state::{AppState, ArtistAlbums, LyricExtra, View};
 use crate::runtime::view_model::{CollectionTrackView, PlaylistView};
 use crate::terminal::ColorReplies;
 
@@ -77,6 +77,13 @@ pub(crate) fn mixed_source_songs() -> Vec<Song> {
     let mut local = with_name(song("l1"), "Local Rip");
     local.id = SongId::new(SourceKind::LOCAL, "l1");
     vec![netease, bilibili, local]
+}
+
+/// 构造已接收首批的艺人专辑展示数据。
+pub(crate) fn artist_albums(albums: Vec<Album>, complete: bool) -> ArtistAlbums {
+    let mut result = ArtistAlbums::default();
+    result.accept_batch(albums, 0, complete);
+    result
 }
 
 /// 按输入顺序枚举 0-based PlaylistEntry，并包成无装饰 CollectionTrackView。
@@ -701,7 +708,6 @@ pub(crate) fn app_in_search_morph(
     cache_browse: bool,
     cache_detail: bool,
 ) -> color_eyre::Result<App> {
-    use mineral_channel_core::Page;
     use mineral_model::{Album, AlbumId};
     use mineral_task::{SearchPayload, TaskEvent};
 
@@ -742,7 +748,7 @@ pub(crate) fn app_in_search_morph(
         source: SourceKind::NETEASE,
         kind: SearchKind::Album,
         query: "q".to_owned(),
-        page: Page::default(),
+        batch: 0,
         payload: SearchPayload::Albums(vec![
             Album::builder()
                 .id(AlbumId::new(SourceKind::NETEASE, "al1"))
@@ -750,7 +756,7 @@ pub(crate) fn app_in_search_morph(
                 .cover_url(Some(url_b.clone()))
                 .build(),
         ]),
-        has_more: None,
+        complete: false,
     });
     if cache_detail {
         app.state
@@ -874,16 +880,12 @@ fn seed_fullscreen(mut app: App) -> App {
 
 /// 造一个**已稳态进入 Search 布局态**、注入单源(NETEASE)caps 的 probed [`App`]。
 ///
-/// `searchable` 决定默认 kind / 可搜性;额外返回 `submit_task` 任务记录(提交断言用)。
+/// `searchable` 决定默认 kind / 可搜性；返回后端以检查任务和订阅命令。
 pub(crate) fn app_with_channel_search_probed(
     searchable: Vec<SearchKind>,
-) -> color_eyre::Result<(App, Arc<Mutex<Vec<TaskKind>>>)> {
-    let submitted = Arc::new(Mutex::new(Vec::new()));
-    let client = TestClient {
-        submitted: Arc::clone(&submitted),
-        ..TestClient::default()
-    };
-    let mut app = test_app_with(Arc::new(client))?;
+) -> color_eyre::Result<(App, Arc<TestClient>)> {
+    let client = Arc::new(TestClient::default());
+    let mut app = test_app_with(client.clone())?;
     app.state.models.caps.insert(
         SourceKind::NETEASE,
         ChannelCaps::builder()
@@ -901,7 +903,7 @@ pub(crate) fn app_with_channel_search_probed(
     active.set(true);
     active.tick();
     app.state.ui.channel_search.active = active;
-    Ok((app, submitted))
+    Ok((app, client))
 }
 
 /// 同 [`app_with_channel_search_probed`],但返回 `queue_ops`——供"detail 起播"类测试断言

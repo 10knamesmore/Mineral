@@ -35,6 +35,7 @@ mod queue;
 mod resolve;
 mod script_bridge;
 mod script_reload;
+mod script_search;
 mod server;
 mod session;
 mod state;

@@ -849,7 +849,6 @@ fn container_action_items(container: ContainerRef) -> Vec<MenuItem> {
 #[cfg(test)]
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use mineral_channel_core::Page;
     use mineral_model::{
         Album, AlbumId, AlbumRef, Artist, ArtistId, MediaUrl, Playlist, PlaylistId, SearchKind,
         SourceKind,
@@ -1475,8 +1474,8 @@ mod tests {
             session.apply_page(
                 SearchKind::Song,
                 SearchPayload::Songs(endserenading(5)),
-                Page::default(),
-                /*has_more*/ None,
+                0,
+                false,
             );
             if let Some(kr) = session.kind_results_mut() {
                 kr.set_sel(2);
@@ -1512,8 +1511,8 @@ mod tests {
             session.apply_page(
                 SearchKind::Song,
                 SearchPayload::Songs(endserenading(5)),
-                Page::default(),
-                /*has_more*/ None,
+                0,
+                false,
             );
         }
         app.state.ui.channel_search.set_focus(SearchFocus::Results);
@@ -1533,8 +1532,8 @@ mod tests {
                         .name("EndSerenading".to_owned())
                         .build(),
                 ]),
-                Page::default(),
-                /*has_more*/ None,
+                0,
+                false,
             );
         }
         app.state.ui.channel_search.set_focus(SearchFocus::Results);
@@ -1568,8 +1567,8 @@ mod tests {
                         .name("EndSerenading".to_owned())
                         .build(),
                 ]),
-                Page::default(),
-                /*has_more*/ None,
+                0,
+                false,
             );
             if let Some(kr) = session.kind_results_mut() {
                 kr.fill_album_detail(&al_id, &album_with_tracks(&al_id, 3), true);

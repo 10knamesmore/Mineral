@@ -10,8 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mineral_channel_core::fetch::finish_fetch;
-use mineral_channel_core::{Error as ChannelError, MusicChannel};
+use mineral_channel_core::{Error as ChannelError, MusicChannel, finish_fetch};
 use mineral_model::{CachePolicy, MediaUrl, Song};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;

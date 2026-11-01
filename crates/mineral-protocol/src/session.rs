@@ -14,7 +14,7 @@
 
 use mineral_audio::AudioSnapshot;
 use mineral_common::revision::Revision;
-use mineral_model::{PlaylistId, Song};
+use mineral_model::{ArtistId, PlaylistId, SearchKind, Song, SourceKind};
 use mineral_task::{Priority, Snapshot};
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,21 @@ impl RequestId {
 /// 一次订阅声明的主题。
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SubscriptionTopic {
+    /// 按需读取某位艺人的专辑列表。
+    ArtistAlbums(ArtistId),
+
+    /// 单次搜索的连续结果；来源内部保留分页位置。
+    Search {
+        /// 搜索来源。
+        source: SourceKind,
+
+        /// 实体类型。
+        kind: SearchKind,
+
+        /// 搜索词。
+        query: String,
+    },
+
     /// 按需读取一个歌单的累计快照；使用 Advance 请求新鲜的下一批或完整内容。
     Playlist(PlaylistId),
 

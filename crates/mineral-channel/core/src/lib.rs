@@ -3,34 +3,30 @@
 //! 任何具体音乐源(网易云、本地、QQ ……)都通过实现 [`MusicChannel`] 接入。
 //! 上层只面向 trait 编程,channel 实现间通过 [`mineral_model`] 中的统一类型互通。
 
-/// channel 能力声明。
-pub mod caps;
-/// Collection snapshots and cache-first producers.
-pub mod collection;
-pub use collection::CollectionStream;
-use collection::fresh_collection;
-/// Shared snapshot streams for lists and details.
-pub mod fetch;
-use fetch::fresh_snapshot;
-pub use fetch::{FetchSnapshot, FetchStream};
-/// channel 公共错误类型与 `Result` 别名。
-pub mod error;
-/// 列表分页参数与单页结果。
-pub mod page;
-pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps};
-pub use error::{Error, Result};
-pub use page::{Page, PageResult};
+mod batch;
+mod caps;
+mod collection;
+mod error;
+mod fetch;
+mod page;
 mod playlist;
-/// Source-scoped storage contracts supplied by the daemon.
+
 pub mod store;
+
+pub use batch::{Batch, BatchStream, page_batches};
+pub use caps::{ArtistSectionKind, ArtistSections, ChannelCaps};
+pub use collection::{CollectionStream, albums_with_cache, fresh_collection, playlists_with_cache};
+pub use error::{BoxError, Error, Result};
+pub use fetch::{FetchSnapshot, FetchStream, finish_fetch, fresh_snapshot};
+pub use page::{Page, PageResult};
 pub use playlist::{PlaylistDetail, finish_playlist};
-use rustc_hash::FxHashSet;
 
 use async_trait::async_trait;
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, CachePolicy, Lyrics, Playlist, PlaylistId, Song, SongId,
     SourceKind, UserId,
 };
+use rustc_hash::FxHashSet;
 
 /// 接入一个音乐源的 channel(连接器)统一接口。
 ///
@@ -47,25 +43,24 @@ pub trait MusicChannel: Send + Sync {
     fn caps(&self) -> ChannelCaps;
 
     // ---------- 搜索 ----------
-    // 返回 [`PageResult`] 而非裸 Vec:榨干与否由源显式表态(`has_more`);上层不应仅凭
-    // 「返回条数 < limit」推断——页码型分页 / 服务端固定页大小的源那样会误判。
-    // 无翻页元信息的源 `Vec::into()` 即可(`has_more = None`,上层回退条数推断)。
+    // 来源拥有分页进度，调用者每次消费只请求一批；完整性由来源判断。
+    // 错误保留当前位置，再次消费才重试；丢弃流结束本次搜索。
 
     /// 搜索单曲(可选)。
-    async fn search_songs(&self, _query: &str, _page: Page) -> Result<PageResult<Song>> {
-        Err(Error::NotSupported)
+    fn search_songs<'a>(&'a self, _query: &'a str) -> BatchStream<'a, Song> {
+        page_batches(|_page| async { Err(Error::NotSupported) })
     }
     /// 搜索专辑(可选)。
-    async fn search_albums(&self, _query: &str, _page: Page) -> Result<PageResult<Album>> {
-        Err(Error::NotSupported)
+    fn search_albums<'a>(&'a self, _query: &'a str) -> BatchStream<'a, Album> {
+        page_batches(|_page| async { Err(Error::NotSupported) })
     }
     /// 搜索歌单(可选)。
-    async fn search_playlists(&self, _query: &str, _page: Page) -> Result<PageResult<Playlist>> {
-        Err(Error::NotSupported)
+    fn search_playlists<'a>(&'a self, _query: &'a str) -> BatchStream<'a, Playlist> {
+        page_batches(|_page| async { Err(Error::NotSupported) })
     }
     /// 搜索艺人(可选)。
-    async fn search_artists(&self, _query: &str, _page: Page) -> Result<PageResult<Artist>> {
-        Err(Error::NotSupported)
+    fn search_artists<'a>(&'a self, _query: &'a str) -> BatchStream<'a, Artist> {
+        page_batches(|_page| async { Err(Error::NotSupported) })
     }
 
     // ---------- 详情 ----------
@@ -98,16 +93,10 @@ pub trait MusicChannel: Send + Sync {
         Err(Error::NotSupported)
     }
 
-    /// 拉取艺人的专辑列表(分页,可选)。
-    ///
-    /// # Params:
-    ///   - `id`: 艺人
-    ///   - `page`: 分页参数
-    ///
-    /// # Return:
-    ///   一页专辑及翻页信号；`tracks` 留空，曲目按需走 [`Self::album_detail`]。
-    async fn artist_albums(&self, _id: &ArtistId, _page: Page) -> Result<PageResult<Album>> {
-        Err(Error::NotSupported)
+    /// 按需读取艺人专辑；来源持有分页进度，失败后再次消费重试当前批次。
+    /// `tracks` 留空，曲目按需走 [`Self::album_detail`]。
+    fn artist_albums<'a>(&'a self, _id: &'a ArtistId) -> BatchStream<'a, Album> {
+        page_batches(|_page| async { Err(Error::NotSupported) })
     }
 
     // ---------- 歌单管理(可选写操作) ----------

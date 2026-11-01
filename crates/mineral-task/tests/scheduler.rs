@@ -5,11 +5,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use mineral_channel_core::collection::fresh_collection;
-use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
-    ChannelCaps, CollectionStream, Error, FetchStream, MusicChannel, Page, PageResult,
-    PlaylistDetail, Result,
+    BatchStream, ChannelCaps, CollectionStream, Error, FetchStream, MusicChannel, PageResult,
+    PlaylistDetail, Result, fresh_collection, fresh_snapshot, page_batches,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -80,16 +78,12 @@ impl MusicChannel for FakeChannel {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> Result<PageResult<Song>> {
-        self.page_started.add_permits(1);
-        self.maybe_wait().await;
-        Ok(PageResult::new(Vec::new(), false))
-    }
-    async fn search_albums(&self, _q: &str, _p: Page) -> Result<PageResult<Album>> {
-        Err(Error::NotSupported)
-    }
-    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<PageResult<Playlist>> {
-        Err(Error::NotSupported)
+    fn search_songs<'a>(&'a self, _q: &'a str) -> BatchStream<'a, Song> {
+        page_batches(move |_p| async move {
+            self.page_started.add_permits(1);
+            self.maybe_wait().await;
+            Ok(PageResult::new(Vec::new(), false))
+        })
     }
     async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
@@ -110,10 +104,12 @@ impl MusicChannel for FakeChannel {
             ))
         })
     }
-    async fn artist_albums(&self, _id: &ArtistId, _page: Page) -> Result<PageResult<Album>> {
-        self.page_started.add_permits(1);
-        self.maybe_wait().await;
-        self.artist_albums.clone().ok_or(Error::NotSupported)
+    fn artist_albums<'a>(&'a self, _id: &'a ArtistId) -> BatchStream<'a, Album> {
+        page_batches(move |_page| async move {
+            self.page_started.add_permits(1);
+            self.maybe_wait().await;
+            self.artist_albums.clone().ok_or(Error::NotSupported)
+        })
     }
     async fn lyrics(&self, _id: &SongId) -> Result<Lyrics> {
         self.maybe_wait().await;
@@ -274,13 +270,11 @@ async fn search_failure_emits_request_and_fetch_done() -> color_eyre::Result<()>
     let source = SourceKind::NETEASE;
     let kind = SearchKind::Album;
     let query = "续页失败".to_owned();
-    let page = Page::new(60, 20);
     let h = sched.submit(
         TaskKind::ChannelFetch(ChannelFetchKind::Search {
             source,
             kind,
             query: query.clone(),
-            page,
         }),
         Priority::User,
     );
@@ -292,7 +286,7 @@ async fn search_failure_emits_request_and_fetch_done() -> color_eyre::Result<()>
         source,
         kind,
         query,
-        page,
+        batch: 0,
     }));
     assert!(events.iter().any(|event| matches!(
         event,
@@ -319,13 +313,11 @@ async fn search_cancellation_emits_request_before_and_during_execution() -> colo
         let source = SourceKind::NETEASE;
         let kind = SearchKind::Song;
         let query = "取消续页".to_owned();
-        let page = Page::new(90, 15);
         let h = sched.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::Search {
                 source,
                 kind,
                 query: query.clone(),
-                page,
             }),
             Priority::User,
         );
@@ -352,7 +344,7 @@ async fn search_cancellation_emits_request_before_and_during_execution() -> colo
             source,
             kind,
             query,
-            page,
+            batch: 0,
         }));
         assert!(events.iter().any(|event| matches!(
             event,
@@ -377,13 +369,11 @@ async fn successful_search_emits_results_without_failure() -> color_eyre::Result
     let source = SourceKind::NETEASE;
     let kind = SearchKind::Song;
     let query = "成功续页".to_owned();
-    let page = Page::new(40, 10);
     let h = sched.submit(
         TaskKind::ChannelFetch(ChannelFetchKind::Search {
             source,
             kind,
             query: query.clone(),
-            page,
         }),
         Priority::User,
     );
@@ -395,9 +385,9 @@ async fn successful_search_emits_results_without_failure() -> color_eyre::Result
         source,
         kind,
         query,
-        page,
+        batch: 0,
         payload: SearchPayload::Songs(Vec::new()),
-        has_more: Some(false),
+        complete: true,
     }));
     assert!(events.iter().any(|event| matches!(
         event,
@@ -418,7 +408,7 @@ async fn successful_search_emits_results_without_failure() -> color_eyre::Result
     Ok(())
 }
 
-/// 艺人专辑页的三种翻页状态与非空载荷原样到达 client，成功不能额外发失败事件。
+/// 来源的三种分页信号转换为批次完成状态，成功不能额外发失败事件。
 #[tokio::test]
 async fn artist_albums_preserve_page_metadata() -> color_eyre::Result<()> {
     for has_more in [Some(true), Some(false), None] {
@@ -437,12 +427,8 @@ async fn artist_albums_preserve_page_metadata() -> color_eyre::Result<()> {
         let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1, &[], None);
         let id = ArtistId::new(SourceKind::NETEASE, "artist1");
         let artist_ref = id.qualified();
-        let page = Page::new(60, 20);
         let h = sched.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
-                id: id.clone(),
-                page,
-            }),
+            TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums { id: id.clone() }),
             Priority::User,
         );
         assert_eq!(h.done().await, TaskOutcome::Ok);
@@ -451,9 +437,9 @@ async fn artist_albums_preserve_page_metadata() -> color_eyre::Result<()> {
         assert_eq!(events.len(), 2, "专辑页结果 + FetchDone: {events:?}");
         assert!(events.contains(&TaskEvent::ArtistAlbumsFetched {
             id,
-            page,
+            batch: 0,
             albums,
-            has_more,
+            complete: has_more != Some(true),
         }));
         assert!(events.iter().any(|event| matches!(
             event,
@@ -470,25 +456,21 @@ async fn artist_albums_preserve_page_metadata() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 艺人专辑页失败时回带艺人和分页请求，且保留失败埋点。
+/// 艺人专辑读取失败时回带艺人和批次，且保留失败埋点。
 #[tokio::test]
 async fn artist_albums_failure_emits_request_and_fetch_done() -> color_eyre::Result<()> {
     let sched = Scheduler::new(&channels(None), /*workers_per_channel*/ 1, &[], None);
     let id = ArtistId::new(SourceKind::NETEASE, "artist1");
     let artist_ref = id.qualified();
-    let page = Page::new(60, 20);
     let h = sched.submit(
-        TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
-            id: id.clone(),
-            page,
-        }),
+        TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums { id: id.clone() }),
         Priority::User,
     );
     assert_eq!(h.done().await, TaskOutcome::Failed);
 
     let events = sched.drain_events();
     assert_eq!(events.len(), 2, "专辑页失败事件 + FetchDone: {events:?}");
-    assert!(events.contains(&TaskEvent::ArtistAlbumsPageFailed { id, page }));
+    assert!(events.contains(&TaskEvent::ArtistAlbumsPageFailed { id, batch: 0 }));
     assert!(events.iter().any(|event| matches!(
         event,
         TaskEvent::FetchDone {
@@ -513,12 +495,8 @@ async fn artist_albums_cancel_before_and_during_execution() -> color_eyre::Resul
         let sched = Scheduler::new(&[channel], /*workers_per_channel*/ 1, &[], None);
         let id = ArtistId::new(SourceKind::NETEASE, "artist1");
         let artist_ref = id.qualified();
-        let page = Page::new(90, 15);
         let h = sched.submit(
-            TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums {
-                id: id.clone(),
-                page,
-            }),
+            TaskKind::ChannelFetch(ChannelFetchKind::ArtistAlbums { id: id.clone() }),
             Priority::User,
         );
         if cancel_while_running {
@@ -540,7 +518,7 @@ async fn artist_albums_cancel_before_and_during_execution() -> color_eyre::Resul
 
         let events = sched.drain_events();
         assert_eq!(events.len(), 2, "专辑页取消事件 + FetchDone: {events:?}");
-        assert!(events.contains(&TaskEvent::ArtistAlbumsPageFailed { id, page }));
+        assert!(events.contains(&TaskEvent::ArtistAlbumsPageFailed { id, batch: 0 }));
         assert!(events.iter().any(|event| matches!(
             event,
             TaskEvent::FetchDone {
@@ -583,15 +561,6 @@ impl MusicChannel for WriteRecorder {
             .build()
     }
 
-    async fn search_songs(&self, _q: &str, _p: Page) -> Result<PageResult<Song>> {
-        Err(Error::NotSupported)
-    }
-    async fn search_albums(&self, _q: &str, _p: Page) -> Result<PageResult<Album>> {
-        Err(Error::NotSupported)
-    }
-    async fn search_playlists(&self, _q: &str, _p: Page) -> Result<PageResult<Playlist>> {
-        Err(Error::NotSupported)
-    }
     async fn songs_detail(&self, _ids: &[SongId], _cache: CachePolicy) -> Result<Vec<Song>> {
         Err(Error::NotSupported)
     }

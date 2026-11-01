@@ -8,15 +8,16 @@ use async_stream::try_stream;
 use futures_util::StreamExt;
 use mineral_channel_core::store::{LibraryStore, NamespaceStore};
 use mineral_channel_core::{
-    Error as ChannelError, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail,
+    BatchStream, Error as ChannelError, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail,
 };
-use mineral_model::{PlaylistId, RefreshScope};
+use mineral_model::{Album, ArtistId, PlaylistId, RefreshScope, SearchKind, SourceKind};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::ChannelFetchKind;
+use crate::SearchStream;
 use crate::TaskOutcome;
 use crate::event::TaskEvent;
 use crate::handle::TaskHandle;
@@ -125,6 +126,21 @@ pub struct Snapshot {
 }
 
 impl Scheduler {
+    /// 创建艺人专辑流，消费方通过 run_channel 推进。
+    pub fn artist_albums_stream(&self, id: ArtistId) -> BatchStream<'static, Album> {
+        self.inner.channel_fetch.artist_albums(id)
+    }
+
+    /// 创建来源持有进度的搜索流；消费方通过 run_channel 推进。
+    pub fn search_stream(
+        &self,
+        source: SourceKind,
+        kind: SearchKind,
+        query: String,
+    ) -> SearchStream<'static> {
+        self.inner.channel_fetch.search(source, kind, query)
+    }
+
     /// Runs an operation in the source's priority queue. The caller owns its state between calls.
     /// Cancelling the returned future releases the execution turn.
     pub async fn run_channel<T, E>(

@@ -1,6 +1,5 @@
 //! 任务推到 client 的事件载荷。
 
-use mineral_channel_core::Page;
 use mineral_model::{
     Album, AlbumId, Artist, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId,
     SourceKind,
@@ -98,10 +97,7 @@ pub enum TaskEvent {
         count: Option<u32>,
     },
 
-    /// `Search` 任务成功:一页搜索结果已到。
-    ///
-    /// 回带完整请求四元组,client 据此配对到对应搜索会话;query 已变的
-    /// 过期响应由 client 直接丢弃。
+    /// 搜索批次已到；按来源、类型和搜索词匹配会话。
     SearchResults {
         /// 来源(source)。
         source: SourceKind,
@@ -112,21 +108,17 @@ pub enum TaskEvent {
         /// 关键词。
         query: String,
 
-        /// 分页参数。
-        page: Page,
+        /// 本次搜索中从零开始的批次序号，不是远端偏移。
+        batch: u64,
 
         /// 结果载荷(变体与 `kind` 一致)。
         payload: SearchPayload,
 
-        /// channel 的显式翻页信号(`PageResult::has_more` 透传):`None` = 源不知道,
-        /// client 回退「返回条数 < limit 即榨干」推断。
-        #[serde(default)]
-        has_more: Option<bool>,
+        /// 来源已经没有更多结果。
+        complete: bool,
     },
 
-    /// `Search` 任务失败或取消，client 据此释放对应请求的待收取页标记。
-    ///
-    /// 回带与 [`TaskEvent::SearchResults`] 相同的请求四元组，不携带内部错误文本。
+    /// 搜索推进失败，下一次需求重试当前批次。
     SearchPageFailed {
         /// 来源(source)。
         source: SourceKind,
@@ -137,8 +129,8 @@ pub enum TaskEvent {
         /// 关键词。
         query: String,
 
-        /// 分页参数。
-        page: Page,
+        /// 失败批次的序号。
+        batch: u64,
     },
 
     /// `ArtistDetail` 任务成功:artist 简介 + 热门曲目已到。
@@ -150,30 +142,28 @@ pub enum TaskEvent {
         artist: Box<Artist>,
     },
 
-    /// `ArtistAlbums` 任务成功:artist 的一页专辑列表已到。
+    /// 艺人专辑的一批结果已到。
     ArtistAlbumsFetched {
         /// artist id。
         id: ArtistId,
 
-        /// 分页参数(client 配对翻页用)。
-        page: Page,
+        /// 从零开始的批次序号，不是远端偏移。
+        batch: u64,
 
         /// 专辑列表(曲目留空)。
         albums: Vec<Album>,
 
-        /// channel 的翻页信号；`None` 时 client 按返回条数与请求 `limit` 判断末页。
-        has_more: Option<bool>,
+        /// 来源已经没有后续专辑。
+        complete: bool,
     },
 
-    /// `ArtistAlbums` 任务失败或取消，client 据此释放对应艺人、页请求的待收取标记。
-    ///
-    /// 回带与 [`TaskEvent::ArtistAlbumsFetched`] 相同的艺人和分页参数，不携带内部错误文本。
+    /// 艺人专辑推进失败，下一次需求重试当前批次。
     ArtistAlbumsPageFailed {
         /// 艺人 id，包含来源身份。
         id: ArtistId,
 
-        /// 失败或取消的分页请求。
-        page: Page,
+        /// 失败批次的序号。
+        batch: u64,
     },
 
     /// 专辑完整详情快照(元信息 + 曲目)已到；fresh 表示本次读取已确认有效。

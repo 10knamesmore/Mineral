@@ -5,9 +5,8 @@ use std::time::Duration;
 
 use crate::persistence::ServerStore;
 use async_trait::async_trait;
-use mineral_channel_core::collection::fresh_collection;
-use mineral_channel_core::{ChannelCaps, CollectionStream, Error, MusicChannel, Page, PageResult};
-use mineral_model::{Album, CachePolicy, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
+use mineral_channel_core::{ChannelCaps, CollectionStream, Error, MusicChannel, fresh_collection};
+use mineral_model::{CachePolicy, Lyrics, Playlist, PlaylistId, Song, SongId, SourceKind};
 use mineral_test::song;
 use pretty_assertions::assert_eq;
 
@@ -52,27 +51,6 @@ impl MusicChannel for WritableChannel {
             .build()
     }
 
-    async fn search_songs(
-        &self,
-        _q: &str,
-        _p: Page,
-    ) -> mineral_channel_core::Result<PageResult<Song>> {
-        Err(Error::NotSupported)
-    }
-    async fn search_albums(
-        &self,
-        _q: &str,
-        _p: Page,
-    ) -> mineral_channel_core::Result<PageResult<Album>> {
-        Err(Error::NotSupported)
-    }
-    async fn search_playlists(
-        &self,
-        _q: &str,
-        _p: Page,
-    ) -> mineral_channel_core::Result<PageResult<Playlist>> {
-        Err(Error::NotSupported)
-    }
     async fn songs_detail(
         &self,
         _ids: &[SongId],

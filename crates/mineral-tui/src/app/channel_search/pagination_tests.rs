@@ -1,22 +1,26 @@
 //! 搜索续页的按键、请求与回包时序回归。
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use color_eyre::eyre::eyre;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use mineral_channel_core::Page;
 use mineral_model::{SearchKind, Song, SongId, SourceKind};
-use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
+use mineral_protocol::{SubscriptionDemand, SubscriptionTopic};
+use mineral_task::{SearchPayload, TaskEvent};
+use rustc_hash::FxHashSet;
 
 use crate::App;
+use crate::test_support::TestClient;
+
+const BATCH_SONGS: u64 = 30;
 
 /// 真实按键入口与后端请求探针；回包由测试显式投递以控制收包时序。
 struct SearchTest {
     /// 已进入 Search、收到首页的应用。
     app: App,
 
-    /// 后端收到的全部任务，探针不做 scheduler 去重。
-    submitted: Arc<Mutex<Vec<TaskKind>>>,
+    /// 后端收到的订阅和推进命令。
+    submitted: Arc<TestClient>,
 }
 
 impl SearchTest {
@@ -29,7 +33,7 @@ impl SearchTest {
         let mut test = Self { app, submitted };
         test.press(KeyCode::Char('q'));
         test.press(KeyCode::Enter);
-        test.app.state.apply(&results(Page::default(), true));
+        test.app.state.apply(&results(0, true));
         Ok(test)
     }
 
@@ -39,26 +43,31 @@ impl SearchTest {
             .handle_event(&Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
     }
 
-    /// 读取已发出的搜索分页参数，排除首页和详情任务。
-    fn requested_pages(&self) -> color_eyre::Result<Vec<Page>> {
-        Ok(self
+    /// 排除每个订阅的首批，核对后续请求确实复用该订阅。
+    fn requested_queries(&self) -> color_eyre::Result<Vec<String>> {
+        let subscriptions = self
             .submitted
+            .subscriptions
             .lock()
-            .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
-            .iter()
-            .filter_map(|task| match task {
-                TaskKind::ChannelFetch(ChannelFetchKind::Search { page, .. })
-                    if page.offset > 0 =>
-                {
-                    Some(*page)
-                }
-                _ => None,
-            })
-            .collect())
+            .map_err(|e| eyre!("{e}"))?;
+        let requests = self.submitted.advances.lock().map_err(|e| eyre!("{e}"))?;
+        let mut seen = FxHashSet::default();
+        let mut queries = Vec::new();
+        for request in requests.iter() {
+            assert_eq!(request.demand, SubscriptionDemand::Next);
+            if !seen.insert(request.subscription)
+                && let Some((_, SubscriptionTopic::Search { query, .. })) = subscriptions
+                    .iter()
+                    .find(|(id, _)| *id == request.subscription)
+            {
+                queries.push(query.clone());
+            }
+        }
+        Ok(queries)
     }
 
     /// 核对完整结果顺序；重复追加或缺页均会改变 ID 序列。
-    fn assert_song_ids(&self, end: u32) -> color_eyre::Result<()> {
+    fn assert_song_ids(&self, end: u64) -> color_eyre::Result<()> {
         let SearchPayload::Songs(songs) = &self
             .app
             .state
@@ -79,19 +88,20 @@ impl SearchTest {
 }
 
 /// 按页内绝对位置生成歌曲身份，用于检查跨页顺序。
-fn song_id(index: u32) -> SongId {
+fn song_id(index: u64) -> SongId {
     SongId::new(SourceKind::NETEASE, format!("result-{index}"))
 }
 
-/// 一页搜索结果，ID 区间与请求 offset 对齐。
-fn results(page: Page, has_more: bool) -> TaskEvent {
+/// 每批使用独立的歌曲 ID 区间。
+fn results(batch: u64, has_more: bool) -> TaskEvent {
+    let start = batch * BATCH_SONGS;
     TaskEvent::SearchResults {
         source: SourceKind::NETEASE,
         kind: SearchKind::Song,
         query: "q".to_owned(),
-        page,
+        batch,
         payload: SearchPayload::Songs(
-            (page.offset..page.offset + page.limit)
+            (start..start + BATCH_SONGS)
                 .map(|index| {
                     Song::builder()
                         .id(song_id(index))
@@ -100,17 +110,17 @@ fn results(page: Page, has_more: bool) -> TaskEvent {
                 })
                 .collect(),
         ),
-        has_more: Some(has_more),
+        complete: !has_more,
     }
 }
 
-/// 连按期间仅发一页；重复、超前或 limit 不符的回包既不追加，也不释放正在等待的下一页。
+/// 连按期间仅推进一次；重复或超前的回包不追加，也不释放当前等待。
 #[test]
 fn repeated_navigation_and_duplicate_replies_do_not_skip_pages() -> color_eyre::Result<()> {
     let mut test = SearchTest::new()?;
-    let limit = Page::default().limit;
-    let second = Page::new(limit, limit);
-    let third = Page::new(2 * limit, limit);
+    let limit = BATCH_SONGS;
+    let second = 1;
+    let third = 2;
     let second_result = results(second, true);
     test.app.state.apply(&second_result);
     test.assert_song_ids(limit)?;
@@ -119,30 +129,27 @@ fn repeated_navigation_and_duplicate_replies_do_not_skip_pages() -> color_eyre::
     for key in ['k', 'j', 'G', 'j'] {
         test.press(KeyCode::Char(key));
     }
-    assert_eq!(test.requested_pages()?, vec![second]);
+    assert_eq!(test.requested_queries()?, vec!["q"]);
 
     test.app.state.apply(&results(third, false));
-    test.app
-        .state
-        .apply(&results(Page::new(limit, limit + 1), false));
     test.press(KeyCode::Char('G'));
-    assert_eq!(test.requested_pages()?, vec![second]);
+    assert_eq!(test.requested_queries()?, vec!["q"]);
     test.assert_song_ids(limit)?;
 
     test.app.state.apply(&second_result);
     test.app.state.apply(&second_result);
     test.assert_song_ids(2 * limit)?;
     test.press(KeyCode::Char('G'));
-    assert_eq!(test.requested_pages()?, vec![second, third]);
+    assert_eq!(test.requested_queries()?, vec!["q", "q"]);
     test.app.state.apply(&second_result);
     test.press(KeyCode::Char('j'));
-    assert_eq!(test.requested_pages()?, vec![second, third]);
+    assert_eq!(test.requested_queries()?, vec!["q", "q"]);
     test.assert_song_ids(2 * limit)?;
 
     test.app.state.apply(&results(third, false));
     test.press(KeyCode::Char('G'));
     test.assert_song_ids(3 * limit)?;
-    assert_eq!(test.requested_pages()?, vec![second, third]);
+    assert_eq!(test.requested_queries()?, vec!["q", "q"]);
     Ok(())
 }
 
@@ -150,28 +157,23 @@ fn repeated_navigation_and_duplicate_replies_do_not_skip_pages() -> color_eyre::
 #[test]
 fn failed_page_retries_without_advancing_or_clearing_other_requests() -> color_eyre::Result<()> {
     let mut test = SearchTest::new()?;
-    let limit = Page::default().limit;
-    let second = Page::new(limit, limit);
+    let limit = BATCH_SONGS;
+    let second = 1;
     test.press(KeyCode::Char('G'));
-    for (source, kind, query, page) in [
+    for (source, kind, query, batch) in [
         (SourceKind::BILIBILI, SearchKind::Song, "q", second),
         (SourceKind::NETEASE, SearchKind::Album, "q", second),
         (SourceKind::NETEASE, SearchKind::Song, "old", second),
-        (
-            SourceKind::NETEASE,
-            SearchKind::Song,
-            "q",
-            Page::new(2 * limit, limit),
-        ),
+        (SourceKind::NETEASE, SearchKind::Song, "q", 2),
     ] {
         test.app.state.apply(&TaskEvent::SearchPageFailed {
             source,
             kind,
             query: query.to_owned(),
-            page,
+            batch,
         });
         test.press(KeyCode::Char('j'));
-        assert_eq!(test.requested_pages()?, vec![second]);
+        assert_eq!(test.requested_queries()?, vec!["q"]);
     }
     test.app
         .state
@@ -182,7 +184,7 @@ fn failed_page_retries_without_advancing_or_clearing_other_requests() -> color_e
         source: SourceKind::NETEASE,
         kind: SearchKind::Song,
         query: "q".to_owned(),
-        page: second,
+        batch: second,
     };
     test.app.state.apply(&failure);
     test.app
@@ -192,13 +194,13 @@ fn failed_page_retries_without_advancing_or_clearing_other_requests() -> color_e
         .select_kind(SearchKind::Song);
     test.assert_song_ids(limit)?;
     test.press(KeyCode::Char('G'));
-    assert_eq!(test.requested_pages()?, vec![second, second]);
+    assert_eq!(test.requested_queries()?, vec!["q", "q"]);
     test.app.state.apply(&results(second, true));
     test.press(KeyCode::Char('G'));
-    let third = Page::new(2 * limit, limit);
+    let third = 2;
     test.app.state.apply(&failure);
     test.press(KeyCode::Char('j'));
-    assert_eq!(test.requested_pages()?, vec![second, second, third]);
+    assert_eq!(test.requested_queries()?, vec!["q", "q", "q"]);
     test.app.state.apply(&results(third, false));
     test.assert_song_ids(3 * limit)?;
     Ok(())
@@ -208,8 +210,8 @@ fn failed_page_retries_without_advancing_or_clearing_other_requests() -> color_e
 #[test]
 fn pending_page_survives_source_and_kind_switches() -> color_eyre::Result<()> {
     let mut test = SearchTest::new()?;
-    let limit = Page::default().limit;
-    let second = Page::new(limit, limit);
+    let limit = BATCH_SONGS;
+    let second = 1;
     test.press(KeyCode::Char('G'));
     let caps = test
         .app
@@ -249,10 +251,7 @@ fn pending_page_survives_source_and_kind_switches() -> color_eyre::Result<()> {
         .select_kind(SearchKind::Song);
     test.assert_song_ids(2 * limit)?;
     test.press(KeyCode::Char('G'));
-    assert_eq!(
-        test.requested_pages()?,
-        vec![second, Page::new(2 * limit, limit)]
-    );
+    assert_eq!(test.requested_queries()?, vec!["q", "q"]);
     Ok(())
 }
 
@@ -260,13 +259,13 @@ fn pending_page_survives_source_and_kind_switches() -> color_eyre::Result<()> {
 #[test]
 fn editing_query_discards_pending_page_and_old_replies() -> color_eyre::Result<()> {
     let mut test = SearchTest::new()?;
-    let limit = Page::default().limit;
-    let second = Page::new(limit, limit);
+    let limit = BATCH_SONGS;
+    let second = 1;
     test.press(KeyCode::Char('G'));
     test.press(KeyCode::Char('/'));
     test.press(KeyCode::Char('x'));
     test.press(KeyCode::Enter);
-    let mut first = results(Page::default(), true);
+    let mut first = results(0, true);
     if let TaskEvent::SearchResults { query, .. } = &mut first {
         *query = "qx".to_owned();
     }
@@ -277,11 +276,11 @@ fn editing_query_discards_pending_page_and_old_replies() -> color_eyre::Result<(
         source: SourceKind::NETEASE,
         kind: SearchKind::Song,
         query: "q".to_owned(),
-        page: second,
+        batch: second,
     });
     test.press(KeyCode::Char('j'));
     test.assert_song_ids(limit)?;
-    assert_eq!(test.requested_pages()?, vec![second, second]);
+    assert_eq!(test.requested_queries()?, vec!["q", "qx"]);
     let mut next = results(second, false);
     if let TaskEvent::SearchResults { query, .. } = &mut next {
         *query = "qx".to_owned();

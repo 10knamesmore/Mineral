@@ -998,12 +998,11 @@ mod tests {
         Ok(())
     }
 
-    /// Enter 提交 `ChannelFetchKind::Search`(源/kind/query/page 正确),焦点落结果列。
+    /// Enter 建立搜索订阅并推进首批，焦点落结果列。
     #[test]
     fn enter_submits_search_task_and_focuses_results() -> color_eyre::Result<()> {
         use color_eyre::eyre::eyre;
-        use mineral_channel_core::Page;
-        use mineral_task::{ChannelFetchKind, TaskKind};
+        use mineral_protocol::SubscriptionTopic;
 
         use crate::runtime::state::SearchFocus;
 
@@ -1014,25 +1013,25 @@ mod tests {
         }
         press(&mut app, KeyCode::Enter);
 
-        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
-        let submitted_search = tasks.iter().find_map(|k| match k {
-            TaskKind::ChannelFetch(ChannelFetchKind::Search {
+        let subscriptions = submitted.subscriptions.lock().map_err(|e| eyre!("{e}"))?;
+        let submitted_search = subscriptions.iter().find_map(|(_, topic)| match topic {
+            SubscriptionTopic::Search {
                 source,
                 kind,
                 query,
-                page,
-            }) => Some((*source, *kind, query.clone(), *page)),
+            } => Some((*source, *kind, query.clone())),
             _ => None,
         });
         assert_eq!(
             submitted_search,
-            Some((
-                SourceKind::NETEASE,
-                SearchKind::Song,
-                "hello".to_owned(),
-                Page::new(/*offset*/ 0, /*limit*/ 30)
-            )),
-            "Enter 提交首页 Search 任务"
+            Some((SourceKind::NETEASE, SearchKind::Song, "hello".to_owned())),
+            "Enter 订阅指定搜索"
+        );
+        let advances = submitted.advances.lock().map_err(|e| eyre!("{e}"))?;
+        assert_eq!(advances.len(), 1);
+        assert_eq!(
+            advances.first().map(|advance| advance.subscription),
+            subscriptions.first().map(|(id, _)| *id)
         );
         assert_eq!(
             app.state.ui.channel_search.focus,
@@ -1044,7 +1043,6 @@ mod tests {
 
     /// 造一个已提交并落了 `n` 首结果、焦点在结果列的 App(j/k 导航测试前置)。
     fn app_with_results(n: usize) -> color_eyre::Result<App> {
-        use mineral_channel_core::Page;
         use mineral_task::{SearchPayload, TaskEvent};
 
         use crate::test_support::endserenading;
@@ -1057,9 +1055,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Song,
             query: "x".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Songs(endserenading(n)),
-            has_more: None,
+            complete: true,
         });
         Ok(app)
     }
@@ -1109,12 +1107,11 @@ mod tests {
         Ok(())
     }
 
-    /// 结果列光标进入预取半径后请求下一页；收包前连续移动只提交一次，页大小沿用首页。
+    /// 结果列光标进入预取半径后推进原订阅；收包前连续移动只提交一次。
     #[test]
     fn results_prefetch_dispatches_next_page_near_bottom() -> color_eyre::Result<()> {
         use color_eyre::eyre::eyre;
-        use mineral_channel_core::Page;
-        use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
+        use mineral_task::{SearchPayload, TaskEvent};
 
         use crate::test_support::endserenading;
 
@@ -1122,45 +1119,30 @@ mod tests {
             crate::test_support::app_with_channel_search_probed(vec![SearchKind::Song])?;
         press(&mut app, KeyCode::Char('x'));
         press(&mut app, KeyCode::Enter);
-        // 满页(loaded == limit)→ 未榨干、next_offset = 10。
         app.state.apply(&TaskEvent::SearchResults {
             source: SourceKind::NETEASE,
             kind: SearchKind::Song,
             query: "x".to_owned(),
-            page: Page::new(/*offset*/ 0, /*limit*/ 10),
+            batch: 0,
             payload: SearchPayload::Songs(endserenading(10)),
-            has_more: None,
+            complete: false,
         });
 
-        let requested_pages = |tasks: &[TaskKind]| {
-            tasks
-                .iter()
-                .filter_map(|k| match k {
-                    TaskKind::ChannelFetch(ChannelFetchKind::Search { page, .. })
-                        if page.offset > 0 =>
-                    {
-                        Some(*page)
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        };
+        assert_eq!(
+            submitted.advances.lock().map_err(|e| eyre!("{e}"))?.len(),
+            1,
+            "顶部不续读"
+        );
 
-        // 顶部、未移动:不预取下一页。
-        {
-            let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
-            assert!(requested_pages(&tasks).is_empty(), "顶部不预取下一页");
-        }
-
-        // 光标连按下移到底 → 进入距底范围 → 预取 offset = next_offset(10)的下一页。
+        // 光标连续下移，只有第一次进入预取范围时推进。
         for _ in 0..9 {
             press(&mut app, KeyCode::Char('j'));
         }
-        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
+        let advances = submitted.advances.lock().map_err(|e| eyre!("{e}"))?;
+        assert_eq!(advances.len(), 2, "首批之后只推进一次");
         assert_eq!(
-            requested_pages(&tasks),
-            vec![Page::new(10, 10)],
-            "光标近底只请求一次下一页，offset 和 limit 沿用首页分页"
+            advances.first().map(|a| a.subscription),
+            advances.last().map(|a| a.subscription)
         );
         Ok(())
     }
@@ -1183,8 +1165,8 @@ mod tests {
             SearchFocus::Results,
             "Tab 切到上次面板(默认 results)"
         );
-        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
-        assert!(tasks.is_empty(), "Tab 只切不搜:无 Search 任务提交");
+        let subscriptions = submitted.subscriptions.lock().map_err(|e| eyre!("{e}"))?;
+        assert!(subscriptions.is_empty(), "Tab 只切不搜");
         Ok(())
     }
 
@@ -1304,7 +1286,7 @@ mod tests {
     fn confirm_kind_auto_searches_empty_bucket() -> color_eyre::Result<()> {
         use color_eyre::eyre::eyre;
 
-        use mineral_task::{ChannelFetchKind, TaskKind};
+        use mineral_protocol::SubscriptionTopic;
 
         let (mut app, submitted) = crate::test_support::app_with_channel_search_probed(vec![
             SearchKind::Song,
@@ -1315,14 +1297,14 @@ mod tests {
         press(&mut app, KeyCode::Left); // 跨到 kind chip(下拉开,高亮当前 Song)
         press(&mut app, KeyCode::Down); // 高亮 Album
         press(&mut app, KeyCode::Enter); // 确认 → 自动搜 Album
-        let tasks = submitted.lock().map_err(|e| eyre!("探针锁中毒: {e}"))?;
+        let subscriptions = submitted.subscriptions.lock().map_err(|e| eyre!("{e}"))?;
         assert!(
-            tasks.iter().any(|t| matches!(
-                t,
-                TaskKind::ChannelFetch(ChannelFetchKind::Search {
+            subscriptions.iter().any(|(_, topic)| matches!(
+                topic,
+                SubscriptionTopic::Search {
                     kind: SearchKind::Album,
                     ..
-                })
+                }
             )),
             "确认无缓存 kind + query 非空 → 自动搜 Album"
         );
@@ -1340,7 +1322,6 @@ mod tests {
     /// artist detail:[ ] 切专辑区、activate 专辑下钻一帧、Esc 弹回 root。
     #[test]
     fn artist_detail_section_drill_and_back() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
         use mineral_model::{Artist, ArtistId};
         use mineral_task::{SearchPayload, TaskEvent};
 
@@ -1362,9 +1343,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Artist,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Artists(vec![artist(Vec::new())]),
-            has_more: None,
+            complete: true,
         });
         let id = ArtistId::new(SourceKind::NETEASE, "ar1");
         app.state.apply(&TaskEvent::ArtistDetailFetched {
@@ -1373,9 +1354,9 @@ mod tests {
         });
         app.state.apply(&TaskEvent::ArtistAlbumsFetched {
             id,
-            page: Page::default(),
+            batch: 0,
             albums: vec![test_album("a1"), test_album("a2")],
-            has_more: None,
+            complete: true,
         });
         app.state.ui.channel_search.set_focus(SearchFocus::Results);
         press(&mut app, KeyCode::Char('l')); // results → detail
@@ -1415,7 +1396,6 @@ mod tests {
     /// detail 焦点 j/k 滚当前区列表(钳列表长度)。
     #[test]
     fn detail_jk_scrolls_list() -> color_eyre::Result<()> {
-        use mineral_channel_core::Page;
         use mineral_model::AlbumId;
         use mineral_task::{SearchPayload, TaskEvent};
 
@@ -1430,9 +1410,9 @@ mod tests {
             source: SourceKind::NETEASE,
             kind: SearchKind::Album,
             query: "q".to_owned(),
-            page: Page::default(),
+            batch: 0,
             payload: SearchPayload::Albums(vec![test_album("al1")]),
-            has_more: None,
+            complete: true,
         });
         app.state.apply(&TaskEvent::AlbumDetailFetched {
             fresh: true,
@@ -1554,9 +1534,8 @@ mod tests {
         use std::sync::Arc;
 
         use color_eyre::eyre::eyre;
-        use mineral_channel_core::Page;
         use mineral_model::{Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, Song, SongId};
-        use mineral_task::{ChannelFetchKind, SearchPayload, TaskEvent, TaskKind};
+        use mineral_task::{SearchPayload, TaskEvent};
 
         use super::{App, KeyCode, SearchKind, SourceKind, press, press_ctrl};
         use crate::runtime::state::{EntityRef, PromptSegment, SearchFocus, View};
@@ -1591,15 +1570,16 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind,
                 query: "remote".to_owned(),
-                page: Page::default(),
+                batch: 0,
                 payload,
-                has_more: Some(has_more),
+                complete: !has_more,
             });
             client
                 .submitted
                 .lock()
                 .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
                 .clear();
+            client.advances.lock().map_err(|e| eyre!("{e}"))?.clear();
             assert_browse_unchanged(&app);
             Ok((app, client))
         }
@@ -1783,9 +1763,9 @@ mod tests {
             });
             app.state.apply(&TaskEvent::ArtistAlbumsFetched {
                 id: artist.id,
-                page: Page::default(),
+                batch: 0,
                 albums: vec![album()],
-                has_more: None,
+                complete: true,
             });
             press(&mut app, KeyCode::Enter);
             press(&mut app, KeyCode::Char('j'));
@@ -1834,7 +1814,7 @@ mod tests {
             }
             assert!(
                 client
-                    .submitted
+                    .advances
                     .lock()
                     .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
                     .is_empty()
@@ -1874,16 +1854,19 @@ mod tests {
             );
             {
                 let submitted = client
-                    .submitted
+                    .advances
                     .lock()
                     .map_err(|e| eyre!("任务探针锁中毒: {e}"))?;
                 assert_eq!(submitted.len(), 1);
-                assert!(
-                    matches!(submitted.first(), Some(TaskKind::ChannelFetch(ChannelFetchKind::Search {
-                    source, kind, query, page
-                })) if *source == SourceKind::NETEASE && *kind == SearchKind::Song && query == "remote"
-                    && *page == Page::new(Page::default().limit, Page::default().limit))
-                );
+                let subscriptions = client.subscriptions.lock().map_err(|e| eyre!("{e}"))?;
+                assert!(submitted.first().is_some_and(|request| {
+                    subscriptions.iter().any(|(id, topic)| {
+                        *id == request.subscription
+                            && matches!(topic, mineral_protocol::SubscriptionTopic::Search {
+                                source, kind: SearchKind::Song, query
+                            } if *source == SourceKind::NETEASE && query == "remote")
+                    })
+                }));
             }
             let results = app
                 .state
@@ -1902,7 +1885,7 @@ mod tests {
             assert_eq!(results.sel(), 39);
             assert_eq!(results.detail.depth(), 1, "光标未移动时保留下钻栈");
             let requests_before_exhausted = client
-                .submitted
+                .advances
                 .lock()
                 .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
                 .len();
@@ -1911,14 +1894,14 @@ mod tests {
                 source: SourceKind::NETEASE,
                 kind: SearchKind::Song,
                 query: "remote".to_owned(),
-                page: Page::new(Page::default().limit, Page::default().limit),
+                batch: 1,
                 payload: SearchPayload::Songs(Vec::new()),
-                has_more: Some(false),
+                complete: true,
             });
             press_ctrl(&mut app, KeyCode::Char('f'));
             assert_eq!(
                 client
-                    .submitted
+                    .advances
                     .lock()
                     .map_err(|e| eyre!("任务探针锁中毒: {e}"))?
                     .len(),
