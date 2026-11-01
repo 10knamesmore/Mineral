@@ -1,13 +1,17 @@
 //! 打标队列的端到端、去重、关闭开关与失败恢复验证。
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
+use color_eyre::eyre::eyre;
 use lofty::file::TaggedFileExt as _;
 use lofty::tag::Accessor as _;
-use mineral_model::{AlbumRef, ArtistRef, BitRate, Song, SongId, SourceKind};
+use mineral_channel_core::{ChannelCaps, MusicChannel, Result as ChannelResult};
+use mineral_model::{AlbumRef, ArtistRef, BitRate, CachePolicy, Lyrics, Song, SongId, SourceKind};
 use mineral_test::mock::{CannedChannel, serve_once};
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::timeout;
 
 use super::TaggingQueue;
 
@@ -90,28 +94,51 @@ async fn enqueue_tags_file_end_to_end() -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// 去重:同曲同音质连投三次,worker 只处理一次(歌词采集被调次数为证)。
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// 通过歌词请求控制处理顺序，验证去重、完成后重投与关闭投递端后排空队列。
+#[tokio::test]
 async fn enqueue_dedups_inflight() -> color_eyre::Result<()> {
-    let channel = CannedChannel {
-        album: None,
-        lyrics: Some(mineral_model::Lyrics {
-            lines: vec![mineral_model::LyricLine::timed(1000, "第一句")],
-        }),
-        detail_songs: Vec::new(),
-        lyrics_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        album_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-    };
-    let calls = Arc::clone(&channel.lyrics_calls);
+    struct ControlledLyricsChannel {
+        requests: mpsc::UnboundedSender<(SongId, oneshot::Sender<()>)>,
+    }
+
+    #[async_trait]
+    impl MusicChannel for ControlledLyricsChannel {
+        fn source(&self) -> SourceKind {
+            SourceKind::NETEASE
+        }
+
+        fn caps(&self) -> ChannelCaps {
+            CannedChannel::empty().caps()
+        }
+
+        async fn songs_detail(
+            &self,
+            ids: &[SongId],
+            cache: CachePolicy,
+        ) -> ChannelResult<Vec<Song>> {
+            CannedChannel::empty().songs_detail(ids, cache).await
+        }
+
+        async fn lyrics(&self, id: &SongId) -> ChannelResult<Lyrics> {
+            let (finish, wait) = oneshot::channel();
+            assert!(self.requests.send((id.clone(), finish)).is_ok());
+            assert!(wait.await.is_ok());
+            CannedChannel::empty().lyrics(id).await
+        }
+    }
+
+    let (requests, mut received) = mpsc::unbounded_channel();
     let queue = TaggingQueue::spawn(
         /*enabled*/ true,
-        &[Arc::new(channel)],
+        &[Arc::new(ControlledLyricsChannel { requests })],
         /*http*/ None,
         /*workers*/ 1,
     );
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("tone.mp3");
+    let next_path = dir.path().join("next.mp3");
     tokio::fs::write(&path, include_bytes!("fixtures/tone.mp3")).await?;
+    tokio::fs::write(&next_path, include_bytes!("fixtures/tone.mp3")).await?;
     for _ in 0..3 {
         queue.enqueue(
             song("186016", /*cover*/ None),
@@ -119,37 +146,48 @@ async fn enqueue_dedups_inflight() -> color_eyre::Result<()> {
             BitRate::Lossless,
         );
     }
-    // 等第一次处理完(歌词被调过)+ inflight 清空,再补投一次验证可重投。
-    wait_until(
-        || calls.load(Ordering::Acquire) >= 1,
-        Duration::from_secs(10),
-    )
-    .await;
-    wait_until(
-        || {
-            queue
-                .inner
-                .as_ref()
-                .is_some_and(|i| i.inflight.lock().is_empty())
-        },
-        Duration::from_secs(10),
-    )
-    .await;
-    assert_eq!(
-        calls.load(Ordering::Acquire),
-        1,
-        "在队 / 在写期间重复投递应去重"
+    queue.enqueue(
+        song("186017", /*cover*/ None),
+        next_path.clone(),
+        BitRate::Lossless,
     );
+    // 单线程运行时：调度任务接收上述请求后，停在未放行的歌词请求上。
+    let (id, finish) = timeout(Duration::from_secs(10), received.recv())
+        .await?
+        .ok_or_else(|| eyre!("第一首应开始处理"))?;
+    assert_eq!(id.as_str(), "186016");
+    assert!(received.try_recv().is_err(), "并发数为 1 时下一首应等待");
+    assert!(finish.send(()).is_ok());
+
+    let (id, finish) = timeout(Duration::from_secs(10), received.recv())
+        .await?
+        .ok_or_else(|| eyre!("第二首应开始处理"))?;
+    assert_eq!(id.as_str(), "186017", "重复请求不应再次采集歌词");
+    assert!(file_has_title(&path), "下一首开始时前一首应已写回");
+
+    // 下一首开始意味着前一首已完成；恢复无 tag 文件后重投，验证再次写回。
+    tokio::fs::write(&path, include_bytes!("fixtures/tone.mp3")).await?;
     queue.enqueue(
         song("186016", /*cover*/ None),
         path.clone(),
         BitRate::Lossless,
     );
-    wait_until(
-        || calls.load(Ordering::Acquire) >= 2,
-        Duration::from_secs(10),
-    )
-    .await;
+    drop(queue);
+    assert!(finish.send(()).is_ok());
+
+    let (id, finish) = timeout(Duration::from_secs(10), received.recv())
+        .await?
+        .ok_or_else(|| eyre!("关闭投递端后仍应处理重投任务"))?;
+    assert_eq!(id.as_str(), "186016");
+    assert!(file_has_title(&next_path));
+    assert!(finish.send(()).is_ok());
+    assert!(
+        timeout(Duration::from_secs(10), received.recv())
+            .await?
+            .is_none(),
+        "队列排空后应退出"
+    );
+    assert!(file_has_title(&path));
     Ok(())
 }
 
