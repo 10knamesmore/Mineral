@@ -8,7 +8,7 @@ use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::LibraryStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
-    MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad, Result,
+    MusicChannel, Page, PageResult, PlaylistDetail, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{Playlist, PlaylistEntry, PlaylistId, Song, SongId, SourceKind};
@@ -124,7 +124,6 @@ impl MusicChannel for MineralChannel {
     fn playlist_detail<'a>(
         &'a self,
         id: &'a PlaylistId,
-        _load: PlaylistLoad,
         _cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
         fresh_snapshot(async move {

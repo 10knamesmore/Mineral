@@ -1,6 +1,7 @@
 //! 把后台任务与数据 completion event 收敛进应用状态。
 
-use mineral_channel_core::PlaylistLoad;
+use std::collections::hash_map::Entry;
+
 use mineral_task::TaskEvent;
 use rustc_hash::FxHashSet;
 
@@ -40,7 +41,15 @@ impl AppState {
                     }
                     has_removed_playlists = true;
                     self.models.library.tracks.remove(id);
-                    self.models.library.tracks_requested.remove(id);
+                    if let Entry::Occupied(mut request) =
+                        self.models.library.tracks_requested.entry(id.clone())
+                    {
+                        if request.get().subscription.is_some() {
+                            request.get_mut().release();
+                        } else {
+                            request.remove();
+                        }
+                    }
                     if self.ui.browse.nav.opened_collection.as_ref()
                         == Some(&CollectionId::Playlist(id.clone()))
                     {
@@ -59,14 +68,11 @@ impl AppState {
             TaskEvent::PlaylistsFetched { .. } | TaskEvent::AlbumsFetched { .. } => {}
             // 纯埋点信号,server 记录后不转发;client 永不收到,defensive:跳过。
             TaskEvent::FetchDone { .. } => {}
-            TaskEvent::PlaylistDetailFetched {
-                id,
-                load,
-                detail,
-                fresh,
-            } => {
+            TaskEvent::PlaylistDetailFetched { id, detail, fresh } => {
                 if *fresh {
-                    self.models.library.finish_playlist(id, *load, true);
+                    self.models
+                        .library
+                        .finish_playlist(id, detail.complete, true);
                 }
                 if let Some(existing) = self.models.library.tracks.get(id) {
                     if existing.fresh && !*fresh {
@@ -75,20 +81,6 @@ impl AppState {
                     // 已确认的完整结果保留；旧的完整快照仍可被当前有效结果替换。
                     let replaces_stale_snapshot = *fresh && !existing.fresh;
                     if !replaces_stale_snapshot && existing.complete && !detail.complete {
-                        return;
-                    }
-                    if let PlaylistLoad::More { offset } = load
-                        && existing.next_offset != Some(*offset)
-                    {
-                        return;
-                    }
-                    if *load == PlaylistLoad::Preview
-                        && !replaces_stale_snapshot
-                        && !detail.complete
-                        && existing
-                            .next_offset
-                            .is_some_and(|old| detail.next_offset.is_none_or(|new| old > new))
-                    {
                         return;
                     }
                 }
@@ -100,17 +92,6 @@ impl AppState {
                 }
                 update.record(self);
                 let playlist = &detail.playlist;
-                if *load == PlaylistLoad::Complete
-                    && let Some(listed) = self
-                        .models
-                        .library
-                        .playlists
-                        .iter_mut()
-                        .find(|listed| listed.data.id == *id)
-                {
-                    listed.data = playlist.clone();
-                    listed.data.entries.clear();
-                }
                 let selected_index = (self.ui.browse.view == super::View::Tracks)
                     .then(|| {
                         self.selected_playlist()
@@ -128,11 +109,6 @@ impl AppState {
                     .cloned()
                     .map(|data| self.decorate_entry(data))
                     .collect();
-                // More 的旧快照不能推进起点，否则同一请求的有效结果会被判为晚到页。
-                let next_offset = match load {
-                    PlaylistLoad::More { offset } if !*fresh => Some(*offset),
-                    _ => detail.next_offset,
-                };
                 self.models.library.tracks_generation =
                     self.models.library.tracks_generation.next();
                 self.models.library.tracks.insert(
@@ -142,7 +118,6 @@ impl AppState {
                         entries: decorated,
                         complete: detail.complete,
                         fresh: *fresh,
-                        next_offset,
                     },
                 );
                 let position = selected_index.and_then(|index| {
@@ -159,8 +134,8 @@ impl AppState {
                     results.fill_playlist_entries(id, &playlist.entries, detail.complete, *fresh);
                 }
             }
-            TaskEvent::PlaylistDetailFailed { id, load } => {
-                self.models.library.finish_playlist(id, *load, false);
+            TaskEvent::PlaylistDetailFailed { id } => {
+                self.models.library.finish_playlist(id, false, false);
             }
             TaskEvent::LikedSongIdsFetched { source, ids } => {
                 self.models.library.liked_ids.insert(*source, ids.clone());
@@ -238,7 +213,6 @@ impl AppState {
                         entries,
                         complete: true,
                         fresh: *fresh,
-                        next_offset: None,
                     },
                 );
                 if *fresh {

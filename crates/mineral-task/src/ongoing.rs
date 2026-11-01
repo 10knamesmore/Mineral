@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio_util::sync::CancellationToken;
 
-use crate::handle::{SharedDone, TaskHandle, shared_done};
+use crate::handle::{TaskHandle, shared_done};
 use crate::id::{IdAllocator, Priority, TaskId};
 use crate::kind::{ChannelFetchKindTag, DedupKey, TaskKind};
 use crate::outcome::TaskOutcome;
@@ -20,18 +20,15 @@ pub(crate) struct TaskMeta {
 
     /// 取消令牌,与 worker 共享。
     pub cancel: CancellationToken,
-
-    /// 终态 future,可被多个 waiter 共同 await。
-    pub done: SharedDone,
 }
 
-impl TaskMeta {
-    /// 构造共享同一终态的 [`TaskHandle`]。
-    fn handle(&self) -> TaskHandle {
-        TaskHandle {
-            done: self.done.clone(),
-        }
-    }
+/// 有限任务的去重登记；重复提交共享同一个完成句柄。
+struct SharedTask {
+    /// 对应 tasks 中的任务记录。
+    id: TaskId,
+
+    /// 提交方等待任务终态的句柄。
+    handle: TaskHandle,
 }
 
 /// 中央状态。所有 mutate 操作都在持锁里完成。
@@ -48,8 +45,8 @@ struct Inner {
     /// 当前 ongoing 的所有任务,按 [`TaskId`] 索引。
     tasks: FxHashMap<TaskId, TaskMeta>,
 
-    /// dedup key → 持有该 key 的任务 id;用于命中既存任务做 share/escalate。
-    by_dedup: FxHashMap<DedupKey, TaskId>,
+    /// dedup key → 有限任务及其完成句柄，用于 share/escalate。
+    by_dedup: FxHashMap<DedupKey, SharedTask>,
 }
 
 /// 一次新提交的"绑定结果":要么 dedup 共享旧 handle,要么真新建一条。
@@ -74,6 +71,22 @@ pub(crate) enum Bind {
 }
 
 impl Ongoing {
+    /// Tracks one operation owned by an existing subscription. The subscription already
+    /// shares its stream, so this entry participates in cancellation and counts, not dedup.
+    pub fn track(&self, kind: TaskKind, priority: Priority) -> (TaskId, CancellationToken) {
+        let id = self.ids.next();
+        let cancel = CancellationToken::new();
+        self.inner.lock().tasks.insert(
+            id,
+            TaskMeta {
+                kind,
+                priority,
+                cancel: cancel.clone(),
+            },
+        );
+        (id, cancel)
+    }
+
     /// 构造空的中央状态。
     pub fn new() -> Self {
         Self {
@@ -94,10 +107,11 @@ impl Ongoing {
     pub fn bind(&self, kind: TaskKind, priority: Priority) -> Bind {
         let dedup = kind.dedup_key();
         let mut inner = self.inner.lock();
-        if let Some(existing_id) = inner.by_dedup.get(&dedup).copied() {
+        if let Some(shared) = inner.by_dedup.get(&dedup) {
+            let existing_id = shared.id;
             if let Some(existing) = inner.tasks.get(&existing_id) {
                 if priority <= existing.priority {
-                    return Bind::Shared(existing.handle());
+                    return Bind::Shared(shared.handle.clone());
                 }
                 // escalate:cancel 旧、走下面的新建路径。
                 mineral_log::info!(
@@ -115,16 +129,22 @@ impl Ongoing {
         let id = self.ids.next();
         let cancel = CancellationToken::new();
         let (done_tx, done_rx) = oneshot::channel();
-        let done = shared_done(done_rx);
+        let handle = TaskHandle {
+            done: shared_done(done_rx),
+        };
         let meta = TaskMeta {
             kind,
             priority,
             cancel: cancel.clone(),
-            done,
         };
-        let handle = meta.handle();
         inner.tasks.insert(id, meta);
-        inner.by_dedup.insert(dedup, id);
+        inner.by_dedup.insert(
+            dedup,
+            SharedTask {
+                id,
+                handle: handle.clone(),
+            },
+        );
         Bind::Fresh {
             id,
             handle,
@@ -140,7 +160,11 @@ impl Ongoing {
             mineral_log::debug!(target: "scheduler", task_id = ?id, "task removed");
             let key = meta.kind.dedup_key();
             // 仅当 dedup 仍指向被摘的 id 时才移除,避免误清新建条目。
-            if inner.by_dedup.get(&key) == Some(&id) {
+            if inner
+                .by_dedup
+                .get(&key)
+                .is_some_and(|shared| shared.id == id)
+            {
                 inner.by_dedup.remove(&key);
             }
         }
@@ -167,7 +191,14 @@ impl Ongoing {
         for id in ids {
             if let Some(meta) = inner.tasks.remove(&id) {
                 meta.cancel.cancel();
-                inner.by_dedup.remove(&meta.kind.dedup_key());
+                let key = meta.kind.dedup_key();
+                if inner
+                    .by_dedup
+                    .get(&key)
+                    .is_some_and(|shared| shared.id == id)
+                {
+                    inner.by_dedup.remove(&key);
+                }
             }
         }
     }

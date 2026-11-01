@@ -166,7 +166,7 @@ async fn player_updates_are_version_gated() -> color_eyre::Result<()> {
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::Player);
+        client.subscribe(SubscriptionTopic::Player)?;
         // 等版本 2 落地:队列仍应是版本 1 的 2 首(重复版本 5 首被忽略)。
         timeout(Duration::from_secs(5), async {
             loop {
@@ -215,7 +215,7 @@ async fn playback_anchor_advances_locally() -> color_eyre::Result<()> {
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::Playback);
+        client.subscribe(SubscriptionTopic::Playback)?;
         timeout(Duration::from_secs(5), async {
             loop {
                 if client
@@ -289,7 +289,7 @@ async fn summary_and_event_updates_reach_mirror() -> color_eyre::Result<()> {
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::Tasks);
+        client.subscribe(SubscriptionTopic::Tasks)?;
         let mut service_info_seen = false;
         timeout(Duration::from_secs(5), async {
             loop {
@@ -388,7 +388,7 @@ async fn downloads_detail_snapshot_and_delta() -> color_eyre::Result<()> {
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::DownloadsDetail);
+        client.subscribe(SubscriptionTopic::DownloadsDetail)?;
         timeout(Duration::from_secs(5), async {
             loop {
                 let ready = client.mirror().read_downloads_detail(|detail| {
@@ -477,7 +477,7 @@ async fn late_updates_after_unsubscribe_are_ignored() -> color_eyre::Result<()> 
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::DownloadsDetail);
+        client.subscribe(SubscriptionTopic::DownloadsDetail)?;
         timeout(Duration::from_secs(5), async {
             loop {
                 if client
@@ -491,7 +491,7 @@ async fn late_updates_after_unsubscribe_are_ignored() -> color_eyre::Result<()> 
         })
         .await
         .wrap_err("首个快照未在期限内应用")?;
-        client.unsubscribe(SubscriptionTopic::DownloadsDetail);
+        client.unsubscribe(&SubscriptionTopic::DownloadsDetail)?;
         // 退订让明细槽位清空;之后到达的旧 id 更新必须被忽略。
         assert!(matches!(
             client.submit(Request::Pause, applied)?.outcome().await,

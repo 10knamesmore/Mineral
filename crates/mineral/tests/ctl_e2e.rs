@@ -333,7 +333,7 @@ async fn mode_reaches_daemon() -> color_eyre::Result<()> {
     let h = Harness::spawn("mode", None)?;
     h.wait_ready()?;
     let client = h.connect("ctl-mode").await?;
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Player)?;
     client.wait_subscriptions_ready(WAIT).await;
 
     let run = h.ctl(&["--json", "mode", "shuffle"])?;
@@ -359,8 +359,8 @@ async fn mirror_backed_commands() -> color_eyre::Result<()> {
     let h = Harness::spawn("mirror", None)?;
     h.wait_ready()?;
     let client = h.connect("ctl-mirror").await?;
-    client.subscribe(SubscriptionTopic::Player);
-    client.subscribe(SubscriptionTopic::Playback);
+    client.subscribe(SubscriptionTopic::Player)?;
+    client.subscribe(SubscriptionTopic::Playback)?;
     client.wait_subscriptions_ready(WAIT).await;
 
     // 没有当前曲:跳过且退出 0,不产生请求。
@@ -408,7 +408,7 @@ async fn queue_commands() -> color_eyre::Result<()> {
     let h = Harness::spawn("queue", Some(DAEMON_WITH_TRANSFORMS))?;
     h.wait_ready()?;
     let client = h.connect("ctl-queue").await?;
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Player)?;
     client.wait_subscriptions_ready(WAIT).await;
     start_queue(&client).await?;
     let original = queue_ids(&client);
@@ -539,7 +539,6 @@ async fn fetch_playlist(
         mineral_protocol::Request::SubmitTask(
             mineral_task::TaskKind::ChannelFetch(mineral_task::ChannelFetchKind::PlaylistDetail {
                 id: id.clone(),
-                load: mineral_channel_core::PlaylistLoad::Complete,
             }),
             mineral_task::Priority::User,
         ),
@@ -577,8 +576,8 @@ async fn saved_playlists_survive_restart_and_preserve_queue() -> color_eyre::Res
     let mut h = Harness::spawn("saved-playlists", None)?;
     h.wait_ready()?;
     let client = h.connect("playlist-observer").await?;
-    client.subscribe(SubscriptionTopic::Player);
-    client.subscribe(SubscriptionTopic::Events(Subscription::Task));
+    client.subscribe(SubscriptionTopic::Player)?;
+    client.subscribe(SubscriptionTopic::Events(Subscription::Task))?;
     client.wait_subscriptions_ready(WAIT).await;
     let empty = h.ctl(&["--json", "queue", "save", "Empty"])?;
     assert_eq!(empty.status.code(), Some(1));
@@ -724,8 +723,8 @@ async fn saved_playlists_survive_restart_and_preserve_queue() -> color_eyre::Res
     h.child = spawn_daemon(&h.root, &h.sock_dir)?;
     h.wait_ready()?;
     let client = h.connect("playlist-after-restart").await?;
-    client.subscribe(SubscriptionTopic::Events(Subscription::Task));
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Events(Subscription::Task))?;
+    client.subscribe(SubscriptionTopic::Player)?;
     client.wait_subscriptions_ready(WAIT).await;
     wait_playlists(&client, |all| {
         all.iter().any(|p| p.id == id && p.name == "通勤")

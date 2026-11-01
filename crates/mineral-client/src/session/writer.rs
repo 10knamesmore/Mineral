@@ -92,6 +92,10 @@ fn build_batch(
                 flush_requests(&mut messages, &mut requests);
                 messages.push(SessionMessage::Resync(id));
             }
+            Command::Advance(request) => {
+                flush_requests(&mut messages, &mut requests);
+                messages.push(SessionMessage::Advance(request));
+            }
             Command::Close(reason) => {
                 flush_requests(&mut messages, &mut requests);
                 messages.push(SessionMessage::Close(reason));

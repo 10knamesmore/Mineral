@@ -81,12 +81,7 @@ impl crate::components::lifecycle::PaintView for TrackView<'_> {
         inputs.observe(&self.input.tracks.map(|tracks| tracks.revision));
         inputs.observe(&self.input.load_failed);
         inputs.optional(self.input.playing);
-        inputs.observe(
-            &self
-                .input
-                .tracks
-                .map(|tracks| (tracks.complete, tracks.next_offset)),
-        );
+        inputs.observe(&self.input.tracks.map(|tracks| tracks.complete));
         self.list.search.dependencies(inputs);
         let tracks = self.rows();
         let total = tracks.len();

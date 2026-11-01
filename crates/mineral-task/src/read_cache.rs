@@ -1,4 +1,4 @@
-use mineral_channel_core::PlaylistLoad;
+use mineral_common::revision::Revision;
 use mineral_model::{CachePolicy, RefreshScope};
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
@@ -13,32 +13,56 @@ pub(crate) struct ReadCache {
 
 #[derive(Default)]
 struct State {
-    invalidated: Vec<RefreshScope>,
+    /// Latest invalidation for each scope, ordered by revision.
+    invalidated: Vec<(RefreshScope, Revision)>,
+
+    /// Increases on every refresh, including repeated refreshes of the same scope.
+    revision: Revision,
 
     reusable: FxHashSet<ChannelFetchKind>,
 }
 
 impl ReadCache {
     pub(crate) fn policy(&self, kind: &ChannelFetchKind) -> CachePolicy {
+        self.read_state(kind).0
+    }
+
+    /// Captures policy and invalidation revision together for a stream that may pause.
+    pub(crate) fn read_state(&self, kind: &ChannelFetchKind) -> (CachePolicy, Option<Revision>) {
         let state = self.state.lock();
-        if state
-            .invalidated
-            .iter()
-            .any(|scope| kind.affected_by(scope))
-            && !state.reusable.contains(&cache_key(kind))
-        {
+        let revision = state.revision_for(kind);
+        let policy = if revision.is_some() && !state.reusable.contains(kind) {
             CachePolicy::Reload
         } else {
             CachePolicy::UseCache
-        }
+        };
+        (policy, revision)
     }
 
     pub(crate) fn invalidate(&self, scope: &RefreshScope) {
         let mut state = self.state.lock();
         state.reusable.retain(|kind| !kind.affected_by(scope));
-        if !state.invalidated.contains(scope) {
-            state.invalidated.push(scope.clone());
+        state.revision = state.revision.next();
+        let revision = state.revision;
+        state.invalidated.retain(|(old, _)| old != scope);
+        state.invalidated.push((scope.clone(), revision));
+    }
+
+    /// A paused stream cannot publish or make its old cache reusable after refresh.
+    pub(crate) fn accept_result(
+        &self,
+        kind: &ChannelFetchKind,
+        revision: Option<Revision>,
+        complete: bool,
+    ) -> bool {
+        let mut state = self.state.lock();
+        if state.revision_for(kind) != revision {
+            return false;
         }
+        if complete {
+            state.reusable.insert(kind.clone());
+        }
+        true
     }
 
     /// Called for each successful Reload result under the publication lock, after checking cancellation.
@@ -51,16 +75,16 @@ impl ReadCache {
         if matches!(event, TaskEvent::AlbumDetailFetched { fresh: false, .. }) {
             return;
         }
-        self.state.lock().reusable.insert(cache_key(kind));
+        self.state.lock().reusable.insert(kind.clone());
     }
 }
 
-fn cache_key(kind: &ChannelFetchKind) -> ChannelFetchKind {
-    match kind {
-        ChannelFetchKind::PlaylistDetail { id, .. } => ChannelFetchKind::PlaylistDetail {
-            id: id.clone(),
-            load: PlaylistLoad::Complete,
-        },
-        _ => kind.clone(),
+impl State {
+    fn revision_for(&self, kind: &ChannelFetchKind) -> Option<Revision> {
+        self.invalidated
+            .iter()
+            .rev()
+            .find(|(scope, _)| kind.affected_by(scope))
+            .map(|(_, revision)| *revision)
     }
 }

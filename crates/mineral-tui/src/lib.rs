@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mineral_client::Client;
+use mineral_client::operation::SubmitError;
 use mineral_protocol::{Subscription, SubscriptionTopic};
 
 use app::App;
@@ -39,6 +40,10 @@ use tui::Tui;
 /// 启动和运行终端客户端时的失败。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// A required startup subscription was not submitted.
+    #[error("submit TUI subscription")]
+    Subscription(#[from] SubmitError),
+
     /// 客户端路径解析失败。
     #[error("resolve TUI paths")]
     Paths(#[from] mineral_paths::Error),
@@ -97,14 +102,16 @@ pub async fn run() -> Result<()> {
     let kill_on_exit = *cfg.behavior().kill_spawned_daemon_on_exit();
     let (client, handle) = runtime::daemon::ensure(&socket, kill_on_exit).await?;
     let client = Arc::new(client);
-    let backend = Arc::new(build_backend(Arc::clone(&client)).await);
-    let result = run_app(
-        backend,
-        Arc::clone(&client),
-        cover_fetcher,
-        ui_prefs,
-        startup,
-    );
+    let result = match build_backend(Arc::clone(&client)).await {
+        Ok(backend) => run_app(
+            Arc::new(backend),
+            Arc::clone(&client),
+            cover_fetcher,
+            ui_prefs,
+            startup,
+        ),
+        Err(error) => Err(error),
+    };
     // TUI 退出:仅当本次亲手 spawn 了 daemon 才按旋钮收尾;attach 已有的
     // (handle 为 None)留着不动。
     if let Some(handle) = handle {
@@ -120,7 +127,7 @@ pub async fn run() -> Result<()> {
 ///
 /// # Return:
 ///   后端实现(完成事件队列挂在它身上)。
-async fn build_backend(client: Arc<Client>) -> ClientBackend {
+async fn build_backend(client: Arc<Client>) -> Result<ClientBackend> {
     // 常驻订阅:播放 / 锚点 / 任务 / 下载摘要 / 事件类别 / PCM。
     for topic in [
         SubscriptionTopic::Player,
@@ -133,7 +140,7 @@ async fn build_backend(client: Arc<Client>) -> ClientBackend {
         SubscriptionTopic::Events(Subscription::ServiceInfo),
         SubscriptionTopic::Events(Subscription::Task),
     ] {
-        let _ = client.subscribe(topic);
+        client.subscribe(topic)?;
     }
     // 自举能力表(失败时退化为空表,UI 照常可用)。
     let initial = client.bootstrap().await;
@@ -142,7 +149,7 @@ async fn build_backend(client: Arc<Client>) -> ClientBackend {
         service_info: initial.service_info,
     };
     let completions = CompletionQueue::new();
-    ClientBackend::new(client, bootstrap, completions)
+    Ok(ClientBackend::new(client, bootstrap, completions))
 }
 
 /// 进 alternate screen,探测终端图片能力,跑 [`App::run`] 直到退出,最后还原终端。

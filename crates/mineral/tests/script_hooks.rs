@@ -204,7 +204,7 @@ async fn daemon_setup_store_persists_and_ignores_tui_file() -> color_eyre::Resul
     )?;
     first.wait_ready()?;
     let client = first.connect().await?;
-    client.subscribe(SubscriptionTopic::Playback);
+    client.subscribe(SubscriptionTopic::Playback)?;
     wait_store_int(&client, &song, "plugin.saved", 41).await?;
     wait_volume(&client, 41).await?;
     // 即便 TUI 文件无法解析,daemon 重启仍只读取 daemon.lua。
@@ -280,8 +280,8 @@ async fn daemon_reload_keeps_old_state_when_setup_fails() -> color_eyre::Result<
     )?;
     daemon.wait_ready()?;
     let client = daemon.connect().await?;
-    client.subscribe(SubscriptionTopic::Playback);
-    client.subscribe(SubscriptionTopic::Events(Subscription::Toast));
+    client.subscribe(SubscriptionTopic::Playback)?;
+    client.subscribe(SubscriptionTopic::Events(Subscription::Toast))?;
     let marker = SongId::new(mineral_model::SourceKind::NETEASE, "42");
     wait_store_int(&client, &marker, "plugin.ready", 1).await?;
     wait_transform_name(&client, "Keep original order").await?;

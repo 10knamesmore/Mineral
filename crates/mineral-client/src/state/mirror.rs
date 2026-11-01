@@ -487,7 +487,7 @@ impl Mirror {
             .write()
             .subscriptions
             .entry(id)
-            .and_modify(|subscription| subscription.topic = topic)
+            .and_modify(|subscription| subscription.topic = topic.clone())
             .or_insert(SubscriptionState {
                 topic,
                 last_version: None,
@@ -537,7 +537,7 @@ impl Mirror {
             return ApplyOutcome::Ignored;
         }
         let incremental = matches!(
-            (subscription.topic, &payload),
+            (&subscription.topic, &payload),
             (SubscriptionTopic::Player, UpdatePayload::Player { .. })
                 | (
                     SubscriptionTopic::DownloadsDetail,

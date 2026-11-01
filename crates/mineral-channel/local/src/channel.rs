@@ -5,7 +5,7 @@ use mineral_channel_core::collection::fresh_collection;
 use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
     ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream, MusicChannel,
-    PlaylistDetail, PlaylistLoad, Result,
+    PlaylistDetail, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -59,7 +59,6 @@ impl MusicChannel for LocalLibrary {
     fn playlist_detail<'a>(
         &'a self,
         id: &'a PlaylistId,
-        _load: PlaylistLoad,
         cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
         fresh_snapshot(async move {

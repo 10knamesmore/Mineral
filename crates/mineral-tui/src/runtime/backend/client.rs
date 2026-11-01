@@ -7,7 +7,8 @@ use mineral_client::operation::{Outcome, Pending, SubmitError, UnknownReason};
 use mineral_client::state::{DownloadsDetailMirror, PlaybackMirror, PlayerMirror};
 use mineral_model::{RefreshScope, Song, SongId};
 use mineral_protocol::{
-    DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp, Request, SubscriptionTopic,
+    AdvanceSubscription, DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp, Request,
+    SubscriptionId, SubscriptionTopic,
 };
 use mineral_task::{Priority, Snapshot, TaskKind};
 
@@ -165,12 +166,16 @@ impl Backend for ClientBackend {
         self.client.mirror().downloads_detail_snapshot()
     }
 
-    fn subscribe(&self, topic: SubscriptionTopic) {
-        let _ = self.client.subscribe(topic);
+    fn subscribe(&self, topic: SubscriptionTopic) -> Result<SubscriptionId, SubmitError> {
+        self.client.subscribe(topic)
     }
 
-    fn unsubscribe(&self, topic: SubscriptionTopic) {
-        self.client.unsubscribe(topic);
+    fn unsubscribe(&self, topic: &SubscriptionTopic) -> Result<(), SubmitError> {
+        self.client.unsubscribe(topic)
+    }
+
+    fn advance(&self, request: AdvanceSubscription) -> Result<(), SubmitError> {
+        self.client.advance(request)
     }
 
     fn drain_pcm(&self) -> Vec<f32> {
@@ -249,10 +254,6 @@ impl Backend for ClientBackend {
         self.task_submissions
             .lock()
             .flush(|kind, priority| self.client.try_fire(Request::SubmitTask(kind, priority)));
-    }
-
-    fn prioritize_task(&self, kind: &TaskKind) {
-        self.task_submissions.lock().prioritize(kind);
     }
 
     fn pending_task_count(&self) -> usize {

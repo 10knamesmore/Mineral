@@ -142,7 +142,6 @@ mod tests {
                 revision: Revision::default(),
                 entries: entry_views(vec![entry]),
                 complete: true,
-                next_offset: None,
             },
         );
         app.state.ui.browse.collections.select(0);

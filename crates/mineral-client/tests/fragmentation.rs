@@ -145,7 +145,7 @@ async fn player_queue_fragments_assemble_atomically() -> color_eyre::Result<()> 
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::Player);
+        client.subscribe(SubscriptionTopic::Player)?;
         let pending = client.submit(Request::Pause, applied)?;
         assert!(matches!(pending.outcome().await, Outcome::Applied(())));
         wait_versions(&client, Revision::default().next()).await?;
@@ -202,7 +202,7 @@ async fn missing_part_requests_resync() -> color_eyre::Result<()> {
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::Player);
+        client.subscribe(SubscriptionTopic::Player)?;
         wait_versions(&client, Revision::default().next()).await?;
         let queue = client.mirror().read_player(|player| player.queue().len());
         assert_eq!(queue, 300, "{transport:?}");
@@ -232,7 +232,7 @@ async fn duplicate_part_is_rejected() -> color_eyre::Result<()> {
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::Player);
+        client.subscribe(SubscriptionTopic::Player)?;
         timeout(std::time::Duration::from_secs(5), async {
             loop {
                 if client.metrics().updates_dropped > 0 {
@@ -275,7 +275,7 @@ async fn too_many_parts_is_rejected() -> color_eyre::Result<()> {
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::Pcm);
+        client.subscribe(SubscriptionTopic::Pcm)?;
         timeout(std::time::Duration::from_secs(5), async {
             loop {
                 if client.metrics().updates_dropped > 0 {
@@ -309,7 +309,7 @@ async fn downloads_detail_fragments_assemble_in_order() -> color_eyre::Result<()
             Ok::<(), color_eyre::Report>(())
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-        client.subscribe(SubscriptionTopic::DownloadsDetail);
+        client.subscribe(SubscriptionTopic::DownloadsDetail)?;
         timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let len = client

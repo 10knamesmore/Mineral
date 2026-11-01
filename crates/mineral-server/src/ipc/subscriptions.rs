@@ -2,13 +2,16 @@
 
 use std::sync::Arc;
 
+use mineral_model::{CollectionCategory, RefreshScope};
 use mineral_protocol::{
-    SessionMessage, SubscribeRequest, Subscription, SubscriptionId, SubscriptionTopic,
+    AdvanceSubscription, SessionMessage, SubscribeRequest, Subscription, SubscriptionId,
+    SubscriptionTopic,
 };
 use rustc_hash::FxHashMap;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use super::playlist::pump_playlist;
 use super::session::SessionServices;
 use super::updates::{
     pump_downloads_detail, pump_downloads_summary, pump_events, pump_pcm, pump_playback,
@@ -19,6 +22,9 @@ use crate::pcm_relay::{PcmRelay, PcmSubscription};
 
 /// 订阅泵句柄。
 struct Pump {
+    /// Retained to stop affected reads before acknowledging a refresh.
+    topic: SubscriptionTopic,
+
     /// 泵任务。
     handle: JoinHandle<()>,
 
@@ -30,6 +36,9 @@ struct Pump {
 
     /// Flush already-published task results into the session's ordered output before an ack.
     flush_events: Option<mpsc::UnboundedSender<oneshot::Sender<()>>>,
+
+    /// Demand for a stream owned by this pump; dropping the pump drops the stream.
+    advance: Option<mpsc::UnboundedSender<AdvanceSubscription>>,
 }
 
 /// 一条连接的订阅登记。
@@ -64,7 +73,22 @@ impl Subscriptions {
         }
         let resync = Arc::new(Notify::new());
         let mut flush_events = None;
-        let (handle, pcm) = match request.topic {
+        let mut advance = None;
+        let (handle, pcm) = match &request.topic {
+            SubscriptionTopic::Playlist(id) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                advance = Some(tx);
+                (
+                    tokio::spawn(pump_playlist(
+                        client.clone(),
+                        request.id,
+                        id.clone(),
+                        rx,
+                        out.clone(),
+                    )),
+                    None,
+                )
+            }
             SubscriptionTopic::Player => {
                 let known = request.known_player.unwrap_or_default();
                 let handle = tokio::spawn(pump_player(
@@ -117,12 +141,12 @@ impl Subscriptions {
             }
             SubscriptionTopic::Events(category) => {
                 let (flush_tx, flush_rx) = mpsc::unbounded_channel();
-                if category == Subscription::Task {
+                if *category == Subscription::Task {
                     flush_events = Some(flush_tx);
                 }
                 let handle = tokio::spawn(pump_events(
                     services.publishers.events(),
-                    category,
+                    *category,
                     request.id,
                     client.clone(),
                     out.clone(),
@@ -134,10 +158,12 @@ impl Subscriptions {
         self.pumps.insert(
             request.id,
             Pump {
+                topic: request.topic.clone(),
                 handle,
                 resync,
                 pcm,
                 flush_events,
+                advance,
             },
         );
     }
@@ -176,6 +202,42 @@ impl Subscriptions {
     pub(super) fn resync(&self, id: SubscriptionId) {
         if let Some(pump) = self.pumps.get(&id) {
             pump.resync.notify_one();
+        }
+    }
+
+    pub(super) fn advance(&self, request: AdvanceSubscription) {
+        if let Some(sender) = self
+            .pumps
+            .get(&request.subscription)
+            .and_then(|pump| pump.advance.as_ref())
+        {
+            let _ = sender.send(request);
+        }
+    }
+
+    /// Stops affected streams before cache invalidation; awaiting abort drops an in-flight poll.
+    pub(super) async fn invalidate(&mut self, scope: &RefreshScope) {
+        let ids = self
+            .pumps
+            .iter()
+            .filter_map(|(subscription, pump)| match (&pump.topic, scope) {
+                (
+                    SubscriptionTopic::Playlist(_),
+                    RefreshScope::Collections(CollectionCategory::Playlists),
+                ) => Some(*subscription),
+                (SubscriptionTopic::Playlist(id), RefreshScope::Playlist(target))
+                    if id == target =>
+                {
+                    Some(*subscription)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for id in ids {
+            if let Some(pump) = self.pumps.remove(&id) {
+                pump.handle.abort();
+                let _ = pump.handle.await;
+            }
         }
     }
 

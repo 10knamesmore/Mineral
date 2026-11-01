@@ -44,7 +44,6 @@ fn state_with_covers(cache_playlist: bool, cache_track: bool) -> color_eyre::Res
             revision: Revision::default(),
             entries: entry_views(vec![song("entry"), selected]),
             complete: true,
-            next_offset: None,
         },
     );
     state.ui.browse.collections.select(0);

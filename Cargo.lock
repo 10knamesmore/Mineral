@@ -3677,6 +3677,7 @@ dependencies = [
  "color-eyre",
  "futures-util",
  "mineral-channel-core",
+ "mineral-common",
  "mineral-log",
  "mineral-model",
  "parking_lot",

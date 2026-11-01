@@ -14,11 +14,12 @@ use mineral_client::connection::{ClientConfig, ConnectError};
 use mineral_client::operation::{Outcome, SubmitError, UnknownReason};
 use mineral_common::revision::Revision;
 use mineral_protocol::{
-    FailureKind, MessageBatch, OperationResult, PlayQueueError, QueueContextWire, RejectReason,
-    Request, Response, ServerHello, SessionMessage, SessionResult, SubscribeRequest,
-    SubscriptionId, SubscriptionTopic,
+    AdvanceSubscription, FailureKind, MessageBatch, OperationResult, PlayQueueError,
+    QueueContextWire, RejectReason, Request, Response, ServerHello, SessionMessage, SessionResult,
+    SubscribeRequest, SubscriptionDemand, SubscriptionId, SubscriptionTopic,
 };
 use mineral_protocol::{Wire, WireError, WireSink, WireSource};
+use mineral_task::Priority;
 use tokio::time::timeout;
 
 mod common;
@@ -456,15 +457,15 @@ async fn subscription_refcount_reaches_wire_once() -> color_eyre::Result<()> {
         });
         let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
         let topic = SubscriptionTopic::Playback;
-        let first = client.subscribe(topic);
-        let second = client.subscribe(topic);
+        let first = client.subscribe(topic.clone())?;
+        let second = client.subscribe(topic.clone())?;
         assert_eq!(first, second, "{transport:?}: 同主题返回同一 id");
-        client.unsubscribe(topic);
+        client.unsubscribe(&topic)?;
         assert!(matches!(
             client.submit(Request::Pause, applied)?.outcome().await,
             Outcome::Applied(())
         ));
-        client.unsubscribe(topic);
+        client.unsubscribe(&topic)?;
         assert!(matches!(
             client.submit(Request::Pause, applied)?.outcome().await,
             Outcome::Applied(())
@@ -516,7 +517,8 @@ async fn outbound_queue_is_bounded() -> color_eyre::Result<()> {
         config,
     )
     .await?;
-    let _first = client.submit(Request::Pause, applied)?;
+    let topic = SubscriptionTopic::Playback;
+    let subscription = client.subscribe(topic.clone())?;
     tokio::task::yield_now().await;
     let _queued = client.submit(Request::Pause, applied)?;
     assert_eq!(
@@ -524,6 +526,26 @@ async fn outbound_queue_is_bounded() -> color_eyre::Result<()> {
         Some(SubmitError::QueueFull)
     );
     assert_eq!(client.try_fire(Request::Pause), Err(SubmitError::QueueFull));
+    assert_eq!(
+        client.subscribe(SubscriptionTopic::Pcm),
+        Err(SubmitError::QueueFull)
+    );
+    assert_eq!(
+        client.advance(AdvanceSubscription {
+            subscription,
+            demand: SubscriptionDemand::Next,
+            priority: Priority::User,
+        }),
+        Err(SubmitError::QueueFull)
+    );
+    assert_eq!(client.unsubscribe(&topic), Err(SubmitError::QueueFull));
+    assert_eq!(
+        client.subscribe(topic.clone())?,
+        subscription,
+        "失败的退订保留原订阅"
+    );
+    client.unsubscribe(&topic)?;
+    assert_eq!(client.unsubscribe(&topic), Err(SubmitError::QueueFull));
     Ok(())
 }
 
@@ -539,7 +561,6 @@ async fn default_capacity_accepts_library_indexing_burst() -> color_eyre::Result
     for index in 0..377 {
         client.try_fire(Request::SubmitTask(
             mineral_task::TaskKind::ChannelFetch(mineral_task::ChannelFetchKind::PlaylistDetail {
-                load: mineral_channel_core::PlaylistLoad::Complete,
                 id: mineral_model::PlaylistId::new(
                     mineral_model::SourceKind::NETEASE,
                     index.to_string(),
@@ -583,10 +604,10 @@ async fn reader_stays_live_while_writer_blocks() -> color_eyre::Result<()> {
         Ok::<(), color_eyre::Report>(())
     });
     let client = Client::from_wire(client_wire, "contract", ClientConfig::default()).await?;
-    client.subscribe(SubscriptionTopic::Playback);
+    client.subscribe(SubscriptionTopic::Playback)?;
     // 多订阅几次把 writer 堵在容量为 1 的发送通道上。
     for _ in 0..4 {
-        client.subscribe(SubscriptionTopic::Pcm);
+        client.subscribe(SubscriptionTopic::Pcm)?;
     }
     timeout(Duration::from_secs(5), async {
         loop {

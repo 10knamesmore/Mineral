@@ -14,7 +14,8 @@ use mineral_client::connection::ClientConfig;
 use mineral_client::state::PlayerMirror;
 use mineral_model::{Song, SongId, SourceKind};
 use mineral_protocol::{
-    PlayMode, QueueContextWire, Request, SocketWire, Subscription, SubscriptionTopic,
+    AdvanceSubscription, PlayMode, QueueContextWire, Request, SocketWire, Subscription,
+    SubscriptionDemand, SubscriptionTopic,
 };
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 use tokio::time::timeout;
@@ -155,7 +156,7 @@ async fn queue_ops_apply_in_arrival_order() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn("order", None)?;
     daemon.wait_ready()?;
     let client = daemon.connect("order").await?;
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Player)?;
     let outcome = client
         .play_queue(songs(5), /*target*/ 0, QueueContextWire::Manual)?
         .outcome()
@@ -217,8 +218,8 @@ async fn multi_client_edits_converge() -> color_eyre::Result<()> {
     daemon.wait_ready()?;
     let first = daemon.connect("multi-a").await?;
     let second = daemon.connect("multi-b").await?;
-    first.subscribe(SubscriptionTopic::Player);
-    second.subscribe(SubscriptionTopic::Player);
+    first.subscribe(SubscriptionTopic::Player)?;
+    second.subscribe(SubscriptionTopic::Player)?;
     let outcome = first
         .play_queue(songs(1), /*target*/ 0, QueueContextWire::Manual)?
         .outcome()
@@ -262,7 +263,7 @@ async fn player_queue_fragments_over_socket() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn("fragment", None)?;
     daemon.wait_ready()?;
     let client = daemon.connect("fragment").await?;
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Player)?;
     let outcome = client
         .play_queue(songs(600), /*target*/ 0, QueueContextWire::Manual)?
         .outcome()
@@ -281,7 +282,7 @@ async fn large_queue_batches_arrive_complete_and_in_order() -> color_eyre::Resul
     let daemon = Daemon::spawn("queue-batch", None)?;
     daemon.wait_ready()?;
     let client = daemon.connect("queue-batch").await?;
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Player)?;
     let original = songs(500);
     let batch = songs(1000);
     for insert_next in [false, true] {
@@ -351,7 +352,7 @@ async fn playback_subscription_pushes_anchor() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn("playback", None)?;
     daemon.wait_ready()?;
     let client = daemon.connect("playback").await?;
-    client.subscribe(SubscriptionTopic::Playback);
+    client.subscribe(SubscriptionTopic::Playback)?;
     wait_until("首个播放锚点", || {
         client.playback_snapshot().volume_pct > 0
     })
@@ -380,7 +381,7 @@ async fn play_mode_cycle_pushes_every_step() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn("play-mode", None)?;
     daemon.wait_ready()?;
     let client = daemon.connect("play-mode").await?;
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Player)?;
 
     // 空队列:进 Shuffle 不洗牌(不动版本),仍须推送。
     client.fire(Request::CyclePlayMode);
@@ -421,7 +422,7 @@ async fn set_play_mode_applies_directly() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn("set-play-mode", None)?;
     daemon.wait_ready()?;
     let client = daemon.connect("set-play-mode").await?;
-    client.subscribe(SubscriptionTopic::Player);
+    client.subscribe(SubscriptionTopic::Player)?;
 
     let outcome = client
         .play_queue(songs(3), /*target*/ 0, QueueContextWire::Manual)?
@@ -472,7 +473,7 @@ async fn tasks_subscription_delivers_snapshot() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn("tasks", None)?;
     daemon.wait_ready()?;
     let client = daemon.connect("tasks").await?;
-    client.subscribe(SubscriptionTopic::Tasks);
+    client.subscribe(SubscriptionTopic::Tasks)?;
     wait_until("首个任务摘要", || client.tasks_snapshot().is_some()).await?;
     // 提交一批任务:会话不被摘要订阅阻塞,任务事件照常回流。
     for index in 0..20 {
@@ -510,7 +511,7 @@ async fn service_info_replays_and_changes_after_daemon_reload() -> color_eyre::R
         .ok_or_else(|| eyre!("service info query failed"))?;
     assert_eq!(initial.queue_transforms, vec!["Keep order"]);
     assert!(!initial.play_counts.enabled);
-    client.subscribe(SubscriptionTopic::Events(Subscription::ServiceInfo));
+    client.subscribe(SubscriptionTopic::Events(Subscription::ServiceInfo))?;
     wait_until("订阅重放当前能力", || {
         client.mirror().drain_events().into_iter().any(|event| {
             matches!(event, mineral_protocol::Event::ServiceInfoChanged { info }
@@ -551,7 +552,7 @@ async fn service_info_replays_and_changes_after_daemon_reload() -> color_eyre::R
     Ok(())
 }
 
-/// A real daemon reads and plays local media through ordinary channel requests; reconnects reuse it.
+/// A real daemon reads playlist subscriptions and plays their media; reconnects reuse the catalog.
 #[tokio::test]
 async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
     /// Read the local playlist identity from the public library snapshot.
@@ -593,17 +594,17 @@ async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn("local-library", Some(&config))?;
     daemon.wait_ready()?;
     let client = daemon.connect("local-library").await?;
-    client.subscribe(SubscriptionTopic::Player);
-    client.subscribe(SubscriptionTopic::Events(Subscription::Task));
-    client.subscribe(SubscriptionTopic::Events(Subscription::Lifecycle));
+    client.subscribe(SubscriptionTopic::Player)?;
+    client.subscribe(SubscriptionTopic::Events(Subscription::Task))?;
+    client.subscribe(SubscriptionTopic::Events(Subscription::Lifecycle))?;
     let playlist_id = local_playlist_id(&client).await?;
-    client.fire(Request::SubmitTask(
-        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-            id: playlist_id.clone(),
-            load: mineral_channel_core::PlaylistLoad::Complete,
-        }),
-        Priority::User,
-    ));
+    let playlist_topic = SubscriptionTopic::Playlist(playlist_id.clone());
+    let subscription = client.subscribe(playlist_topic.clone())?;
+    client.advance(AdvanceSubscription {
+        subscription,
+        demand: SubscriptionDemand::Next,
+        priority: Priority::User,
+    })?;
     let mut selected = None;
     wait_until("local playlist detail", || {
         for event in client.mirror().drain_events() {
@@ -627,6 +628,7 @@ async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
     })
     .await?;
     let song = selected.ok_or_else(|| eyre!("missing local song"))?;
+    client.unsubscribe(&playlist_topic)?;
     assert!(
         client
             .toggle_love(song.clone())?
@@ -657,7 +659,7 @@ async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
     // Files added after the first load do not appear merely because a client reconnects.
     mineral_test::write_wav(&root.join("later.wav"), &[100; 4_800], 1, 48_000)?;
     let other = daemon.connect("local-library-reconnect").await?;
-    other.subscribe(SubscriptionTopic::Player);
+    other.subscribe(SubscriptionTopic::Player)?;
     wait_until("reconnect retains local identity", || {
         other.mirror().read_player(|player| {
             player
@@ -669,20 +671,19 @@ async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
     .await?;
     other.subscribe(SubscriptionTopic::Events(
         mineral_protocol::Subscription::Task,
-    ));
+    ))?;
     // 重连后公开库列表仍解析到同一本地歌单 identity。
     let reconnected_id = local_playlist_id(&other).await?;
     assert_eq!(
         reconnected_id, playlist_id,
         "重连后库列表应给出同一本地歌单 id"
     );
-    other.fire(Request::SubmitTask(
-        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-            id: reconnected_id,
-            load: mineral_channel_core::PlaylistLoad::Complete,
-        }),
-        Priority::User,
-    ));
+    let subscription = other.subscribe(SubscriptionTopic::Playlist(reconnected_id))?;
+    other.advance(AdvanceSubscription {
+        subscription,
+        demand: SubscriptionDemand::Complete,
+        priority: Priority::User,
+    })?;
     let mut reconnected_songs = None;
     wait_until("reconnect reads the same local catalog", || {
         for event in other.mirror().drain_events() {
@@ -707,6 +708,7 @@ async fn local_library_load_playback_and_reconnect() -> color_eyre::Result<()> {
         reconnected_songs.first().map(|entry| &entry.song.id),
         Some(&song.id)
     );
+    other.unsubscribe(&playlist_topic)?;
     assert!(client.stop().await.is_success());
     Ok(())
 }

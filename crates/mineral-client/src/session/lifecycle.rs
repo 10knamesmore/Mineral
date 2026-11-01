@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use mineral_protocol::{
-    ClientInfo, CloseReason, MessageBatch, PlayerVersions, Request, RequestId, SessionMessage,
-    SubscribeRequest, SubscriptionId, SubscriptionTopic, Wire,
+    AdvanceSubscription, ClientInfo, CloseReason, MessageBatch, PlayerVersions, Request, RequestId,
+    SessionMessage, SubscribeRequest, SubscriptionId, SubscriptionTopic, Wire,
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -113,6 +113,9 @@ pub(super) enum Command {
     /// 取消订阅。
     Unsubscribe(SubscriptionId),
 
+    /// 推进已存在的订阅。
+    Advance(AdvanceSubscription),
+
     /// 请求重新快照。
     Resync(SubscriptionId),
 
@@ -188,27 +191,44 @@ impl SessionHandle {
         &self,
         topic: SubscriptionTopic,
         known_player: Option<PlayerVersions>,
-    ) -> SubscriptionId {
+    ) -> Result<SubscriptionId, SubmitError> {
+        let permit = self.reserve_command()?;
         let id = SubscriptionId::new(self.next_subscription.fetch_add(1, Ordering::Relaxed));
-        self.shared.mirror.register_subscription(id, topic);
+        self.shared.mirror.register_subscription(id, topic.clone());
         let request = SubscribeRequest {
             id,
             topic,
             known_player,
         };
-        if self.tx.try_send(Command::Subscribe(request)).is_err() {
-            self.shared.mirror.unregister_subscription(id);
-        }
-        id
+        permit.send(Command::Subscribe(request));
+        Ok(id)
     }
 
     /// 取消订阅。
     ///
     /// # Params:
     ///   - `id`: 订阅 id
-    pub(crate) fn unsubscribe(&self, id: SubscriptionId) {
+    pub(crate) fn unsubscribe(&self, id: SubscriptionId) -> Result<(), SubmitError> {
+        let permit = self.reserve_command()?;
         self.shared.mirror.unregister_subscription(id);
-        let _ = self.tx.try_send(Command::Unsubscribe(id));
+        permit.send(Command::Unsubscribe(id));
+        Ok(())
+    }
+
+    pub(crate) fn advance(&self, request: AdvanceSubscription) -> Result<(), SubmitError> {
+        self.reserve_command()?.send(Command::Advance(request));
+        Ok(())
+    }
+
+    /// Reserve queue capacity before changing subscription state.
+    fn reserve_command(&self) -> Result<mpsc::Permit<'_, Command>, SubmitError> {
+        if !self.shared.connected() {
+            return Err(SubmitError::Disconnected);
+        }
+        self.tx.try_reserve().map_err(|error| match error {
+            mpsc::error::TrySendError::Full(()) => SubmitError::QueueFull,
+            mpsc::error::TrySendError::Closed(()) => SubmitError::Disconnected,
+        })
     }
 
     /// 主动关闭会话(尽力送出 Close,然后收束)。

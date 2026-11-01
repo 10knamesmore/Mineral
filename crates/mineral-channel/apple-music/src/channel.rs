@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
-use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, FetchStream, MusicChannel,
-    Page, PageResult, PlaylistDetail, PlaylistLoad,
+    Page, PageResult, PlaylistDetail,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -132,10 +131,9 @@ impl MusicChannel for AppleMusicChannel {
     fn playlist_detail<'a>(
         &'a self,
         id: &'a PlaylistId,
-        load: PlaylistLoad,
         _cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
-        fresh_snapshot(async move { Ok(self.metadata.playlist_detail(id, load).await?) })
+        self.metadata.playlist_detail(id)
     }
 
     fn album_detail<'a>(&'a self, id: &'a AlbumId, cache: CachePolicy) -> FetchStream<'a, Album> {

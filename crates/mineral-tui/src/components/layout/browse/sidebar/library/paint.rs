@@ -700,7 +700,6 @@ mod tests {
                 revision: Revision::default(),
                 entries: vec![entry(9, "spread", "A distant B"), entry(2, "exact", "AB")],
                 complete: true,
-                next_offset: None,
             },
         );
         state.ui.browse.tracks.search.set_query("ab");

@@ -1,21 +1,23 @@
 //! Scheduler 端到端单测:不依赖真实 channel,本地 fake。
 
+use std::slice;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use mineral_channel_core::collection::fresh_collection;
 use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::{
     ChannelCaps, CollectionStream, Error, FetchStream, MusicChannel, Page, PageResult,
-    PlaylistDetail, PlaylistLoad, Result,
+    PlaylistDetail, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
     Album, AlbumId, ArtistId, Lyrics, Playlist, PlaylistId, SearchKind, Song, SongId, SourceKind,
 };
 use mineral_task::{
-    ChannelFetchKind, ChannelFetchKindTag, Priority, Scheduler, SearchPayload, TaskEvent, TaskKind,
-    TaskOutcome,
+    ChannelFetchKind, ChannelFetchKindTag, ChannelRunError, Priority, Scheduler, SearchPayload,
+    TaskEvent, TaskKind, TaskOutcome,
 };
 use tokio::sync::Semaphore;
 
@@ -95,10 +97,10 @@ impl MusicChannel for FakeChannel {
     fn playlist_detail<'a>(
         &'a self,
         id: &'a PlaylistId,
-        _load: PlaylistLoad,
         _cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
         fresh_snapshot(async move {
+            self.page_started.add_permits(1);
             self.maybe_wait().await;
             Ok(PlaylistDetail::complete(
                 Playlist::builder()
@@ -130,13 +132,6 @@ impl MusicChannel for FakeChannel {
 fn my_playlists_kind() -> TaskKind {
     TaskKind::ChannelFetch(ChannelFetchKind::MyPlaylists {
         source: SourceKind::NETEASE,
-    })
-}
-
-fn playlist_tracks_kind() -> TaskKind {
-    TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-        id: PlaylistId::new(SourceKind::NETEASE, "p1"),
-        load: mineral_channel_core::PlaylistLoad::Complete,
     })
 }
 
@@ -199,17 +194,36 @@ async fn dedup_returns_same_handle() -> color_eyre::Result<()> {
 #[tokio::test]
 async fn cancel_where_batch() -> color_eyre::Result<()> {
     let gate = Arc::new(Semaphore::new(0));
+    let channel = Arc::new(FakeChannel::new(Some(gate)));
+    let started = Arc::clone(&channel.page_started);
+    let channel: Arc<dyn MusicChannel> = channel;
     let sched = Scheduler::new(
-        &channels(Some(gate)),
+        slice::from_ref(&channel),
         /*workers_per_channel*/ 8,
         &[],
         None,
     );
     let h1 = sched.submit(my_playlists_kind(), Priority::User);
-    let h2 = sched.submit(playlist_tracks_kind(), Priority::User);
+    let running = sched.clone();
+    let h2 = tokio::spawn(async move {
+        let id = PlaylistId::new(SourceKind::NETEASE, "p1");
+        let mut stream = running.playlist_stream(id.clone());
+        running
+            .run_channel(
+                ChannelFetchKind::PlaylistDetail { id },
+                Priority::User,
+                async {
+                    stream.next().await.ok_or(Error::InvalidData {
+                        field: "playlist stream",
+                    })?
+                },
+            )
+            .await
+    });
+    started.acquire().await?.forget();
     sched.cancel_where(|k| matches!(k, TaskKind::ChannelFetch(_)));
     assert_eq!(h1.done().await, TaskOutcome::Cancelled);
-    assert_eq!(h2.done().await, TaskOutcome::Cancelled);
+    assert!(matches!(h2.await?, Err(ChannelRunError::Cancelled)));
     Ok(())
 }
 

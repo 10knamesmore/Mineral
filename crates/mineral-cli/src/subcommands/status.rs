@@ -30,8 +30,18 @@ pub async fn run() -> Result<()> {
             path: socket_path,
             source,
         })?;
-    client.subscribe(SubscriptionTopic::Playback);
-    client.subscribe(SubscriptionTopic::DownloadsSummary);
+    client
+        .subscribe(SubscriptionTopic::Playback)
+        .map_err(|error| Error::UnknownOutcome {
+            operation: "subscribe to playback",
+            reason: error.into(),
+        })?;
+    client
+        .subscribe(SubscriptionTopic::DownloadsSummary)
+        .map_err(|error| Error::UnknownOutcome {
+            operation: "subscribe to downloads",
+            reason: error.into(),
+        })?;
     client.wait_subscriptions_ready(READY_TIMEOUT).await;
 
     let pid = match client.daemon_info().await {

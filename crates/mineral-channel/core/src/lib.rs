@@ -23,7 +23,7 @@ pub use page::{Page, PageResult};
 mod playlist;
 /// Source-scoped storage contracts supplied by the daemon.
 pub mod store;
-pub use playlist::{PlaylistDetail, PlaylistLoad};
+pub use playlist::{PlaylistDetail, finish_playlist};
 use rustc_hash::FxHashSet;
 
 use async_trait::async_trait;
@@ -81,15 +81,14 @@ pub trait MusicChannel: Send + Sync {
         fresh_snapshot(async { Err(Error::NotSupported) })
     }
 
-    /// 按加载意图获取歌单；预览可返回首批，完整加载须检查所有曲目。
+    /// 按需读取歌单，每份快照包含已检查前缀的全部曲目，保留来源顺序和重复项。
     ///
-    /// channel 决定远端批次并显式报告完整性。`CachePolicy::Reload` 禁止读取旧缓存或
-    /// 失败后回退；加载范围仍由 `PlaylistLoad` 决定，完整请求失败不能返回首批。
-    /// Cached 只供刷新期间展示；Fresh 表示本次加载意图已完成，不代表已加载整个歌单。
+    /// Cached 仅供展示，Fresh 确认当前前缀。最后一份 Fresh 必须标记 complete；
+    /// 中途失败返回错误。继续消费才请求下一批，丢弃流取消后续读取。
+    /// Reload 禁止读取旧缓存或失败后回退。
     fn playlist_detail<'a>(
         &'a self,
         _id: &'a PlaylistId,
-        _load: PlaylistLoad,
         _cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
         fresh_snapshot(async { Err(Error::NotSupported) })

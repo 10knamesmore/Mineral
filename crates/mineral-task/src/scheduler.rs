@@ -1,23 +1,91 @@
 //! 顶层入口:[`Scheduler`]。
 
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 
-use mineral_channel_core::MusicChannel;
+use async_stream::try_stream;
+use futures_util::StreamExt;
 use mineral_channel_core::store::{LibraryStore, NamespaceStore};
-use mineral_model::RefreshScope;
+use mineral_channel_core::{
+    Error as ChannelError, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail,
+};
+use mineral_model::{PlaylistId, RefreshScope};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
+use crate::ChannelFetchKind;
+use crate::TaskOutcome;
 use crate::event::TaskEvent;
 use crate::handle::TaskHandle;
 use crate::id::{Priority, TaskId};
 use crate::kind::ChannelFetchKindTag;
 use crate::kind::TaskKind;
-use crate::lanes::channel_fetch::{ChannelFetchLane, Job as ChannelFetchJob};
+use crate::lanes::channel_fetch::{ChannelFetchLane, DispatchError, Job as ChannelFetchJob};
 use crate::lanes::playlist_write::{Job as PlaylistWriteJob, PlaylistWriteLane};
 use crate::ongoing::{Bind, Ongoing};
 use crate::read_cache::ReadCache;
+
+/// A queued operation either failed to execute, failed at its source, or was cancelled.
+#[derive(Debug, Error)]
+pub enum ChannelRunError<E> {
+    /// The source queue could not grant an execution turn.
+    #[error(transparent)]
+    Dispatch(#[from] DispatchError),
+
+    /// The source returned an error.
+    #[error("channel operation: {0}")]
+    Source(#[source] E),
+
+    /// The existing task cancellation mechanism cancelled this operation.
+    #[error("channel operation cancelled")]
+    Cancelled,
+}
+
+/// Accounts for one active operation; no entry is retained while its stream is paused.
+struct ActiveOperation {
+    /// Existing task accounting and cancellation owner.
+    ongoing: Arc<Ongoing>,
+
+    /// Existing task event queue, used only for the completion metric.
+    events: Arc<Mutex<Vec<TaskEvent>>>,
+
+    /// Task identity for this active operation, released when the operation ends.
+    id: TaskId,
+
+    /// Source and target recorded by the task system.
+    kind: ChannelFetchKind,
+
+    /// Priority chosen by the requesting consumer.
+    priority: Priority,
+
+    /// Includes queue wait and execution of this operation.
+    started: Instant,
+
+    /// Remains Cancelled when the consumer drops its future.
+    outcome: TaskOutcome,
+}
+
+impl Drop for ActiveOperation {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        let latency_ms = elapsed
+            .as_secs()
+            .saturating_mul(1000)
+            .saturating_add(u64::from(elapsed.subsec_millis()));
+        self.events.lock().push(TaskEvent::FetchDone {
+            kind: ChannelFetchKindTag::of(&self.kind),
+            source: self.kind.source(),
+            target_ref: self.kind.target_ref(),
+            from_user: self.priority == Priority::User,
+            outcome: self.outcome,
+            latency_ms,
+        });
+        self.ongoing.remove(self.id);
+    }
+}
 
 /// 进程内任务调度器入口。`Clone` 廉价(`Arc<Inner>`)。
 #[derive(Clone)]
@@ -57,6 +125,73 @@ pub struct Snapshot {
 }
 
 impl Scheduler {
+    /// Runs an operation in the source's priority queue. The caller owns its state between calls.
+    /// Cancelling the returned future releases the execution turn.
+    pub async fn run_channel<T, E>(
+        &self,
+        kind: ChannelFetchKind,
+        priority: Priority,
+        operation: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, ChannelRunError<E>> {
+        let source = kind.source();
+        let (id, cancel) = self
+            .inner
+            .ongoing
+            .track(TaskKind::ChannelFetch(kind.clone()), priority);
+        let mut active = ActiveOperation {
+            ongoing: Arc::clone(&self.inner.ongoing),
+            events: Arc::clone(&self.inner.events),
+            id,
+            kind,
+            priority,
+            started: Instant::now(),
+            outcome: TaskOutcome::Cancelled,
+        };
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(ChannelRunError::Cancelled),
+            result = self.inner.channel_fetch.run(source, priority, operation) => result,
+        };
+        match result {
+            Ok(Ok(value)) => {
+                active.outcome = TaskOutcome::Ok;
+                Ok(value)
+            }
+            Ok(Err(error)) => {
+                active.outcome = TaskOutcome::Failed;
+                Err(ChannelRunError::Source(error))
+            }
+            Err(error) => {
+                active.outcome = TaskOutcome::Failed;
+                Err(ChannelRunError::Dispatch(error))
+            }
+        }
+    }
+
+    /// Creates a lazy playlist stream using the current invalidation policy.
+    pub fn playlist_stream(&self, id: PlaylistId) -> FetchStream<'static, PlaylistDetail> {
+        let kind = ChannelFetchKind::PlaylistDetail { id: id.clone() };
+        let cache = Arc::clone(&self.inner.read_cache);
+        let (policy, revision) = cache.read_state(&kind);
+        let mut snapshots = self.inner.channel_fetch.playlist(id, policy);
+        Box::pin(try_stream! {
+            loop {
+                if cache.read_state(&kind).1 != revision {
+                    Err(ChannelError::InvalidData { field: "playlist read invalidated" })?;
+                }
+                let Some(snapshot) = snapshots.next().await else {
+                    break;
+                };
+                let snapshot = snapshot?;
+                let complete = matches!(&snapshot, FetchSnapshot::Fresh(detail) if detail.complete);
+                if !cache.accept_result(&kind, revision, complete) {
+                    Err(ChannelError::InvalidData { field: "playlist read invalidated" })?;
+                }
+                yield snapshot;
+            }
+        })
+    }
+
     /// 用一组已构造好的 channel 初始化 scheduler。每个 channel 起对应 lane 的 worker 池。
     ///
     /// # Params:

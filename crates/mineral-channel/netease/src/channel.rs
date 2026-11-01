@@ -11,7 +11,7 @@ use mineral_channel_core::collection::{albums_with_cache, playlists_with_cache};
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
-    MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad, Result,
+    MusicChannel, Page, PageResult, PlaylistDetail, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -302,15 +302,14 @@ impl MusicChannel for NeteaseChannel {
             .boxed()
     }
 
-    /// 预览或完整加载由歌单模块执行，远端请求失败映射为公共 channel 错误。
+    /// 歌单模块持有读取进度，远端请求失败映射为公共 channel 错误。
     fn playlist_detail<'a>(
         &'a self,
         id: &'a PlaylistId,
-        load: PlaylistLoad,
         cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
         self.playlist
-            .load(&self.transport, self.persist.as_deref(), id, load, cache)
+            .load(&self.transport, self.persist.as_deref(), id, cache)
             .map(|result| result.map_err(map_err))
             .boxed()
     }

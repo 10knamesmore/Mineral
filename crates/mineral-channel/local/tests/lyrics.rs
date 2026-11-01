@@ -11,7 +11,7 @@ use lofty::{
     prelude::{Accessor, TagExt},
     tag::{ItemKey, Tag, TagType},
 };
-use mineral_channel_core::{MusicChannel, PlaylistLoad};
+use mineral_channel_core::MusicChannel;
 use mineral_channel_local::LocalLibrary;
 use mineral_model::{CachePolicy, LineKind, LyricLine, Playlist, Song, Word};
 use mineral_server::ServerStore;
@@ -43,13 +43,12 @@ async fn playlists(library: &LocalLibrary) -> color_eyre::Result<Vec<Playlist>> 
         .into_value()
     {
         let detail = library
-            .playlist_detail(&playlist.id, PlaylistLoad::Complete, CachePolicy::UseCache)
+            .playlist_detail(&playlist.id, CachePolicy::UseCache)
             .try_next()
             .await?
             .ok_or_else(|| eyre!("expected local detail snapshot"))?
             .into_value();
         assert!(detail.complete);
-        assert!(detail.next_offset.is_none());
         result.push(detail.playlist);
     }
     Ok(result)

@@ -7,7 +7,7 @@ use mineral_protocol::{
     DownloadId, DownloadTarget, Event, PlayMode, PlayQueueError, PlayerSync, PlayerVersions,
     QueueContextWire, QueueEditOutcome, QueueOp, SongStatsWire,
 };
-use mineral_task::{Priority, TaskEvent, TaskKind};
+use mineral_task::{Priority, Scheduler, TaskEvent, TaskKind};
 use tokio::sync::watch;
 
 use super::wire::{edited_song_id, queue_context_from_wire, stats_queue_op};
@@ -506,6 +506,11 @@ impl ClientHandle {
     ///   - `priority`: 优先级
     pub(crate) fn submit_task(&self, kind: TaskKind, priority: Priority) {
         self.player.submit_task(kind, priority);
+    }
+
+    /// Source execution queues shared by finite tasks and subscription streams.
+    pub(crate) fn scheduler(&self) -> Scheduler {
+        self.player.inner.scheduler.clone()
     }
 
     pub(crate) fn refresh_collections(&self, scope: &RefreshScope) {

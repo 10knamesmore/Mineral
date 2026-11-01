@@ -4,11 +4,11 @@
 
 #![cfg(test)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mineral_channel_core::ChannelCaps;
-use mineral_client::operation::Outcome;
+use mineral_client::operation::{Outcome, SubmitError};
 use mineral_client::state::{PlaybackMirror, PlayerMirror};
 use mineral_common::revision::Revision;
 use mineral_model::{
@@ -16,8 +16,8 @@ use mineral_model::{
     SourceKind,
 };
 use mineral_protocol::{
-    DownloadSummary, Event, FailureKind, QueueContextWire, QueueEditOutcome, QueueOp,
-    SubscriptionTopic,
+    AdvanceSubscription, DownloadSummary, Event, FailureKind, QueueContextWire, QueueEditOutcome,
+    QueueOp, SubscriptionId, SubscriptionTopic,
 };
 use mineral_task::{Priority, Snapshot, TaskKind};
 
@@ -118,7 +118,6 @@ pub(crate) fn state_with_mixed_tracks() -> color_eyre::Result<AppState> {
             revision: Revision::default(),
             entries: views,
             complete: true,
-            next_offset: None,
         },
     );
     Ok(s)
@@ -161,7 +160,6 @@ pub(crate) fn state_with_tracks() -> color_eyre::Result<AppState> {
             revision: Revision::default(),
             entries: views,
             complete: true,
-            next_offset: None,
         },
     );
     s.ui.browse.tracks.select(1);
@@ -269,6 +267,21 @@ pub(crate) struct TestClient {
 
     /// PCM 断续标记。
     pub(crate) pcm_discontinuity: Arc<std::sync::atomic::AtomicBool>,
+
+    /// Subscription declarations made through the real TUI input path.
+    pub(crate) subscriptions: Mutex<Vec<(SubscriptionId, SubscriptionTopic)>>,
+
+    /// Topics released by the TUI.
+    pub(crate) unsubscriptions: Mutex<Vec<SubscriptionTopic>>,
+
+    /// Demands submitted to an existing subscription.
+    pub(crate) advances: Mutex<Vec<AdvanceSubscription>>,
+
+    /// Unique mock subscription identities.
+    pub(crate) next_subscription: AtomicU64,
+
+    /// A local submission rejection, injected before any subscription state changes.
+    pub(crate) control_error: Option<SubmitError>,
 }
 
 /// [`TestClient::queue_ops`] 的记录容器:`(操作名, 歌 id 全限定串)` 序列。
@@ -348,9 +361,36 @@ impl Backend for TestClient {
         None
     }
 
-    fn subscribe(&self, _topic: SubscriptionTopic) {}
+    fn subscribe(&self, topic: SubscriptionTopic) -> Result<SubscriptionId, SubmitError> {
+        if let Some(error) = self.control_error {
+            return Err(error);
+        }
+        let id = SubscriptionId::new(self.next_subscription.fetch_add(1, Ordering::Relaxed));
+        if let Ok(mut subscriptions) = self.subscriptions.lock() {
+            subscriptions.push((id, topic));
+        }
+        Ok(id)
+    }
 
-    fn unsubscribe(&self, _topic: SubscriptionTopic) {}
+    fn unsubscribe(&self, topic: &SubscriptionTopic) -> Result<(), SubmitError> {
+        if let Some(error) = self.control_error {
+            return Err(error);
+        }
+        if let Ok(mut subscriptions) = self.unsubscriptions.lock() {
+            subscriptions.push(topic.clone());
+        }
+        Ok(())
+    }
+
+    fn advance(&self, request: AdvanceSubscription) -> Result<(), SubmitError> {
+        if let Some(error) = self.control_error {
+            return Err(error);
+        }
+        if let Ok(mut advances) = self.advances.lock() {
+            advances.push(request);
+        }
+        Ok(())
+    }
 
     fn drain_pcm(&self) -> Vec<f32> {
         self.pcm
@@ -490,8 +530,6 @@ impl Backend for TestClient {
     // 测试后端立即接收任务，没有待提交积压。
     fn flush_task_submissions(&self) {}
 
-    fn prioritize_task(&self, _kind: &TaskKind) {}
-
     fn pending_task_count(&self) -> usize {
         0
     }
@@ -609,14 +647,10 @@ pub(crate) fn app_with_queue_edits(
 }
 
 /// 造一个停在 Playlists 视图、填 [`state_with_playlists`] 同款三歌单(曲目均未缓存)
-/// 的 [`App`],额外返回 [`TestClient`] 的 submit_task 任务记录(深度搜索补拉断言用)。
-pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<Vec<TaskKind>>>)> {
-    let submitted = Arc::new(Mutex::new(Vec::new()));
-    let client = TestClient {
-        submitted: Arc::clone(&submitted),
-        ..TestClient::default()
-    };
-    let mut app = test_app_with(Arc::new(client))?;
+/// 的 [`App`]，额外返回后端以检查订阅和推进。
+pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<TestClient>)> {
+    let client = Arc::new(TestClient::default());
+    let mut app = test_app_with(client.clone())?;
     app.state.models.library.playlists = vec![
         playlist_view("p1", "EndSerenading", SourceKind::NETEASE, 10),
         playlist_view("p2", "The Power of Failing", SourceKind::NETEASE, 8),
@@ -624,7 +658,7 @@ pub(crate) fn app_with_playlists_probed() -> color_eyre::Result<(App, Arc<Mutex<
     ];
     app.state.ui.browse.view.switch_to(View::Collections);
     app.state.ui.browse.collections.select(0);
-    Ok((app, submitted))
+    Ok((app, client))
 }
 
 /// 造一个接 [`TestClient`] 且不启动图片 worker 的 [`App`]:Library 视图,填《EndSerenading》前 `len`
@@ -649,7 +683,6 @@ pub(crate) fn app_with_library(len: usize, sel_track: usize) -> color_eyre::Resu
             revision: Revision::default(),
             entries: views,
             complete: true,
-            next_offset: None,
         },
     );
     app.state.ui.browse.view.switch_to(View::Tracks);
@@ -772,7 +805,6 @@ pub(crate) fn app_with_library_probed(
             revision: Revision::default(),
             entries: views,
             complete: true,
-            next_offset: None,
         },
     );
     app.state.ui.browse.view.switch_to(View::Tracks);
@@ -803,7 +835,6 @@ pub(crate) fn app_with_long_library(len: usize, sel_track: usize) -> color_eyre:
             revision: Revision::default(),
             entries: views,
             complete: true,
-            next_offset: None,
         },
     );
     app.state.ui.browse.tracks.select(sel_track);

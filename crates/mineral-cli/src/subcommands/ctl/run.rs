@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use mineral_client::Client;
 use mineral_client::connection::{ClientConfig, ConnectError};
-use mineral_client::operation::Outcome;
+use mineral_client::operation::{Outcome, SubmitError};
 use mineral_protocol::{
     QueueEditOutcome, QueueOp, SocketWire, SubscriptionId, SubscriptionTopic, WireError,
 };
@@ -26,6 +26,10 @@ use super::render::{Payload, Report};
 /// 控制命令提交前的连接或订阅故障。
 #[derive(Debug, thiserror::Error)]
 enum CtlError {
+    /// The subscription command was not accepted by the local sender.
+    #[error("subscription not submitted")]
+    Submit(#[from] SubmitError),
+
     /// Socket 连接失败。
     #[error("connect to daemon at {}", path.display())]
     ConnectWire {
@@ -53,6 +57,7 @@ impl CtlError {
     /// 从结构化失败生成 CLI 提示，不泄露内部诊断。
     fn user_message(&self) -> String {
         match self {
+            Self::Submit(error) => error.to_string(),
             Self::ConnectWire { .. } => "连不上 daemon;先跑 `mineral serve`".to_owned(),
             Self::Handshake(error) => match error {
                 ConnectError::Rejected(_) => "daemon 拒绝连接".to_owned(),
@@ -366,7 +371,7 @@ async fn await_topic(
     client: &Client,
     topic: SubscriptionTopic,
 ) -> std::result::Result<SubscriptionId, CtlError> {
-    let id = client.subscribe(topic);
+    let id = client.subscribe(topic.clone())?;
     client.wait_subscriptions_ready(READY_TIMEOUT).await;
     if client.mirror().subscription_seen(id) {
         Ok(id)

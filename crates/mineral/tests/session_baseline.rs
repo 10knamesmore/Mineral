@@ -332,10 +332,10 @@ async fn session_baseline() -> color_eyre::Result<()> {
     let daemon = Daemon::spawn()?;
     daemon.wait_ready()?;
     let client = daemon.connect("baseline").await?;
-    client.subscribe(SubscriptionTopic::Player);
-    client.subscribe(SubscriptionTopic::Playback);
-    client.subscribe(SubscriptionTopic::Tasks);
-    client.subscribe(SubscriptionTopic::DownloadsSummary);
+    client.subscribe(SubscriptionTopic::Player)?;
+    client.subscribe(SubscriptionTopic::Playback)?;
+    client.subscribe(SubscriptionTopic::Tasks)?;
+    client.subscribe(SubscriptionTopic::DownloadsSummary)?;
 
     // 保持状态订阅开启,测量交替暂停 / 恢复的顺序请求延迟。
     let mut control = Vec::with_capacity(CONTROL_SAMPLES);

@@ -7,8 +7,7 @@
 
 use std::sync::Arc;
 
-use mineral_channel_core::fetch::finish_fetch;
-use mineral_channel_core::{Error as ChannelError, PlaylistLoad};
+use mineral_channel_core::finish_playlist;
 use mineral_model::{CachePolicy, SongId};
 use mineral_playback::PlaybackRequest;
 use mineral_protocol::{DownloadTarget, Event};
@@ -552,13 +551,8 @@ fn apply_cmd(player: &PlayerCore, cmd: ScriptCmd) {
                     resolve_err(&player, query, error);
                     return;
                 };
-                match finish_fetch(channel.playlist_detail(
-                    &playlist,
-                    PlaylistLoad::Complete,
-                    CachePolicy::UseCache,
-                ))
-                .await
-                .and_then(|result| result.ok_or(ChannelError::NotFound))
+                match finish_playlist(channel.playlist_detail(&playlist, CachePolicy::UseCache))
+                    .await
                 {
                     Ok(playlist) => {
                         resolve_ok(

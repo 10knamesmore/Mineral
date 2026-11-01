@@ -707,7 +707,6 @@ mod tests {
         s.apply(&TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: playlist.id.clone(),
-            load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
                 playlist.clone(),
             )),

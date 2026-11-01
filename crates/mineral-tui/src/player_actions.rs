@@ -234,12 +234,15 @@ impl App {
             return;
         }
         let fetch = container_fetch(container);
-        crate::runtime::prefetch::submit_detail_tasks(
+        if let Err(error) = crate::runtime::prefetch::submit_detail_tasks(
             &*self.client,
             &mut self.state.models.library,
             fetch.clone(),
             Priority::User,
-        );
+        ) {
+            self.report_submit_error(error);
+            return;
+        }
         self.pending_container.insert(fetch, mode);
     }
 
@@ -306,12 +309,16 @@ impl App {
                     query,
                     name: name.clone(),
                 });
-                crate::runtime::prefetch::submit_detail_tasks(
+                if let Err(error) = crate::runtime::prefetch::submit_detail_tasks(
                     &*self.client,
                     &mut self.state.models.library,
                     DetailFetch::PlaylistDetail(id.clone()),
                     Priority::User,
-                );
+                ) {
+                    self.pending_playlist_play = None;
+                    self.report_submit_error(error);
+                    return;
+                }
                 mineral_log::info!(target: "tui", playlist = %id, "等待完整歌单后起播");
                 return;
             }
@@ -349,11 +356,7 @@ impl App {
     /// **事件载荷**(非 detail 帧——帧可能已切走)取曲目入队、清意图。artist 只认热门曲那路
     /// (`ArtistDetailFetched`),`ArtistAlbumsFetched` 是专辑壳、与播放无关,不响应。
     pub(crate) fn fulfill_pending_container(&mut self, ev: &TaskEvent) {
-        if let TaskEvent::PlaylistDetailFailed {
-            id,
-            load: mineral_channel_core::PlaylistLoad::Complete,
-        } = ev
-        {
+        if let TaskEvent::PlaylistDetailFailed { id } = ev {
             let container = self
                 .pending_container
                 .remove(&DetailFetch::PlaylistDetail(id.clone()))
@@ -512,7 +515,7 @@ mod tests {
     #[test]
     fn partial_playlist_waits_for_complete_queue_and_preserves_occurrence() -> color_eyre::Result<()>
     {
-        use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
+        use mineral_channel_core::PlaylistDetail;
         use mineral_model::{CollectionIndex, Playlist, PlaylistEntry, PlaylistId};
         let (mut app, queue_ops) = app_with_library_probed(2, 1)?;
         let id = PlaylistId::new(SourceKind::NETEASE, "p1");
@@ -529,7 +532,6 @@ mod tests {
         let preview = TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: id.clone(),
-            load: PlaylistLoad::Preview,
             detail: Box::new(PlaylistDetail {
                 playlist: Playlist::builder()
                     .id(id.clone())
@@ -538,7 +540,6 @@ mod tests {
                     .entries(preview_entries)
                     .build(),
                 complete: false,
-                next_offset: None,
             }),
         };
         // Replace the fixture's complete data with an actual first response.
@@ -563,7 +564,6 @@ mod tests {
         let full = TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: id.clone(),
-            load: PlaylistLoad::Complete,
             detail: Box::new(PlaylistDetail::complete(
                 Playlist::builder()
                     .id(id)

@@ -56,9 +56,6 @@ pub enum TaskEvent {
         /// 歌单 id。
         id: PlaylistId,
 
-        /// 本次请求的加载意图。
-        load: mineral_channel_core::PlaylistLoad,
-
         /// 有效缓存或远端结果为 true；false 仅供展示，刷新仍在进行。
         fresh: bool,
 
@@ -70,9 +67,6 @@ pub enum TaskEvent {
     PlaylistDetailFailed {
         /// 目标歌单。
         id: PlaylistId,
-
-        /// 失败请求的加载意图。
-        load: mineral_channel_core::PlaylistLoad,
     },
 
     /// `Lyrics` 任务成功:歌词数据就绪。
@@ -257,12 +251,9 @@ impl TaskEvent {
             Self::AlbumsFetched { source, .. } => {
                 ChannelFetchKind::MyAlbums { source: *source }.affected_by(scope)
             }
-            Self::PlaylistDetailFetched { id, load, .. }
-            | Self::PlaylistDetailFailed { id, load } => ChannelFetchKind::PlaylistDetail {
-                id: id.clone(),
-                load: *load,
+            Self::PlaylistDetailFetched { id, .. } | Self::PlaylistDetailFailed { id } => {
+                ChannelFetchKind::PlaylistDetail { id: id.clone() }.affected_by(scope)
             }
-            .affected_by(scope),
             Self::AlbumDetailFetched { id, .. } | Self::AlbumDetailFailed { id } => {
                 ChannelFetchKind::AlbumDetail { id: id.clone() }.affected_by(scope)
             }

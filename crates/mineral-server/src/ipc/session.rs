@@ -194,8 +194,14 @@ async fn read_loop(
             match message {
                 SessionMessage::Requests(requests) => {
                     for request in requests {
-                        handle_request(request, client, out, &services.shutdown, &subscriptions)
-                            .await;
+                        handle_request(
+                            request,
+                            client,
+                            out,
+                            &services.shutdown,
+                            &mut subscriptions,
+                        )
+                        .await;
                     }
                 }
                 SessionMessage::Subscribe(request) => {
@@ -205,6 +211,7 @@ async fn read_loop(
                     subscriptions.unsubscribe(id, services.publishers.pcm());
                 }
                 SessionMessage::Resync(id) => subscriptions.resync(id),
+                SessionMessage::Advance(request) => subscriptions.advance(request),
                 SessionMessage::Close(_reason) => {
                     subscriptions.shutdown(services.publishers.pcm());
                     return;
@@ -224,7 +231,7 @@ async fn handle_request(
     client: &ClientHandle,
     out: &mpsc::Sender<SessionMessage>,
     shutdown: &Arc<Notify>,
-    subscriptions: &Subscriptions,
+    subscriptions: &mut Subscriptions,
 ) {
     let id = request.id;
     if let Some(slow) = dispatch::async_request(&request.request) {
@@ -250,6 +257,9 @@ async fn handle_request(
         },
         Request::QueueEdit { op } => dispatch::execute_queue_edit(client, op).await,
         other => {
+            if let Request::RefreshCollections(scope) = &other {
+                subscriptions.invalidate(scope).await;
+            }
             let is_shutdown = matches!(other, Request::Shutdown);
             let invalidates_collections = matches!(other, Request::RefreshCollections(_));
             let result = dispatch::execute_sync(client, other);

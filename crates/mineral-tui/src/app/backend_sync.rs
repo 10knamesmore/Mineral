@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use mineral_client::operation::Outcome;
+use mineral_client::operation::{Outcome, SubmitError};
 use mineral_model::{CollectionCategory, RefreshScope};
 use mineral_protocol::{PlayerSync, QueueEditOutcome, QueueSync, SubscriptionTopic};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
@@ -18,6 +18,18 @@ use crate::runtime::state::{DetailFetch, LibraryUpdate};
 use super::App;
 
 impl App {
+    /// Explicit operations report local rejection instead of waiting for an unsent request.
+    pub(crate) fn report_submit_error(&mut self, error: SubmitError) {
+        let message = match error {
+            SubmitError::QueueFull | SubmitError::InFlightLimit => {
+                "Request not submitted: client is busy"
+            }
+            SubmitError::Disconnected => "Request not submitted: daemon disconnected",
+        };
+        self.notifications
+            .flash(tinted_text_item(message.to_owned(), TextTint::Error));
+    }
+
     /// 把镜像当前状态灌进 App 状态(每帧调一次,纯本地读)。
     pub(super) fn sync_from_backend(&mut self) {
         // 播放锚点:位置用本地单调钟推进,其余字段照抄权威值。
@@ -86,11 +98,18 @@ impl App {
             }
             return;
         }
-        self.downloads_subscribed = open;
-        if open {
-            self.client.subscribe(SubscriptionTopic::DownloadsDetail);
+        let result = if open {
+            self.client
+                .subscribe(SubscriptionTopic::DownloadsDetail)
+                .map(|_id| ())
         } else {
-            self.client.unsubscribe(SubscriptionTopic::DownloadsDetail);
+            self.client.unsubscribe(&SubscriptionTopic::DownloadsDetail)
+        };
+        if result.is_err() {
+            return;
+        }
+        self.downloads_subscribed = open;
+        if !open {
             self.state.models.downloads.clear();
         }
     }
@@ -117,7 +136,7 @@ impl App {
                     update.record(&self.state);
                     self.state.invalidate_collections(&scope);
                     update.finish(&mut self.state);
-                    match scope {
+                    let submitted = match scope {
                         RefreshScope::Collections(category) => {
                             for source in self.state.models.caps.keys().copied() {
                                 let kind = match category {
@@ -131,6 +150,7 @@ impl App {
                                 self.client
                                     .submit_task(TaskKind::ChannelFetch(kind), Priority::User);
                             }
+                            Ok(())
                         }
                         RefreshScope::Playlist(id) => submit_detail_tasks(
                             self.client.as_ref(),
@@ -144,6 +164,9 @@ impl App {
                             DetailFetch::AlbumDetail(id),
                             Priority::User,
                         ),
+                    };
+                    if let Err(error) = submitted {
+                        self.report_submit_error(error);
                     }
                 }
             }

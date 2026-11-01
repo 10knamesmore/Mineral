@@ -308,7 +308,6 @@ mod tests {
                 revision: Revision::default(),
                 entries: tracks,
                 complete: true,
-                next_offset: None,
             },
         );
         Ok(s)

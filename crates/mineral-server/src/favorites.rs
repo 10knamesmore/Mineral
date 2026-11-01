@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures_util::{FutureExt, StreamExt};
-use mineral_channel_core::{MusicChannel, PlaylistLoad};
+use mineral_channel_core::MusicChannel;
 use mineral_channel_mineral::favorites_playlist_id;
 use mineral_model::{CachePolicy, Song, SongId, SourceKind};
 use mineral_task::{ChannelFetchKind, Priority, TaskEvent, TaskKind};
@@ -263,7 +263,6 @@ impl PlayerCore {
         let detail = self.inner.scheduler.submit(
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
                 id: favorites_playlist_id(),
-                load: PlaylistLoad::Complete,
             }),
             Priority::User,
         );

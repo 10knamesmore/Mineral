@@ -14,7 +14,8 @@ pub enum FetchSnapshot<T> {
     /// A previous snapshot for display while the source is being refreshed.
     Cached(T),
 
-    /// The requested read is ready: an unexpired cache or a successful source fetch.
+    /// This snapshot is current: an unexpired cache or a successful source fetch.
+    /// Its payload separately reports completeness when the resource loads in batches.
     Fresh(T),
 }
 
@@ -32,7 +33,7 @@ impl<T> FetchSnapshot<T> {
     }
 }
 
-/// Optional cached snapshots followed by a fresh result or a terminal error.
+/// Optional cached snapshots followed by fresh snapshots or a terminal error.
 /// Poll to completion to finish the read; dropping the stream cancels further work.
 pub type FetchStream<'a, T> = BoxStream<'a, Result<FetchSnapshot<T>>>;
 

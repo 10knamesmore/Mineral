@@ -373,7 +373,6 @@ mod tests {
                 revision,
                 entries: views,
                 complete: true,
-                next_offset: None,
             },
         );
         s.models.library.tracks_generation = revision;

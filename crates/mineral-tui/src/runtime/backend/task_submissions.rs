@@ -51,17 +51,6 @@ impl TaskSubmissions {
         });
     }
 
-    /// 当前关注的任务移到最前；已经发出的任务不受影响，也不会重新提交。
-    pub(super) fn prioritize(&mut self, kind: &TaskKind) {
-        let key = kind.dedup_key();
-        if let Some(index) = self.pending.iter().position(|task| task.key == key)
-            && let Some(mut task) = self.pending.remove(index)
-        {
-            task.priority = Priority::User;
-            self.pending.push_front(task);
-        }
-    }
-
     /// 待提交数量，供心跳和受阻日志记录。
     pub(super) fn pending_count(&self) -> usize {
         self.pending.len()
@@ -126,7 +115,6 @@ mod tests {
         TaskKind::ChannelFetch(match index % 4 {
             0 => ChannelFetchKind::PlaylistDetail {
                 id: PlaylistId::new(SourceKind::NETEASE, id),
-                load: mineral_channel_core::PlaylistLoad::Complete,
             },
             1 => ChannelFetchKind::AlbumDetail {
                 id: AlbumId::new(SourceKind::NETEASE, id),
@@ -185,7 +173,7 @@ mod tests {
         tasks.flush(|_, _| Err(SubmitError::QueueFull));
         tasks.enqueue(task(1), Priority::Background);
         tasks.enqueue(task(2), Priority::User);
-        tasks.prioritize(&task(1));
+        tasks.enqueue(task(1), Priority::User);
         let mut received = Vec::new();
         tasks.flush(|kind, priority| {
             received.push((kind, priority));

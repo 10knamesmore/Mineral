@@ -1,7 +1,7 @@
 //! 歌单曲目的已加载数据与请求状态；首批结果不满足整张操作。
 
-use mineral_channel_core::PlaylistLoad;
 use mineral_common::revision::Revision;
+use mineral_protocol::{SubscriptionDemand, SubscriptionId};
 
 use crate::runtime::view_model::CollectionTrackView;
 
@@ -19,9 +19,6 @@ pub struct CollectionTracks {
 
     /// channel 已确认当前快照有效；旧快照仅供展示，整张操作等待确认。
     pub fresh: bool,
-
-    /// 来源确认的下一批起点；和条目数量独立，保留缺失 metadata 的位置缺口。
-    pub next_offset: Option<u64>,
 }
 
 impl std::ops::Deref for CollectionTracks {
@@ -51,23 +48,42 @@ enum RequestState {
     Failed,
 }
 
-/// 首批、续页和完整请求独立登记，完整意图不会被预览吞掉。
+/// 同一个订阅保留读取进度；完整需求会持续等待到 complete 的新鲜快照。
 #[derive(Default)]
 pub struct PlaylistRequests {
-    /// 首批预览的请求状态。
-    preview: RequestState,
+    /// 已建立的共享订阅；失败后显式重试会换一个订阅。
+    pub(crate) subscription: Option<SubscriptionId>,
 
-    /// 完整加载的请求状态。
-    complete: RequestState,
+    /// Release is still needed until unsubscribe has entered the client queue.
+    pub(crate) release_requested: bool,
 
-    /// 正在请求或失败待重试的续页；一次只推进一批。
-    more: Option<(u64, RequestState)>,
+    /// Whether a requested batch is pending or failed.
+    state: RequestState,
+
+    /// An intermediate Fresh snapshot must not finish a whole-playlist demand.
+    reading_to_end: bool,
 
     /// 上次检查续页时的导航动作；失败后再次移动光标才重试。
     page_navigation: Option<std::time::Instant>,
 }
 
 impl PlaylistRequests {
+    /// Subscription succeeded; no batch is pending until Advance also succeeds.
+    pub(crate) fn subscribed(&mut self, id: SubscriptionId) {
+        self.subscription = Some(id);
+        self.release_requested = false;
+        self.state = RequestState::Idle;
+        self.reading_to_end = false;
+    }
+
+    /// Refresh or removal no longer needs this stream; keep its identity until release succeeds.
+    pub(crate) fn release(&mut self) {
+        self.release_requested = true;
+        self.state = RequestState::Idle;
+        self.reading_to_end = false;
+        self.page_navigation = None;
+    }
+
     /// 每次导航动作只允许一次失败重试，持续停在底部不会逐帧重发。
     pub(super) fn observe_page_navigation(&mut self, changed_at: std::time::Instant) -> bool {
         self.page_navigation.replace(changed_at) != Some(changed_at)
@@ -75,83 +91,57 @@ impl PlaylistRequests {
 
     /// 完整加载仍在进行，供 deep search 展示按歌单计数的进度。
     pub(super) fn completing(&self) -> bool {
-        self.complete == RequestState::Pending
-    }
-
-    /// 取得与请求意图匹配的状态。
-    fn state(&self, load: PlaylistLoad) -> RequestState {
-        match load {
-            PlaylistLoad::Preview => self.preview,
-            PlaylistLoad::Complete => self.complete,
-            PlaylistLoad::More { offset } => self
-                .more
-                .filter(|(requested, _)| *requested == offset)
-                .map_or(RequestState::Idle, |(_, state)| state),
-        }
-    }
-
-    /// 更新一个意图的状态，不影响另一个请求。
-    fn set(&mut self, load: PlaylistLoad, state: RequestState) {
-        match load {
-            PlaylistLoad::Preview => self.preview = state,
-            PlaylistLoad::Complete => self.complete = state,
-            PlaylistLoad::More { offset } => self.more = Some((offset, state)),
-        }
+        self.reading_to_end && self.state == RequestState::Pending
     }
 
     /// 判断是否可以提交；正在进行的完整请求也覆盖预览需求。
-    pub(super) fn can_request(&self, load: PlaylistLoad, retry_failed: bool) -> bool {
-        if load != PlaylistLoad::Complete && self.complete == RequestState::Pending {
-            return false;
-        }
-        match self.state(load) {
+    pub(super) fn can_request(&self, demand: SubscriptionDemand, retry_failed: bool) -> bool {
+        match self.state {
             RequestState::Idle => true,
-            RequestState::Pending => false,
+            RequestState::Pending => demand == SubscriptionDemand::Complete && !self.reading_to_end,
             RequestState::Failed => retry_failed,
         }
     }
 
     /// 记录交给提交层的意图。
-    pub(super) fn requested(&mut self, load: PlaylistLoad) {
-        self.set(load, RequestState::Pending);
+    pub(crate) fn requested(&mut self, demand: SubscriptionDemand) {
+        self.state = RequestState::Pending;
+        self.reading_to_end |= demand == SubscriptionDemand::Complete;
     }
 
-    /// 收束请求；失败保留已加载曲目，后续显式操作可重试。
-    pub(super) fn finished(&mut self, load: PlaylistLoad, success: bool) {
-        if let PlaylistLoad::More { offset } = load
-            && self.more.is_some_and(|(requested, _)| requested != offset)
-        {
-            return;
+    /// 失败的流已经结束，显式重试需要重新订阅。
+    pub(crate) fn failed(&self) -> bool {
+        self.state == RequestState::Failed
+    }
+
+    /// 完整需求不能被中途的新鲜前缀收束。
+    pub(super) fn finished(&mut self, complete: bool, success: bool) {
+        if complete || !success {
+            self.release_requested = true;
         }
-        self.set(
-            load,
-            if success {
-                RequestState::Idle
-            } else {
-                RequestState::Failed
-            },
-        );
+        if !success {
+            self.state = RequestState::Failed;
+            self.reading_to_end = false;
+        } else if complete || !self.reading_to_end {
+            self.state = RequestState::Idle;
+            self.reading_to_end = false;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::runtime::state::AppState;
-    use mineral_channel_core::{PlaylistDetail, PlaylistLoad};
+    use mineral_channel_core::PlaylistDetail;
     use mineral_model::{Playlist, PlaylistEntry, PlaylistId, SourceKind};
+    use mineral_protocol::SubscriptionDemand;
     use mineral_task::TaskEvent;
 
     /// 构造首批或完整结果，曲目数量故意小于标称总数，避免依赖计数推断完整性。
-    fn fetched(
-        id: &PlaylistId,
-        load: PlaylistLoad,
-        complete: bool,
-        songs: &[&str],
-    ) -> color_eyre::Result<TaskEvent> {
-        Ok(TaskEvent::PlaylistDetailFetched {
+    fn fetched(id: &PlaylistId, complete: bool, songs: &[&str]) -> TaskEvent {
+        TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: id.clone(),
-            load,
             detail: Box::new(PlaylistDetail {
                 playlist: Playlist::builder()
                     .id(id.clone())
@@ -162,9 +152,8 @@ mod tests {
                     ))
                     .build(),
                 complete,
-                next_offset: (!complete).then_some(u64::try_from(songs.len())?),
             }),
-        })
+        }
     }
 
     #[test]
@@ -175,19 +164,19 @@ mod tests {
         state
             .models
             .library
-            .request_playlist(id.clone(), PlaylistLoad::Preview);
+            .request_playlist(id.clone(), SubscriptionDemand::Next);
         assert!(
             state
                 .models
                 .library
-                .needs_playlist(&id, PlaylistLoad::Complete, false)
+                .needs_playlist(&id, SubscriptionDemand::Complete, false)
         );
         state
             .models
             .library
-            .request_playlist(id.clone(), PlaylistLoad::Complete);
-        state.apply(&fetched(&id, PlaylistLoad::Complete, true, &["1", "2"])?);
-        state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
+            .request_playlist(id.clone(), SubscriptionDemand::Complete);
+        state.apply(&fetched(&id, true, &["1", "2"]));
+        state.apply(&fetched(&id, false, &["1"]));
         let tracks = state
             .models
             .library
@@ -200,38 +189,44 @@ mod tests {
             !state
                 .models
                 .library
-                .needs_playlist(&id, PlaylistLoad::Complete, true)
+                .needs_playlist(&id, SubscriptionDemand::Complete, true)
         );
         Ok(())
     }
 
     #[test]
-    fn late_page_does_not_shrink_tracks_or_clear_next_request() -> color_eyre::Result<()> {
+    fn cached_snapshot_does_not_shrink_tracks_or_complete_pending_read() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
         let id = PlaylistId::new(SourceKind::NETEASE, "p");
-        state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
-        let second = PlaylistLoad::More { offset: 1 };
-        state.models.library.request_playlist(id.clone(), second);
-        state.apply(&fetched(&id, second, false, &["1", "2"])?);
-        let third = PlaylistLoad::More { offset: 2 };
-        state.models.library.request_playlist(id.clone(), third);
-        state.apply(&fetched(&id, second, false, &["1", "2"])?);
+        state.apply(&fetched(&id, false, &["1", "2"]));
+        state
+            .models
+            .library
+            .request_playlist(id.clone(), SubscriptionDemand::Complete);
+        let mut cached = fetched(&id, false, &["1"]);
+        if let TaskEvent::PlaylistDetailFetched { fresh, .. } = &mut cached {
+            *fresh = false;
+        }
+        state.apply(&cached);
         assert!(
-            !state.models.library.needs_playlist(&id, third, true),
-            "晚到的上一页不能清掉下一页的在途状态"
+            !state
+                .models
+                .library
+                .needs_playlist(&id, SubscriptionDemand::Complete, true),
+            "缓存结果不能收束完整读取"
         );
-        state.apply(&fetched(&id, third, false, &["1", "2", "3"])?);
-        state.apply(&fetched(&id, second, false, &["1", "2"])?);
-        state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
+        state.apply(&fetched(&id, false, &["1", "2", "3"]));
+        state.apply(&cached);
         assert_eq!(
             state
                 .models
                 .library
                 .tracks
                 .get(&id)
-                .map(|tracks| (tracks.len(), tracks.next_offset)),
-            Some((3, Some(3)))
+                .map(|tracks| tracks.len()),
+            Some(3)
         );
+        assert_eq!(state.models.library.completing_collections(), 1);
         Ok(())
     }
 
@@ -239,21 +234,18 @@ mod tests {
     fn failed_completion_keeps_preview_and_waits_for_explicit_retry() -> color_eyre::Result<()> {
         let mut state = AppState::test_default()?;
         let id = PlaylistId::new(SourceKind::NETEASE, "p");
-        state.apply(&fetched(&id, PlaylistLoad::Preview, false, &["1"])?);
+        state.apply(&fetched(&id, false, &["1"]));
         assert!(
             state
                 .models
                 .library
-                .needs_playlist(&id, PlaylistLoad::Complete, false)
+                .needs_playlist(&id, SubscriptionDemand::Complete, false)
         );
         state
             .models
             .library
-            .request_playlist(id.clone(), PlaylistLoad::Complete);
-        state.apply(&TaskEvent::PlaylistDetailFailed {
-            id: id.clone(),
-            load: PlaylistLoad::Complete,
-        });
+            .request_playlist(id.clone(), SubscriptionDemand::Complete);
+        state.apply(&TaskEvent::PlaylistDetailFailed { id: id.clone() });
         assert_eq!(
             state
                 .models
@@ -268,17 +260,17 @@ mod tests {
             !state
                 .models
                 .library
-                .needs_playlist(&id, PlaylistLoad::Complete, false),
+                .needs_playlist(&id, SubscriptionDemand::Complete, false),
             "逐帧预取不能自动重试失败"
         );
         assert!(
             state
                 .models
                 .library
-                .needs_playlist(&id, PlaylistLoad::Complete, true),
+                .needs_playlist(&id, SubscriptionDemand::Complete, true),
             "显式操作可以重试"
         );
-        state.apply(&fetched(&id, PlaylistLoad::Complete, true, &[])?);
+        state.apply(&fetched(&id, true, &[]));
         assert!(
             state.models.library.playlist_complete(&id),
             "空歌单也能确认加载完整"

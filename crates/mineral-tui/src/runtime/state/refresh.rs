@@ -7,6 +7,16 @@ use crate::runtime::track_pos::{PendingRestore, TrackPos};
 impl AppState {
     /// Keep the opened parent header and cursor identity while discarding its read state.
     pub(crate) fn invalidate_collections(&mut self, scope: &RefreshScope) {
+        for (id, requests) in &mut self.models.library.tracks_requested {
+            let affected = match scope {
+                RefreshScope::Collections(CollectionCategory::Playlists) => true,
+                RefreshScope::Playlist(target) => id == target,
+                _ => false,
+            };
+            if affected {
+                requests.release();
+            }
+        }
         if let Some(collection) = self.ui.browse.nav.opened_collection.clone()
             && match (&collection, scope) {
                 (CollectionId::Playlist(id), RefreshScope::Playlist(parent)) => id == parent,
@@ -31,7 +41,6 @@ impl AppState {
             RefreshScope::Collections(CollectionCategory::Playlists) => {
                 library.playlists.clear();
                 library.tracks.clear();
-                library.tracks_requested.clear();
             }
             RefreshScope::Collections(CollectionCategory::Albums) => {
                 library.albums.clear();
@@ -40,7 +49,6 @@ impl AppState {
             }
             RefreshScope::Playlist(id) => {
                 library.tracks.remove(id);
-                library.tracks_requested.remove(id);
                 for playlist in &mut library.playlists {
                     if playlist.data.id == *id {
                         playlist.data.entries.clear();

@@ -3,10 +3,12 @@
 use std::sync::Arc;
 
 use mineral_channel_core::ChannelCaps;
+use mineral_client::operation::SubmitError;
 use mineral_client::state::{DownloadsDetailMirror, PlaybackMirror, PlayerMirror};
 use mineral_model::{RefreshScope, Song, SongId, SourceKind};
 use mineral_protocol::{
-    DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp, SubscriptionTopic,
+    AdvanceSubscription, DownloadId, DownloadTarget, Event, QueueContextWire, QueueOp,
+    SubscriptionId, SubscriptionTopic,
 };
 use mineral_task::{Priority, Snapshot, TaskKind};
 
@@ -77,13 +79,16 @@ pub(crate) trait Backend: Send + Sync {
     ///
     /// # Params:
     ///   - `topic`: 订阅主题
-    fn subscribe(&self, topic: SubscriptionTopic);
+    fn subscribe(&self, topic: SubscriptionTopic) -> Result<SubscriptionId, SubmitError>;
 
     /// 退订主题。
     ///
     /// # Params:
     ///   - `topic`: 订阅主题
-    fn unsubscribe(&self, topic: SubscriptionTopic);
+    fn unsubscribe(&self, topic: &SubscriptionTopic) -> Result<(), SubmitError>;
+
+    /// 推进现有订阅，更新仍通过 drain_events 交付。
+    fn advance(&self, request: AdvanceSubscription) -> Result<(), SubmitError>;
 
     /// 取走 PCM 近期窗口样本。
     fn drain_pcm(&self) -> Vec<f32>;
@@ -164,9 +169,6 @@ pub(crate) trait Backend: Send + Sync {
 
     /// 推进所有待提交任务；不依赖具体页面，已发出的请求不会重发。
     fn flush_task_submissions(&self);
-
-    /// 提升仍未发出的当前关注任务，不重复提交已经发出的任务。
-    fn prioritize_task(&self, kind: &TaskKind);
 
     /// 本地仍在等待提交的后台任务数量。
     fn pending_task_count(&self) -> usize;

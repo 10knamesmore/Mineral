@@ -199,7 +199,6 @@ mod tests {
         state.apply(&TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: id.clone(),
-            load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(
                 Playlist::builder()
                     .id(id.clone())

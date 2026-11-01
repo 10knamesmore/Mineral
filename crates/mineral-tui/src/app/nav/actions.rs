@@ -8,9 +8,11 @@
 use std::time::Instant;
 
 use crate::runtime::collection::{CollectionGroup, CollectionRef};
+use crate::runtime::prefetch::request_playlist;
 use crossterm::event::{KeyCode, KeyEvent};
 use mineral_model::{PlaylistId, Song};
-use mineral_task::{ChannelFetchKind, Priority, TaskKind};
+use mineral_protocol::SubscriptionDemand;
+use mineral_task::Priority;
 
 use crate::render::anim::ticks16_from_ms;
 use crate::runtime::action::{Action, ScrollStep, SelectionMove};
@@ -203,7 +205,7 @@ impl BrowsePage {
             .filter(|id| {
                 model
                     .library
-                    .needs_playlist(id, mineral_channel_core::PlaylistLoad::Complete, true)
+                    .needs_playlist(id, SubscriptionDemand::Complete, true)
             })
             .cloned()
             .collect()
@@ -486,17 +488,16 @@ impl App {
                     } else {
                         Priority::Background
                     };
-                    self.client.submit_task(
-                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                            id: id.clone(),
-                            load: mineral_channel_core::PlaylistLoad::Complete,
-                        }),
+                    if let Err(error) = request_playlist(
+                        self.client.as_ref(),
+                        &mut self.state.models.library,
+                        id,
+                        SubscriptionDemand::Complete,
                         priority,
-                    );
-                    self.state
-                        .models
-                        .library
-                        .request_playlist(id, mineral_channel_core::PlaylistLoad::Complete);
+                    ) {
+                        self.report_submit_error(error);
+                        break;
+                    }
                 }
             }
             BrowseEffect::Dispatch(action) => self.dispatch(action),
@@ -602,6 +603,7 @@ mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use mineral_common::revision::Revision;
     use mineral_model::{PlaylistId, SourceKind};
+    use mineral_protocol::SubscriptionDemand;
 
     use crate::app::App;
     use crate::test_support::{app_with_library, app_with_library_probed};
@@ -1011,7 +1013,6 @@ mod tests {
                 revision: Revision::default().next(),
                 entries: views,
                 complete: true,
-                next_offset: None,
             },
         );
         app.state.models.library.tracks_generation = Revision::default().next();
@@ -1074,7 +1075,6 @@ mod tests {
                 revision: Revision::default().next(),
                 entries: views,
                 complete: true,
-                next_offset: None,
             },
         );
         app.state.models.library.tracks_generation = Revision::default().next();
@@ -1097,22 +1097,16 @@ mod tests {
     /// 提交;再次进搜索态不重复提交(`tracks_requested` 去重);Library 视图按 `/` 不提交。
     #[test]
     fn slash_in_playlists_requests_uncached_tracks() -> color_eyre::Result<()> {
-        use mineral_task::{ChannelFetchKind, TaskKind};
-
         let (mut app, submitted) = crate::test_support::app_with_playlists_probed()?;
         press(&mut app, KeyCode::Char('/'));
         {
             let tasks = submitted
+                .advances
                 .lock()
                 .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
             let track_fetches = tasks
                 .iter()
-                .filter(|k| {
-                    matches!(
-                        k,
-                        TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { .. })
-                    )
-                })
+                .filter(|request| request.demand == SubscriptionDemand::Complete)
                 .count();
             assert_eq!(track_fetches, 3, "三个未缓存歌单各提交一次");
         }
@@ -1122,6 +1116,7 @@ mod tests {
         press(&mut app, KeyCode::Char('/'));
         {
             let tasks = submitted
+                .advances
                 .lock()
                 .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
             assert_eq!(tasks.len(), 3, "重复进搜索态不应重复提交");
@@ -1139,6 +1134,7 @@ mod tests {
         app.state.models.library.tracks_requested.clear();
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
+            .advances
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
         assert_eq!(tasks.len(), 3, "Library 视图进搜索态不应提交补拉");
@@ -1157,18 +1153,28 @@ mod tests {
                 revision: Revision::default(),
                 entries: crate::test_support::entry_views(vec![mineral_test::song("1")]),
                 complete: false,
-                next_offset: None,
             },
         );
         app.state
             .models
             .library
-            .request_playlist(id.clone(), mineral_channel_core::PlaylistLoad::Preview);
+            .request_playlist(id.clone(), SubscriptionDemand::Next);
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
+            .advances
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        assert!(tasks.iter().any(|kind| matches!(kind, mineral_task::TaskKind::ChannelFetch(mineral_task::ChannelFetchKind::PlaylistDetail { id: requested, load: mineral_channel_core::PlaylistLoad::Complete }) if requested == &id)));
+        let subscriptions = submitted
+            .subscriptions
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+        assert!(tasks.iter().any(|request| {
+            request.demand == SubscriptionDemand::Complete
+                && subscriptions.iter().any(|(subscription, topic)| {
+                    *subscription == request.subscription
+                        && *topic == mineral_protocol::SubscriptionTopic::Playlist(id.clone())
+                })
+        }));
         Ok(())
     }
 
@@ -1183,6 +1189,7 @@ mod tests {
         app.apply_config(std::sync::Arc::new(cfg));
         press(&mut app, KeyCode::Char('/'));
         let tasks = submitted
+            .advances
             .lock()
             .map_err(|e| color_eyre::eyre::eyre!("探针锁中毒: {e}"))?;
         assert!(tasks.is_empty(), "deep 关闭时不应提交补拉");
@@ -1337,7 +1344,6 @@ mod tests {
                 revision: Revision::default().next(),
                 entries: views,
                 complete: true,
-                next_offset: None,
             },
         );
         app.state.models.library.tracks_generation = Revision::default().next();

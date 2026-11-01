@@ -100,10 +100,7 @@ impl PlayerCore {
         match op {
             PlaylistWriteOp::AddSongs { id, .. } | PlaylistWriteOp::RemoveSongs { id, .. } => {
                 self.inner.scheduler.submit(
-                    TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                        id: id.clone(),
-                        load: mineral_channel_core::PlaylistLoad::Complete,
-                    }),
+                    TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail { id: id.clone() }),
                     Priority::User,
                 );
             }

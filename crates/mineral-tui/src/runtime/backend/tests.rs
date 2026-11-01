@@ -22,7 +22,6 @@ async fn shared_submitter_delivers_tasks_after_socket_backpressure() -> color_ey
         let tasks = vec![
             TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
                 id: PlaylistId::new(SourceKind::NETEASE, "playlist"),
-                load: mineral_channel_core::PlaylistLoad::Complete,
             }),
             TaskKind::ChannelFetch(ChannelFetchKind::AlbumDetail {
                 id: AlbumId::new(SourceKind::NETEASE, "album"),
@@ -99,7 +98,7 @@ async fn shared_submitter_delivers_tasks_after_socket_backpressure() -> color_ey
             tasks.len() - initially_submitted
         );
         let selected = tasks.last().ok_or_else(|| eyre!("missing selected task"))?;
-        backend.prioritize_task(selected);
+        backend.submit_task(selected.clone(), Priority::User);
         release
             .send(())
             .map_err(|()| eyre!("server stopped before release"))?;

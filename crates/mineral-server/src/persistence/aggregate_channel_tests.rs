@@ -60,11 +60,7 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
     let (_dir, store) = store_with_favorites().await?;
     let ch = MineralChannel::new(Arc::new(store));
     let p = ch
-        .playlist_detail(
-            &favorites_playlist_id(),
-            mineral_channel_core::PlaylistLoad::Complete,
-            CachePolicy::UseCache,
-        )
+        .playlist_detail(&favorites_playlist_id(), CachePolicy::UseCache)
         .try_next()
         .await?
         .ok_or_else(|| eyre!("expected Favorites detail snapshot"))?
@@ -100,13 +96,9 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
     let other = mineral_model::PlaylistId::new(SourceKind::MINERAL, "nope");
     assert!(
         matches!(
-            ch.playlist_detail(
-                &other,
-                mineral_channel_core::PlaylistLoad::Complete,
-                CachePolicy::UseCache
-            )
-            .try_next()
-            .await,
+            ch.playlist_detail(&other, CachePolicy::UseCache)
+                .try_next()
+                .await,
             Err(Error::NotFound)
         ),
         "未知 id 不臆造歌单"
@@ -119,11 +111,7 @@ async fn playlist_detail_aggregates_and_rejects_unknown() -> color_eyre::Result<
 async fn disabled_store_yields_empty_favorites() -> color_eyre::Result<()> {
     let ch = MineralChannel::new(Arc::new(ServerStore::disabled()));
     let p = ch
-        .playlist_detail(
-            &favorites_playlist_id(),
-            mineral_channel_core::PlaylistLoad::Complete,
-            CachePolicy::UseCache,
-        )
+        .playlist_detail(&favorites_playlist_id(), CachePolicy::UseCache)
         .try_next()
         .await?
         .ok_or_else(|| eyre!("expected Favorites detail snapshot"))?

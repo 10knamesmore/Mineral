@@ -1,5 +1,7 @@
 //! ChannelFetch lane:per-channel 多 worker,两档优先级。
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -7,10 +9,13 @@ use async_stream::try_stream;
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use mineral_channel_core::store::{LibraryStore, NamespaceStore};
-use mineral_channel_core::{Error, MusicChannel, Result};
-use mineral_model::{CachePolicy, SearchKind, SourceKind};
+use mineral_channel_core::{
+    Error, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail, Result,
+};
+use mineral_model::{CachePolicy, PlaylistId, SearchKind, SourceKind};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
+use thiserror::Error as ThisError;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -21,6 +26,23 @@ use crate::kind::{ChannelFetchKind, ChannelFetchKindTag};
 use crate::ongoing::Ongoing;
 use crate::outcome::TaskOutcome;
 use crate::read_cache::ReadCache;
+
+/// The source execution queue is unavailable or has stopped.
+#[derive(Debug, ThisError)]
+#[error("channel execution queue unavailable for {channel:?}")]
+pub struct DispatchError {
+    /// Source whose queue could not grant execution.
+    pub channel: SourceKind,
+}
+
+/// A queued fetch or a single execution turn owned by an existing caller.
+enum Work {
+    /// A finite task owned by the queue.
+    Fetch(Job),
+
+    /// The worker grants a release sender; the caller drops it after one operation.
+    Turn(oneshot::Sender<oneshot::Sender<()>>),
+}
 
 /// 投递给 worker 的一次任务。
 pub(crate) struct Job {
@@ -46,17 +68,23 @@ pub(crate) struct Job {
 
 /// 单个 channel 的发送端句柄(暴露给 Scheduler)。
 struct ChannelSenders {
+    /// Used to create lazy streams without transferring their ownership to a worker.
+    channel: Arc<dyn MusicChannel>,
+
     /// User 优先级队列发送端。
-    user: mpsc::UnboundedSender<Job>,
+    user: mpsc::UnboundedSender<Work>,
 
     /// Background 优先级队列发送端。
-    background: mpsc::UnboundedSender<Job>,
+    background: mpsc::UnboundedSender<Work>,
 }
 
-/// ChannelFetch lane:对外只暴露 [`ChannelFetchLane::dispatch`]。
+/// 来源执行队列，有限任务和订阅推进共用 worker 容量与优先级。
 pub(crate) struct ChannelFetchLane {
     /// 每个 channel 一对发送端;`dispatch` 时按 [`SourceKind`] 路由。
     senders: FxHashMap<SourceKind, ChannelSenders>,
+
+    /// Applies shared metadata refresh and persistence to detail streams.
+    reader: Arc<CollectionReader>,
 }
 
 impl ChannelFetchLane {
@@ -82,8 +110,8 @@ impl ChannelFetchLane {
             if senders.contains_key(&source) {
                 continue;
             }
-            let (user_tx, user_rx) = mpsc::unbounded_channel::<Job>();
-            let (bg_tx, bg_rx) = mpsc::unbounded_channel::<Job>();
+            let (user_tx, user_rx) = mpsc::unbounded_channel();
+            let (bg_tx, bg_rx) = mpsc::unbounded_channel();
             spawn_worker_pool(
                 ch,
                 user_rx,
@@ -96,12 +124,13 @@ impl ChannelFetchLane {
             senders.insert(
                 source,
                 ChannelSenders {
+                    channel: Arc::clone(ch),
                     user: user_tx,
                     background: bg_tx,
                 },
             );
         }
-        Self { senders }
+        Self { senders, reader }
     }
 
     /// 把一个 [`Job`] 投递到对应 channel 的对应优先级队列。
@@ -116,7 +145,55 @@ impl ChannelFetchLane {
             Priority::User => &senders.user,
             Priority::Background => &senders.background,
         };
-        let _ = tx.send(job);
+        let _ = tx.send(Work::Fetch(job));
+    }
+
+    /// Grants one source execution turn. Dropping this future releases the turn;
+    /// the caller retains its stream between turns, outside the worker queue.
+    pub async fn run<T>(
+        &self,
+        source: SourceKind,
+        priority: Priority,
+        operation: impl Future<Output = T>,
+    ) -> StdResult<T, DispatchError> {
+        let senders = self
+            .senders
+            .get(&source)
+            .ok_or(DispatchError { channel: source })?;
+        let queue = match priority {
+            Priority::User => &senders.user,
+            Priority::Background => &senders.background,
+        };
+        let (ready, waiting) = oneshot::channel();
+        queue
+            .send(Work::Turn(ready))
+            .map_err(|_closed| DispatchError { channel: source })?;
+        let turn = waiting
+            .await
+            .map_err(|_closed| DispatchError { channel: source })?;
+        let result = operation.await;
+        drop(turn);
+        Ok(result)
+    }
+
+    /// Owns the channel and query so the borrowed source stream stays inside its generator.
+    pub fn playlist(
+        &self,
+        id: PlaylistId,
+        cache: CachePolicy,
+    ) -> FetchStream<'static, PlaylistDetail> {
+        let channel = self
+            .senders
+            .get(&id.namespace())
+            .map(|senders| Arc::clone(&senders.channel));
+        let reader = Arc::clone(&self.reader);
+        Box::pin(try_stream! {
+            let channel = channel.ok_or(Error::NotSupported)?;
+            let mut snapshots = reader.playlist(channel.as_ref(), &id, cache);
+            while let Some(snapshot) = snapshots.next().await {
+                yield snapshot?;
+            }
+        })
     }
 }
 
@@ -126,8 +203,8 @@ impl ChannelFetchLane {
 /// 不能直接 clone,但 worker 是后台 task,持锁等待是可接受的(每次 await 都释放)。
 fn spawn_worker_pool(
     channel: &Arc<dyn MusicChannel>,
-    user_rx: mpsc::UnboundedReceiver<Job>,
-    bg_rx: mpsc::UnboundedReceiver<Job>,
+    user_rx: mpsc::UnboundedReceiver<Work>,
+    bg_rx: mpsc::UnboundedReceiver<Work>,
     ongoing: &Arc<Ongoing>,
     event_tx: &Arc<Mutex<Vec<TaskEvent>>>,
     workers_per_channel: usize,
@@ -151,8 +228,8 @@ fn spawn_worker_pool(
 /// 单个 worker 的主循环:从 user/bg 队列拉 job 跑完,然后从 ongoing 摘掉。两个队列都关时退出。
 async fn worker_loop(
     channel: Arc<dyn MusicChannel>,
-    user: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Job>>>,
-    bg: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Job>>>,
+    user: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Work>>>,
+    bg: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Work>>>,
     ongoing: Arc<Ongoing>,
     event_tx: Arc<Mutex<Vec<TaskEvent>>>,
     reader: Arc<CollectionReader>,
@@ -161,18 +238,28 @@ async fn worker_loop(
         let Some(job) = next_job(&user, &bg).await else {
             return; // 两个队列都关了
         };
-        let id = job.id;
-        mineral_log::debug!(target: "channel_fetch", task_id = ?id, kind = ?job.kind, "worker start job");
-        run_job(&channel, job, &event_tx, &reader).await;
-        ongoing.remove(id);
+        match job {
+            Work::Fetch(job) => {
+                let id = job.id;
+                mineral_log::debug!(target: "channel_fetch", task_id = ?id, kind = ?job.kind, "worker start job");
+                run_job(&channel, job, &event_tx, &reader).await;
+                ongoing.remove(id);
+            }
+            Work::Turn(ready) => {
+                let (release, released) = oneshot::channel();
+                if ready.send(release).is_ok() {
+                    let _ = released.await;
+                }
+            }
+        }
     }
 }
 
 /// 偏好 user 队列;user 空了才从 bg 队列拉;两个都空就 await user.recv()(同时 race bg)。
 async fn next_job(
-    user: &Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Job>>>,
-    bg: &Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Job>>>,
-) -> Option<Job> {
+    user: &Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Work>>>,
+    bg: &Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Work>>>,
+) -> Option<Work> {
     // 锁是 worker 私有的 await,持锁短;所有 worker 同时 await recv() 时,
     // tokio mpsc 自己保证只唤醒一个。
     let mut user_g = user.lock().await;
@@ -248,11 +335,8 @@ async fn run_job(
     };
     if outcome != TaskOutcome::Ok {
         match &kind {
-            ChannelFetchKind::PlaylistDetail { id, load } if outcome == TaskOutcome::Failed => {
-                published.push(TaskEvent::PlaylistDetailFailed {
-                    id: id.clone(),
-                    load: *load,
-                })
+            ChannelFetchKind::PlaylistDetail { id } if outcome == TaskOutcome::Failed => {
+                published.push(TaskEvent::PlaylistDetailFailed { id: id.clone() })
             }
             ChannelFetchKind::Search {
                 source,
@@ -319,17 +403,24 @@ fn execute<'a>(
                     };
                 }
             }
-            ChannelFetchKind::PlaylistDetail { id, load } => {
-                let mut snapshots = reader.playlist(channel, id, *load, cache);
+            ChannelFetchKind::PlaylistDetail { id } => {
+                let mut snapshots = reader.playlist(channel, id, cache);
                 while let Some(snapshot) = snapshots.next().await {
                     let snapshot = snapshot?;
+                    let complete = matches!(&snapshot, FetchSnapshot::Fresh(detail) if detail.complete);
+                    if snapshot.is_fresh() && !complete {
+                        continue;
+                    }
                     yield TaskEvent::PlaylistDetailFetched {
                         id: id.clone(),
-                        load: *load,
                         fresh: snapshot.is_fresh(),
                         detail: Box::new(snapshot.into_value()),
                     };
+                    if complete {
+                        return;
+                    }
                 }
+                Err(Error::InvalidData { field: "playlist stream ended before complete" })?;
             }
             ChannelFetchKind::Lyrics { song_id } => {
                 let lyrics = channel.lyrics(song_id).await?;

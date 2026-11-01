@@ -465,7 +465,6 @@ mod tests {
         s.apply(&TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: pid,
-            load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
         });
         assert_eq!(
@@ -520,7 +519,6 @@ mod tests {
         s.apply(&TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: pid,
-            load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
         });
         assert_eq!(
@@ -576,7 +574,6 @@ mod tests {
         s.apply(&TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: other,
-            load: mineral_channel_core::PlaylistLoad::Complete,
             detail: Box::new(mineral_channel_core::PlaylistDetail::complete(*playlist)),
         });
         assert_eq!(s.ui.browse.tracks.scroll().sel(), 0);

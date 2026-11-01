@@ -6,9 +6,9 @@
 use std::collections::hash_map::Entry;
 use std::time::Instant;
 
-use mineral_channel_core::PlaylistLoad;
 use mineral_common::revision::Revision;
 use mineral_model::{AlbumId, Lyrics, PlaylistId, SongId, SourceKind};
+use mineral_protocol::SubscriptionDemand;
 use mineral_task::Priority;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -117,32 +117,23 @@ impl LibraryData {
     pub(crate) fn needs_playlist(
         &self,
         id: &PlaylistId,
-        load: PlaylistLoad,
+        demand: SubscriptionDemand,
         retry_failed: bool,
     ) -> bool {
         if self.tracks.get(id).is_some_and(|tracks| {
-            tracks.fresh && (tracks.complete || load == PlaylistLoad::Preview)
+            tracks.fresh && (tracks.complete || demand == SubscriptionDemand::Next)
         }) {
-            return false;
-        }
-        if let PlaylistLoad::More { offset } = load
-            && !self
-                .tracks
-                .get(id)
-                .is_some_and(|tracks| tracks.fresh && tracks.next_offset == Some(offset))
-        {
             return false;
         }
         self.tracks_requested
             .get(id)
-            .is_none_or(|requests| requests.can_request(load, retry_failed))
+            .is_none_or(|requests| requests.can_request(demand, retry_failed))
     }
 
     /// 光标接近末行时检查续页；失败仅在下一次导航动作后重试。
     pub(crate) fn needs_playlist_page(
         &mut self,
         id: &PlaylistId,
-        offset: u64,
         changed_at: std::time::Instant,
     ) -> bool {
         let retry = self
@@ -150,20 +141,29 @@ impl LibraryData {
             .entry(id.clone())
             .or_default()
             .observe_page_navigation(changed_at);
-        self.needs_playlist(id, PlaylistLoad::More { offset }, retry)
+        self.tracks
+            .get(id)
+            .is_some_and(|tracks| tracks.fresh && !tracks.complete)
+            && self
+                .tracks_requested
+                .get(id)
+                .is_none_or(|requests| requests.can_request(SubscriptionDemand::Next, retry))
     }
 
     /// 登记一次提交；与后端按加载意图生成的去重键一致。
-    pub(crate) fn request_playlist(&mut self, id: PlaylistId, load: PlaylistLoad) {
-        self.tracks_requested.entry(id).or_default().requested(load);
+    pub(crate) fn request_playlist(&mut self, id: PlaylistId, demand: SubscriptionDemand) {
+        self.tracks_requested
+            .entry(id)
+            .or_default()
+            .requested(demand);
     }
 
     /// 收束对应请求，数据更新由 AppState 统一处理。
-    pub(crate) fn finish_playlist(&mut self, id: &PlaylistId, load: PlaylistLoad, success: bool) {
+    pub(crate) fn finish_playlist(&mut self, id: &PlaylistId, complete: bool, success: bool) {
         self.tracks_requested
             .entry(id.clone())
             .or_default()
-            .finished(load, success);
+            .finished(complete, success);
     }
 
     /// 整张操作只消费已确认有效的完整结果，空歌单同样可以满足条件。

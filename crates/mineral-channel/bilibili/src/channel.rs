@@ -12,7 +12,7 @@ use mineral_channel_core::fetch::fresh_snapshot;
 use mineral_channel_core::store::NamespaceStore;
 use mineral_channel_core::{
     ArtistSectionKind, ArtistSections, ChannelCaps, CollectionStream, Error, FetchStream,
-    MusicChannel, Page, PageResult, PlaylistDetail, PlaylistLoad, Result,
+    MusicChannel, Page, PageResult, PlaylistDetail, Result,
 };
 use mineral_model::CachePolicy;
 use mineral_model::{
@@ -246,7 +246,6 @@ impl MusicChannel for BilibiliChannel {
     fn playlist_detail<'a>(
         &'a self,
         id: &'a PlaylistId,
-        _load: PlaylistLoad,
         _cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
         fresh_snapshot(async move {

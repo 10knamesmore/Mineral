@@ -41,9 +41,6 @@ pub enum ChannelFetchKind {
     PlaylistDetail {
         /// 歌单 id(自带 namespace)。
         id: PlaylistId,
-
-        /// 预览与完整加载分别去重，完整请求不会被在飞的预览吞掉。
-        load: mineral_channel_core::PlaylistLoad,
     },
 
     /// 拉某首歌的歌词(目标 channel 由 `song_id` 的 namespace 决定)。
@@ -125,8 +122,8 @@ impl ChannelFetchKind {
         match self {
             Self::MyAlbums { source } => format!("{source:?}:my_albums"),
             Self::MyPlaylists { source } => format!("{source:?}:my_playlists"),
-            Self::PlaylistDetail { id, load } => {
-                format!("playlist_detail:{}:{load:?}", id.qualified())
+            Self::PlaylistDetail { id } => {
+                format!("playlist_detail:{}", id.qualified())
             }
             Self::Lyrics { song_id } => format!("lyrics:{}", song_id.qualified()),
             Self::RemotePlayCount { song_id } => {

@@ -10,17 +10,20 @@
 
 use crate::image::graphics::GraphicsProtocol;
 use crate::runtime::backend::Backend;
-use mineral_channel_core::{Page, PlaylistLoad};
+use mineral_channel_core::Page;
+use mineral_client::operation::SubmitError;
 use mineral_model::{MediaUrl, PlaylistId, Song, SongId, SourceKind};
+use mineral_protocol::{AdvanceSubscription, SubscriptionDemand, SubscriptionTopic};
 use mineral_task::{ChannelFetchKind, Priority, TaskKind};
 
 use crate::runtime::collection::{CollectionGroup, CollectionId, CollectionRef};
-use crate::runtime::state::{AppState, DetailFetch, View};
+use crate::runtime::state::{AppState, DetailFetch, LibraryData, View};
 
 /// 每 tick 调一次:封面 + 歌单/专辑 tracks + 选中歌本地完整播放次数三路 prefetch,
 /// 外加聚合歌单拼贴(成员封面请求 + 就绪合成,见 [`crate::runtime::cover_collage`])。
 /// `queue_covers` 来自浮层的过滤视图,与 Browse 和在播候选合并后统一提交。
 pub fn tick(state: &mut AppState, client: &dyn Backend, queue_covers: Vec<(SourceKind, MediaUrl)>) {
+    release_playlist_subscriptions(state, client);
     request_covers(state, queue_covers);
     request_playback_cover_decodes(state);
     request_playlist_tracks(state, client);
@@ -174,24 +177,18 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
     let selected = state
         .selected_playlist()
         .map(|playlist| playlist.data.id.clone());
-    if let Some(id) = &selected {
-        client.prioritize_task(&TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-            id: id.clone(),
-            load: PlaylistLoad::Preview,
-        }));
-    }
     if state.ui.browse.view == View::Tracks {
         let Some(id) = selected else { return };
-        let load = if let Some(tracks) = state
+        if let Some(tracks) = state
             .models
             .library
             .tracks
             .get(&id)
             .filter(|tracks| tracks.fresh)
         {
-            let Some(offset) = tracks.next_offset else {
+            if tracks.complete {
                 return;
-            };
+            }
             let visible = state.filtered_tracks();
             let rows_to_bottom = visible
                 .len()
@@ -202,49 +199,99 @@ fn request_playlist_tracks(state: &mut AppState, client: &dyn Backend) {
             {
                 return;
             }
-            if !state.models.library.needs_playlist_page(
-                &id,
-                offset,
-                state.ui.browse.nav.last_sel_change,
-            ) {
+            if !state
+                .models
+                .library
+                .needs_playlist_page(&id, state.ui.browse.nav.last_sel_change)
+            {
                 return;
             }
-            PlaylistLoad::More { offset }
         } else {
             if !state
                 .models
                 .library
-                .needs_playlist(&id, PlaylistLoad::Preview, false)
+                .needs_playlist(&id, SubscriptionDemand::Next, false)
             {
                 return;
             }
-            PlaylistLoad::Preview
-        };
-        mineral_log::debug!(target: "prefetch", playlist_id = %id, ?load, "request visible playlist tracks");
-        client.submit_task(
-            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                id: id.clone(),
-                load,
-            }),
+        }
+        if request_playlist(
+            client,
+            &mut state.models.library,
+            id,
+            SubscriptionDemand::Next,
             Priority::User,
-        );
-        state.models.library.request_playlist(id, load);
+        )
+        .is_err()
+        {
+            return;
+        }
         return;
     }
     for id in collect_pending_tracks(state) {
         mineral_log::debug!(target: "prefetch", playlist_id = %id, "request playlist preview");
-        client.submit_task(
-            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                id: id.clone(),
-                load: PlaylistLoad::Preview,
-            }),
+        if request_playlist(
+            client,
+            &mut state.models.library,
+            id,
+            SubscriptionDemand::Next,
             Priority::Background,
-        );
-        state
-            .models
-            .library
-            .request_playlist(id, PlaylistLoad::Preview);
+        )
+        .is_err()
+        {
+            return;
+        }
     }
+}
+
+/// Retry only unsent releases; successful unsubscriptions clear the retained identity.
+fn release_playlist_subscriptions(state: &mut AppState, client: &dyn Backend) {
+    for (id, requests) in &mut state.models.library.tracks_requested {
+        if requests.release_requested && requests.subscription.is_some() {
+            match client.unsubscribe(&SubscriptionTopic::Playlist(id.clone())) {
+                Ok(()) => requests.subscription = None,
+                Err(
+                    SubmitError::QueueFull | SubmitError::InFlightLimit | SubmitError::Disconnected,
+                ) => return,
+            }
+        }
+    }
+    state.models.library.tracks_requested.retain(|_, requests| {
+        !requests.release_requested || requests.subscription.is_some() || requests.failed()
+    });
+}
+
+/// Reuses the playlist subscription for every demand, including a complete-read upgrade.
+/// A failed stream is recreated only when a caller explicitly requests a retry.
+pub(crate) fn request_playlist(
+    client: &dyn Backend,
+    library: &mut LibraryData,
+    id: PlaylistId,
+    demand: SubscriptionDemand,
+    priority: Priority,
+) -> Result<(), SubmitError> {
+    let topic = SubscriptionTopic::Playlist(id.clone());
+    let requests = library.tracks_requested.entry(id.clone()).or_default();
+    if (requests.failed() || requests.release_requested) && requests.subscription.is_some() {
+        client.unsubscribe(&topic)?;
+        requests.subscription = None;
+    }
+    let subscription = match requests.subscription {
+        Some(subscription) => subscription,
+        None => {
+            let subscription = client.subscribe(topic)?;
+            requests.subscribed(subscription);
+            subscription
+        }
+    };
+    client.advance(AdvanceSubscription {
+        subscription,
+        demand,
+        priority,
+    })?;
+    requests.release_requested = false;
+    library.request_playlist(id, demand);
+    Ok(())
 }
 
 /// 查询当前选中歌曲在 Mineral 中自然播完的次数。
@@ -286,7 +333,7 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
     if state.ui.channel_search.last_sel_change.elapsed() < debounce {
         return;
     }
-    // 取出当前帧的拉取意图 + 封面并标记已派，随即释放 channel_search 借用。
+    // 先读取当前帧的意图；成功提交后才标记已派。
     let intent = {
         let Some(kr) = state.ui.channel_search.active_results_mut() else {
             return;
@@ -297,11 +344,14 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
         if !frame.needs_fetch() {
             return;
         }
-        frame.mark_requested();
-        frame
+        let intent = frame
             .entity
             .fetch()
-            .map(|fetch| (fetch, frame.entity.cover().cloned()))
+            .map(|fetch| (fetch, frame.entity.cover().cloned()));
+        if intent.is_none() {
+            frame.mark_requested();
+        }
+        intent
     };
     // 单曲无所属专辑：已标记、跳过（降级只画歌曲卡片）。
     let Some((fetch, cover)) = intent else {
@@ -313,7 +363,14 @@ fn request_detail(state: &mut AppState, client: &dyn Backend) {
         DetailFetch::AlbumDetail(_) => Priority::User,
         DetailFetch::PlaylistDetail(_) | DetailFetch::Artist(_) => Priority::Background,
     };
-    submit_detail_tasks(client, &mut state.models.library, fetch, priority);
+    if submit_detail_tasks(client, &mut state.models.library, fetch, priority).is_err() {
+        return;
+    }
+    if let Some(results) = state.ui.channel_search.active_results_mut()
+        && let Some(frame) = results.detail.current_mut()
+    {
+        frame.mark_requested();
+    }
     if let Some(url) = cover {
         state.resources.images.prefetch([(source, url)]);
     }
@@ -385,7 +442,7 @@ pub(crate) fn submit_detail_tasks(
     library: &mut crate::runtime::state::LibraryData,
     fetch: DetailFetch,
     priority: Priority,
-) {
+) -> Result<(), SubmitError> {
     match fetch {
         DetailFetch::AlbumDetail(id) => {
             library.request_album(id.clone(), priority);
@@ -395,14 +452,7 @@ pub(crate) fn submit_detail_tasks(
             );
         }
         DetailFetch::PlaylistDetail(id) => {
-            library.request_playlist(id.clone(), PlaylistLoad::Complete);
-            client.submit_task(
-                TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                    id,
-                    load: PlaylistLoad::Complete,
-                }),
-                priority,
-            );
+            request_playlist(client, library, id, SubscriptionDemand::Complete, priority)?;
         }
         DetailFetch::Artist(id) => {
             client.submit_task(
@@ -418,6 +468,7 @@ pub(crate) fn submit_detail_tasks(
             );
         }
     }
+    Ok(())
 }
 
 /// 当前 Library 选中行的歌曲 id(filtered 索引);无选中 / 空列表返回 `None`。
@@ -493,7 +544,7 @@ fn collect_pending_tracks(state: &AppState) -> Vec<PlaylistId> {
             state
                 .models
                 .library
-                .needs_playlist(id, PlaylistLoad::Preview, false)
+                .needs_playlist(id, SubscriptionDemand::Next, false)
                 .then(|| id.clone())
         })
         .collect()
@@ -537,18 +588,17 @@ mod tests {
     use crate::runtime::state::{AppState, ArtistSection, DetailFrame, EntityRef, View};
     use crate::test_support::{TestClient, state_with_mixed_tracks};
     use mineral_common::revision::Revision;
-    use mineral_task::{ChannelFetchKind, TaskKind};
 
-    /// 浏览停留和进入歌单只加载首批；接近 tracks 底部才沿来源的游标逐批推进。
+    /// 浏览停留和进入歌单只加载首批；接近底部才推进原订阅。
     #[test]
     fn playlist_pages_load_only_near_tracks_bottom() -> color_eyre::Result<()> {
-        use mineral_channel_core::PlaylistLoad;
+        use mineral_protocol::SubscriptionDemand;
         let mut state = crate::test_support::state_with_playlists()?;
         let client = TestClient::default();
         let id = PlaylistId::new(SourceKind::NETEASE, "p1");
-        let tasks = || -> color_eyre::Result<Vec<TaskKind>> {
+        let tasks = || -> color_eyre::Result<Vec<mineral_protocol::AdvanceSubscription>> {
             Ok(client
-                .submitted
+                .advances
                 .lock()
                 .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
                 .clone())
@@ -556,13 +606,11 @@ mod tests {
         super::request_playlist_tracks(&mut state, &client);
         let initial = tasks()?;
         assert_eq!(initial.len(), 3);
-        assert!(initial.iter().all(|kind| matches!(
-            kind,
-            TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                load: PlaylistLoad::Preview,
-                ..
-            })
-        )));
+        assert!(
+            initial
+                .iter()
+                .all(|request| request.demand == SubscriptionDemand::Next)
+        );
         state.ui.browse.nav.last_sel_change = Instant::now() - std::time::Duration::from_secs(1);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "停留不请求完整歌单");
@@ -570,30 +618,27 @@ mod tests {
         state.ui.browse.view.switch_to(View::Tracks);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "进入歌单不升级为全量，也不重复首批");
-        // 20 个位置仅有 19 首返回详情，下一批必须从来源指定的 20 开始。
-        deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 19, Some(20));
+        // 部分身份没有详情；client 不再用曲目数量计算远端进度。
+        deliver_playlist_page(&mut state, &id, 19, false);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, initial, "刚进入首行不续页");
         state.ui.browse.tracks.select(10);
         super::request_playlist_tracks(&mut state, &client);
         let page_tasks = tasks()?;
         assert_eq!(page_tasks.len(), 4);
-        assert!(matches!(
-            page_tasks.last(),
-            Some(TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                load: PlaylistLoad::More { offset: 20 },
-                ..
-            }))
-        ));
+        let first_subscription = state
+            .models
+            .library
+            .tracks_requested
+            .get(&id)
+            .and_then(|requests| requests.subscription);
+        assert_eq!(
+            page_tasks.last().map(|request| request.subscription),
+            first_subscription
+        );
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?, page_tasks, "同一批尚未到达不重复提交");
-        deliver_playlist_page(
-            &mut state,
-            &id,
-            PlaylistLoad::More { offset: 20 },
-            39,
-            Some(40),
-        );
+        deliver_playlist_page(&mut state, &id, 39, false);
         assert_eq!(
             state.ui.browse.tracks.scroll().sel(),
             10,
@@ -604,14 +649,11 @@ mod tests {
         state.ui.browse.tracks.select(38);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?.len(), 5);
-        assert!(matches!(
-            tasks()?.last(),
-            Some(TaskKind::ChannelFetch(ChannelFetchKind::PlaylistDetail {
-                load: PlaylistLoad::More { offset: 40 },
-                ..
-            }))
-        ));
-        deliver_playlist_page(&mut state, &id, PlaylistLoad::More { offset: 40 }, 45, None);
+        assert_eq!(
+            tasks()?.last().map(|request| request.subscription),
+            first_subscription
+        );
+        deliver_playlist_page(&mut state, &id, 45, true);
         state.ui.browse.tracks.select(44);
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(tasks()?.len(), 5, "完整结果停止续页");
@@ -623,7 +665,7 @@ mod tests {
                 .first()
                 .map(|p| p.data.track_count),
             Some(10),
-            "分页详情不改 playlists 的 items"
+            "详情只更新曲目，列表头部保留库出口的数据"
         );
         Ok(())
     }
@@ -631,23 +673,37 @@ mod tests {
     /// 页失败保留已加载内容；保持光标不重试，再次导航后允许重试。
     #[test]
     fn playlist_page_failure_retries_on_navigation() -> color_eyre::Result<()> {
-        use mineral_channel_core::PlaylistLoad;
         let mut state = crate::test_support::state_with_playlists()?;
-        let client = TestClient::default();
+        let mut client = TestClient::default();
         let id = PlaylistId::new(SourceKind::NETEASE, "p1");
         state.ui.browse.nav.opened_collection = Some(id.clone().into());
         state.ui.browse.view.switch_to(View::Tracks);
-        deliver_playlist_page(&mut state, &id, PlaylistLoad::Preview, 20, Some(20));
+        deliver_playlist_page(&mut state, &id, 20, false);
         state.ui.browse.tracks.select(19);
+        client.control_error = Some(mineral_client::operation::SubmitError::QueueFull);
         super::request_playlist_tracks(&mut state, &client);
-        state.apply(&TaskEvent::PlaylistDetailFailed {
-            id: id.clone(),
-            load: PlaylistLoad::More { offset: 20 },
-        });
+        assert!(
+            state
+                .models
+                .library
+                .tracks_requested
+                .get(&id)
+                .is_some_and(|request| request.subscription.is_none())
+        );
+        assert!(
+            client
+                .advances
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
+                .is_empty()
+        );
+        client.control_error = None;
+        super::request_playlist_tracks(&mut state, &client);
+        state.apply(&TaskEvent::PlaylistDetailFailed { id: id.clone() });
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(
             client
-                .submitted
+                .advances
                 .lock()
                 .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
                 .len(),
@@ -666,7 +722,7 @@ mod tests {
         super::request_playlist_tracks(&mut state, &client);
         assert_eq!(
             client
-                .submitted
+                .advances
                 .lock()
                 .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
                 .len(),
@@ -675,18 +731,11 @@ mod tests {
         Ok(())
     }
 
-    /// 模拟 channel 返回累计前缀，游标不从 metadata 数量推断。
-    fn deliver_playlist_page(
-        state: &mut AppState,
-        id: &PlaylistId,
-        load: mineral_channel_core::PlaylistLoad,
-        count: usize,
-        next_offset: Option<u64>,
-    ) {
+    /// 模拟 channel 返回累计快照，完整性不从 metadata 数量推断。
+    fn deliver_playlist_page(state: &mut AppState, id: &PlaylistId, count: usize, complete: bool) {
         state.apply(&TaskEvent::PlaylistDetailFetched {
             fresh: true,
             id: id.clone(),
-            load,
             detail: Box::new(mineral_channel_core::PlaylistDetail {
                 playlist: Playlist::builder()
                     .id(id.clone())
@@ -698,8 +747,7 @@ mod tests {
                             .collect(),
                     ))
                     .build(),
-                complete: next_offset.is_none(),
-                next_offset,
+                complete,
             }),
         });
     }
@@ -1106,7 +1154,6 @@ mod tests {
                 revision: Revision::default(),
                 entries: views,
                 complete: true,
-                next_offset: None,
             },
         );
         state.ui.browse.collections.select(0);

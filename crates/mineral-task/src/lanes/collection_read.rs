@@ -4,7 +4,7 @@ use async_stream::try_stream;
 use futures_util::StreamExt;
 use mineral_channel_core::store::{LibraryStore, NamespaceStore};
 use mineral_channel_core::{
-    Error, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail, PlaylistLoad, Result,
+    Error, FetchSnapshot, FetchStream, MusicChannel, PlaylistDetail, Result,
 };
 use mineral_model::{
     Album, AlbumId, CachePolicy, PlaylistEntry, PlaylistId, Song, SongId, SourceKind,
@@ -43,16 +43,16 @@ impl CollectionReader {
         &'a self,
         channel: &'a dyn MusicChannel,
         id: &'a PlaylistId,
-        load: PlaylistLoad,
         cache: CachePolicy,
     ) -> FetchStream<'a, PlaylistDetail> {
         Box::pin(try_stream! {
-            let mut snapshots = channel.playlist_detail(id, load, cache);
+            let mut snapshots = channel.playlist_detail(id, cache);
             while let Some(snapshot) = snapshots.next().await {
                 match snapshot? {
                     FetchSnapshot::Cached(detail) => yield FetchSnapshot::Cached(detail),
                     FetchSnapshot::Fresh(mut detail) => {
-                        if cache == CachePolicy::Reload {
+                        // 累计前缀只供展示，完整结果才统一刷新并持久化 metadata。
+                        if cache == CachePolicy::Reload && detail.complete {
                             self.reload_playlist_metadata(id, &mut detail).await?;
                         }
                         yield FetchSnapshot::Fresh(detail);

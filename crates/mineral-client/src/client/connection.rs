@@ -3,7 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mineral_protocol::{OperationResult, PlayerVersions, SubscriptionId, SubscriptionTopic, Wire};
+use mineral_protocol::{
+    AdvanceSubscription, OperationResult, PlayerVersions, SubscriptionId, SubscriptionTopic, Wire,
+};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use tokio::sync::oneshot;
@@ -75,43 +77,51 @@ impl Client {
     ///   - `topic`: 订阅主题
     ///
     /// # Return:
-    ///   会话内订阅 id。
-    pub fn subscribe(&self, topic: SubscriptionTopic) -> SubscriptionId {
+    ///   已成功登记的订阅 id；队列满或断连时不改变引用计数。
+    pub fn subscribe(&self, topic: SubscriptionTopic) -> Result<SubscriptionId, SubmitError> {
+        if !self.connected() {
+            return Err(SubmitError::Disconnected);
+        }
         let mut subscriptions = self.subscriptions.lock();
         if let Some((id, count)) = subscriptions.active.get_mut(&topic) {
             *count = count.saturating_add(1);
-            return *id;
+            return Ok(*id);
         }
         let known = self.mirror().read_player(|player| {
             (player.versions() != PlayerVersions::default()).then(|| player.versions())
         });
-        let id = self.session.handle.subscribe(topic, known);
+        let id = self.session.handle.subscribe(topic.clone(), known)?;
         subscriptions.active.insert(topic, (id, 1));
-        id
+        Ok(id)
     }
 
-    /// 退订主题(引用计数归零才真正发 Unsubscribe)。
+    /// 退订主题(引用计数归零才真正发 Unsubscribe)，未提交时保留引用计数。
     ///
     /// # Params:
     ///   - `topic`: 订阅主题
-    pub fn unsubscribe(&self, topic: SubscriptionTopic) {
+    pub fn unsubscribe(&self, topic: &SubscriptionTopic) -> Result<(), SubmitError> {
         let mut subscriptions = self.subscriptions.lock();
-        let Some((id, count)) = subscriptions.active.get_mut(&topic) else {
-            return;
+        let Some((id, count)) = subscriptions.active.get_mut(topic) else {
+            return Ok(());
         };
-        *count = count.saturating_sub(1);
-        if *count > 0 {
-            return;
+        if *count > 1 {
+            *count -= 1;
+            return Ok(());
         }
         let id = *id;
-        subscriptions.active.remove(&topic);
-        drop(subscriptions);
-        self.session.handle.unsubscribe(id);
+        self.session.handle.unsubscribe(id)?;
+        subscriptions.active.remove(topic);
+        Ok(())
     }
 
     /// 关闭会话。
     pub fn close(&self) {
         self.session.handle.close();
+    }
+
+    /// 向现有订阅提交取数需求，结果仍经同一订阅交付；失败表示需求尚未入队。
+    pub fn advance(&self, request: AdvanceSubscription) -> Result<(), SubmitError> {
+        self.session.handle.advance(request)
     }
 
     /// 等待当前全部订阅收到首帧(CLI 诊断 / 自举用);超时或断连立即返回。
