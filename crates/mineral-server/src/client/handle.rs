@@ -57,7 +57,7 @@ impl ClientHandle {
     /// 派生某条 wire 连接专属的 handle(serve 层 accept 时调)。
     ///
     /// # Params:
-    ///   - `conn`: 连接 id(注册表分配,进程内唯一)
+    ///   - `conn`: 连接 ID，由接入任务分配、进程内唯一
     pub(crate) fn for_connection(&self, conn: u64) -> Self {
         let mut handle = self.clone();
         handle.conn = conn;

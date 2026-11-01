@@ -12,8 +12,8 @@ use mineral_protocol::{
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, mpsc};
 
+use super::connections::{ConnectionCounters, ConnectionLifetime};
 use super::dispatch;
-use super::registry::{ConnGuard, ConnRegistry};
 use super::subscriptions::Subscriptions;
 use crate::client::ClientHandle;
 use crate::publisher::DomainPublishers;
@@ -37,8 +37,8 @@ pub(crate) struct SessionServices {
     /// 业务句柄。
     pub(crate) client: ClientHandle,
 
-    /// 在线连接注册表。
-    pub(crate) registry: Arc<ConnRegistry>,
+    /// 连接 ID 分配与在线数量。
+    pub(crate) connections: Arc<ConnectionCounters>,
 
     /// 领域发布器。
     pub(crate) publishers: DomainPublishers,
@@ -57,20 +57,13 @@ pub(crate) async fn run(
 ) -> Result<(), crate::Error> {
     loop {
         let (stream, _addr) = listener.accept().await?;
-        let conn_id = services.registry.register();
+        let mut connection = services.connections.connect(&services.client);
+        let conn_id = connection.id;
         (services.on_connect)();
         mineral_log::info!(target: "ipc", conn_id, "client connected");
-        let client = services.client.for_connection(conn_id);
-        let guard = ConnGuard {
-            registry: Arc::clone(&services.registry),
-            id: conn_id,
-            client: client.clone(),
-        };
         let services = Arc::clone(&services);
         tokio::spawn(async move {
-            // 守卫持有到 task 结束:正常返回与 panic unwind 都从注册表移除。
-            let _guard = guard;
-            if let Err(e) = handle_connection(stream, conn_id, &services).await {
+            if let Err(e) = handle_connection(stream, &mut connection, &services).await {
                 mineral_log::warn!(target: "ipc", conn_id, error = mineral_log::chain(&e), "connection ended with error");
             }
         });
@@ -80,14 +73,14 @@ pub(crate) async fn run(
 /// 一条连接的完整生命周期:握手 → 拆半 → 读循环 + 发布泵 → 收尾。
 async fn handle_connection(
     stream: UnixStream,
-    conn_id: u64,
+    connection: &mut ConnectionLifetime,
     services: &SessionServices,
 ) -> Result<(), ConnectionError> {
     let mut wire = Box::new(SocketWire::from_stream(stream));
     let Some(info) = handshake(&mut *wire, &services.client).await? else {
         return Ok(());
     };
-    services.registry.set_identity(conn_id, info.clone());
+    connection.identity = Some(info);
     let (sink, source) = wire.split();
     let (out_tx, out_rx) = mpsc::channel(OUTBOUND_CAPACITY);
     let writer = tokio::spawn(writer_loop(sink, out_rx));

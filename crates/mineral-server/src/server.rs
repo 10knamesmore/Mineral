@@ -15,7 +15,7 @@ use tokio::sync::{Notify, broadcast};
 
 use crate::client::ClientHandle;
 use crate::config::ServerConfig;
-use crate::ipc::{ConnRegistry, SessionServices};
+use crate::ipc::{ConnectionCounters, SessionServices};
 use crate::media_cache::MediaCache;
 use crate::pcm_relay::PcmRelay;
 use crate::player::PlayerCore;
@@ -48,8 +48,8 @@ pub struct Server {
     /// 领域发布器 — 会话订阅的共享快照源。
     publishers: DomainPublishers,
 
-    /// 在线连接注册表,与 accept loop 共享:心跳据此报在线 client 数。
-    connections: Arc<ConnRegistry>,
+    /// 与接入任务共享的连接计数，心跳据此报告在线数量。
+    connections: Arc<ConnectionCounters>,
 
     /// Event 推送 hub:daemon 内生产者经
     /// [`Server::event_sink`] 拿发送端;会话按订阅集过滤下发。
@@ -130,7 +130,7 @@ impl Server {
         player.refresh_initial_loads();
         let pcm = PcmRelay::spawn(spectrum_tap, player.audio().clone());
         let publishers = crate::publisher::spawn(&player, events.clone(), pcm);
-        let connections = Arc::new(ConnRegistry::new());
+        let connections = Arc::new(ConnectionCounters::new());
         tokio::spawn(heartbeat(
             player.clone(),
             Arc::clone(&connections),
@@ -200,7 +200,7 @@ impl Server {
         let on_connect = move || player.refresh_initial_loads();
         let services = Arc::new(SessionServices {
             client: self.client(),
-            registry: Arc::clone(&self.connections),
+            connections: Arc::clone(&self.connections),
             publishers: self.publishers.clone(),
             shutdown: Arc::clone(&self.shutdown),
             on_connect: Arc::new(on_connect),
@@ -282,7 +282,7 @@ async fn restore_last_session(player: &PlayerCore) -> bool {
 ///
 /// # Params:
 ///   - `interval_secs`: 心跳间隔(秒,配置 `heartbeat_secs`)
-async fn heartbeat(player: PlayerCore, connections: Arc<ConnRegistry>, interval_secs: u64) {
+async fn heartbeat(player: PlayerCore, connections: Arc<ConnectionCounters>, interval_secs: u64) {
     let start = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
     loop {

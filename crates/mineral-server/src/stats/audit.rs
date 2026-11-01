@@ -166,7 +166,7 @@ fn audit_behavior_emitters(event: &BehaviorEvent) -> &'static str {
         BehaviorEvent::BusMessage { .. } => "仅历史数据:脚本事件总线已删除",
         BehaviorEvent::FullscreenChange { .. } => "ipc dispatch 的 TerminalState",
         BehaviorEvent::ConnectionReject { .. } => "ipc::handshake record_connection_reject",
-        BehaviorEvent::ClientConnection { .. } => "ipc::ConnGuard drop",
+        BehaviorEvent::ClientConnection { .. } => "ipc::connections::ConnectionLifetime drop",
         BehaviorEvent::AppLifecycle { .. } => "recorder.daemon_lifecycle + ipc 会话生命周期",
     }
 }
