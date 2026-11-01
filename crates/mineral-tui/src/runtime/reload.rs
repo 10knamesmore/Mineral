@@ -411,8 +411,8 @@ mod tests {
     }
 
     /// 格边策略热更后请求新成品，保留解码图和旧策略缓存；切回时直接命中旧成品。
-    #[test]
-    fn local_cover_cell_fit_selects_distinct_cached_variants() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn local_cover_cell_fit_selects_distinct_cached_variants() -> color_eyre::Result<()> {
         use crate::config::CoverCellFit;
         use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
         use mineral_model::MediaUrl;
@@ -421,6 +421,7 @@ mod tests {
 
         let mut app = app_with_queue(1, 0)?;
         app.state.resources.images = ImageEngine::disabled_kitty(Arc::clone(&app.state.cfg));
+        app.state.resources.images.start_test_encoder();
         let url = MediaUrl::remote("https://example.com/cell-fit.png")?;
         let source = Arc::new(crate::test_support::solid_cover(180, 80, 40));
         app.state

@@ -138,6 +138,13 @@ impl ImageEngine {
         )
     }
 
+    /// 为请求派发测试启动真实编码器，保留现有缓存和终端协议；须在 Tokio runtime 中调用。
+    #[cfg(test)]
+    pub(crate) fn start_test_encoder(&mut self) {
+        self.workers.encoder =
+            CoverEncoder::spawn(*self.cfg.cover().encode_workers(), &self.graphics);
+    }
+
     /// 插入一张真实 Kitty 缩略图，供列表布局与终端输出测试使用。
     #[cfg(test)]
     pub(crate) fn insert_test_thumbnail(&mut self, url: &MediaUrl) -> color_eyre::Result<()> {
@@ -204,7 +211,12 @@ impl ImageEngine {
             return;
         }
         self.encode_pending.insert(identity.clone());
-        self.workers.encoder.request(request);
+        if let Err(error) = self.workers.encoder.request(request) {
+            self.install_terminal_image(EncodeCompletion {
+                identity: error.0.identity,
+                result: Err(EncodeError::QueueClosed),
+            });
+        }
     }
 
     pub(super) fn should_encode(&self, identity: &EncodeIdentity) -> bool {
@@ -836,14 +848,15 @@ mod tests {
     }
 
     /// 离屏、缩放与滚动不启动行内编码；非 Kitty 不注册采样尺寸。
-    #[test]
-    fn thumbnail_render_phases_do_not_create_hidden_work() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn thumbnail_render_phases_do_not_create_hidden_work() -> color_eyre::Result<()> {
         use crate::image::ImageRenderPhase;
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
         let cfg = Arc::new(crate::config::TuiConfig::defaults()?);
         let mut kitty = ImageEngine::disabled_kitty(cfg);
+        kitty.start_test_encoder();
         let url = MediaUrl::remote("https://example.com/cover.jpg")?;
         kitty.cache.insert_test(
             &url,

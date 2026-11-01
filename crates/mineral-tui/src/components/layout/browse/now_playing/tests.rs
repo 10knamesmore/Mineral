@@ -80,9 +80,10 @@ fn cover_url(state: &AppState, view: View) -> color_eyre::Result<MediaUrl> {
 }
 
 /// 两端图片只预热一次，后续过渡帧不重复提交编码。
-#[test]
-fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
+#[tokio::test]
+async fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
     let mut state = state_with_covers(true, true)?;
+    state.resources.images.start_test_encoder();
     let theme = default_theme()?;
     let from = cover_url(&state, View::Collections)?;
     let to = cover_url(&state, View::Tracks)?;
@@ -103,9 +104,10 @@ fn covers_prewarm_both_endpoints_without_churn() -> color_eyre::Result<()> {
 }
 
 /// 飞行层接管时，本地详情不提交封面编码。
-#[test]
-fn cover_in_flight_suppresses_local_encode_requests() -> color_eyre::Result<()> {
+#[tokio::test]
+async fn cover_in_flight_suppresses_local_encode_requests() -> color_eyre::Result<()> {
     let mut state = state_with_covers(true, true)?;
+    state.resources.images.start_test_encoder();
     let theme = default_theme()?;
     state.ui.browse.view.switch_to(View::Tracks);
     for _ in 0..=4 {

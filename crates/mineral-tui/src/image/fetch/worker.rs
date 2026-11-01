@@ -58,9 +58,13 @@ pub(super) async fn complete_request(
                 }
             }
         }
-        CoverRequest::Original { source, url, reply } => {
+        CoverRequest::Original {
+            source,
+            url,
+            reply_tx,
+        } => {
             let result = fetch_original(source, &url, client, cache).await;
-            let _ = reply.send(result);
+            let _ = reply_tx.send(result);
             return None;
         }
     };

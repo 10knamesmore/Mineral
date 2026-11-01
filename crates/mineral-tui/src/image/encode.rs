@@ -6,10 +6,11 @@
 
 use std::sync::Arc;
 
+use futures_util::{StreamExt, stream};
 use image::DynamicImage;
 use mineral_common::revision::Revision;
-use parking_lot::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;
 
 use super::graphics::TerminalGraphics;
@@ -61,82 +62,74 @@ pub(crate) enum EncodeError {
     QueueClosed,
 }
 
-/// 就绪 buffer:worker 端 push、主循环 `drain_ready` 端取走。
-type ReadyBuf = Arc<Mutex<Vec<EncodeCompletion>>>;
-
 /// TUI 端封面编码器。`spawn` 起 worker、`request` 投递、`drain_ready` 收成品。
 pub(crate) struct CoverEncoder {
     /// 编码请求队列发送端。
-    req_tx: mpsc::UnboundedSender<EncodeRequest>,
+    request_tx: mpsc::UnboundedSender<EncodeRequest>,
 
-    /// worker 完成后塞结果的 buffer;主循环 `drain_ready()` 一次拿走。
-    ready: ReadyBuf,
+    /// 由图片引擎独占消费的编码完成事件。
+    completion_rx: mpsc::UnboundedReceiver<EncodeCompletion>,
 }
 
 impl CoverEncoder {
-    /// 起 `workers` 个编码 worker。caller 必须在 tokio runtime 里；
-    /// worker 与图片引擎共享启动时固定的输出能力。
+    /// 启动后台调度，最多同时执行 `workers.max(1)` 个编码请求。
+    /// 调用者须处于 Tokio runtime 中；编码使用本次会话固定的输出能力。
     ///
     /// # Params:
-    ///   - `workers`: worker 数(配置 `cover.encode_workers`)
+    ///   - `workers`: 编码并发上限(配置 `cover.encode_workers`)
     ///   - `graphics`: 本次会话的图片协议与 Kitty 资源分配能力
     pub(crate) fn spawn(workers: usize, graphics: &Arc<TerminalGraphics>) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel::<EncodeRequest>();
-        let ready = Arc::new(Mutex::new(Vec::<EncodeCompletion>::new()));
-        let rx = Arc::new(tokio::sync::Mutex::new(rx));
-        for _ in 0..workers.max(1) {
-            let rx = Arc::clone(&rx);
-            let ready = Arc::clone(&ready);
-            let graphics = Arc::clone(graphics);
-            tokio::spawn(async move {
-                worker_loop(rx, ready, graphics).await;
-            });
+        let (request_tx, request_rx) = mpsc::unbounded_channel::<EncodeRequest>();
+        let (completion_tx, completion_rx) = mpsc::unbounded_channel();
+        let graphics = Arc::clone(graphics);
+        tokio::spawn(async move {
+            stream::unfold(request_rx, |mut request_rx| async move {
+                request_rx.recv().await.map(|request| (request, request_rx))
+            })
+            .for_each_concurrent(workers.max(1), |request| {
+                let graphics = &graphics;
+                let completion_tx = &completion_tx;
+                async move {
+                    let completion = encode_blocking(request, graphics).await;
+                    let _ = completion_tx.send(completion);
+                }
+            })
+            .await;
+        });
+        Self {
+            request_tx,
+            completion_rx,
         }
-        Self { req_tx: tx, ready }
     }
 
     /// 测试用编码器，不启动 worker；投递后产生队列关闭的失败事件。
     #[cfg(test)]
     pub(crate) fn disabled() -> Self {
-        let (tx, _rx) = mpsc::unbounded_channel::<EncodeRequest>();
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = mpsc::unbounded_channel();
+        drop(request_rx);
+        drop(completion_tx);
         Self {
-            req_tx: tx,
-            ready: Arc::new(Mutex::new(Vec::new())),
+            request_tx,
+            completion_rx,
         }
     }
 
-    /// 投递编码请求；队列关闭也发布完成事件，供引擎结束在飞状态。
-    pub(crate) fn request(&self, request: EncodeRequest) {
-        if let Err(error) = self.req_tx.send(request) {
-            self.ready.lock().push(EncodeCompletion {
-                identity: error.0.identity,
-                result: Err(EncodeError::QueueClosed),
-            });
-        }
+    /// 投递编码请求；队列关闭时同步返回原请求，供引擎结束在飞状态。
+    pub(crate) fn request(
+        &self,
+        request: EncodeRequest,
+    ) -> Result<(), Box<SendError<EncodeRequest>>> {
+        self.request_tx.send(request).map_err(Box::new)
     }
 
     /// 取走已完成请求；主循环结束在飞状态并安装仍有效的成功成品。
-    pub(crate) fn drain_ready(&self) -> Vec<EncodeCompletion> {
-        std::mem::take(&mut *self.ready.lock())
-    }
-}
-
-/// 编码 worker 主循环:从队列拉请求 → `spawn_blocking` 编码 → push 到 ready buffer。
-async fn worker_loop(
-    rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<EncodeRequest>>>,
-    ready: ReadyBuf,
-    graphics: Arc<TerminalGraphics>,
-) {
-    loop {
-        let req = {
-            let mut g = rx.lock().await;
-            match g.recv().await {
-                Some(r) => r,
-                None => return, // 队列关了
-            }
-        };
-        let completion = encode_blocking(req, &graphics).await;
-        ready.lock().push(completion);
+    pub(crate) fn drain_ready(&mut self) -> Vec<EncodeCompletion> {
+        let mut ready = Vec::new();
+        while let Ok(completion) = self.completion_rx.try_recv() {
+            ready.push(completion);
+        }
+        ready
     }
 }
 
@@ -176,7 +169,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn encodes_and_drains() -> color_eyre::Result<()> {
         let graphics = Arc::new(TerminalGraphics::fixed());
-        let encoder = CoverEncoder::spawn(/*workers*/ 2, &graphics);
+        let mut encoder = CoverEncoder::spawn(/*workers*/ 2, &graphics);
 
         let url = MediaUrl::remote("https://x.y/c.jpg")?;
         let image = Arc::new(image::DynamicImage::ImageRgba8(image::RgbaImage::new(
@@ -195,7 +188,7 @@ mod tests {
                 input: EncodeInput::Decoded(Revision::default().next()),
             },
             image,
-        });
+        })?;
 
         // worker 在另一线程编码,轮询 drain 直到就绪(上限 1s 兜底,正常几十 ms 内)。
         let mut got = Vec::new();

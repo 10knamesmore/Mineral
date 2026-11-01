@@ -128,9 +128,10 @@ mod tests {
 
     /// Playlists 视图悬停选中歌单、入口曲图片已解码时，准备右栏应按封面区尺寸提前编码
     /// 该曲的终端图片，使 drill 进 tracks 后能直接命中。
-    #[test]
-    fn playlist_detail_prewarms_entry_track_cover() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn playlist_detail_prewarms_entry_track_cover() -> color_eyre::Result<()> {
         let (mut app, _tasks) = app_with_playlists_probed()?;
+        app.state.resources.images.start_test_encoder();
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
         let url = MediaUrl::remote("https://x.y/entry.jpg")?;
         let mut entry = song("s0");

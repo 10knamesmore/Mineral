@@ -1,22 +1,22 @@
-//! 封面 worker 池的启动、请求投递与完成结果收集。
+//! 封面请求的有限并发调度与完成结果收集。
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::{CoverConfig, CoverDecodePixelsConfig};
 use crate::persistence::TuiStore;
+use futures_util::{StreamExt, stream};
 use image::RgbaImage;
 use isahc::HttpClient;
 use isahc::config::Configurable;
 use mineral_model::{MediaUrl, SourceKind};
 use mineral_persist::CacheIndex;
-use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::image::key::PreviewTarget;
 
 use super::types::{
-    CoverCompletion, CoverRequest, DecodeRequest, OriginalImageError, PreviewRequest, ReadyBuf,
+    CoverCompletion, CoverRequest, DecodeRequest, OriginalImageError, PreviewRequest,
 };
 use super::worker::complete_request;
 
@@ -24,16 +24,15 @@ use super::worker::complete_request;
 /// 源图请求单独回复；禁用态关闭请求队列。
 pub(crate) struct CoverFetcher {
     /// 待执行的请求。
-    req_tx: mpsc::UnboundedSender<CoverRequest>,
+    request_tx: mpsc::UnboundedSender<CoverRequest>,
 
-    /// worker 完成后塞结果的 buffer;TUI tick `drain_ready()` 一次拿走。
-    ready: ReadyBuf,
+    /// 由图片引擎独占消费的显示完成事件。
+    completion_rx: mpsc::UnboundedReceiver<CoverCompletion>,
 }
 
 impl CoverFetcher {
-    /// 起 worker 池(数量 = `cfg.download_workers`)。caller 必须在 tokio runtime 里
-    /// (`mineral_tui::run` 是 async fn,自然满足);失败通常意味着 isahc 客户端建不起来
-    /// (系统证书 / TLS 问题等)。
+    /// 启动后台调度，最多同时执行 `cfg.download_workers.max(1)` 个完整请求。
+    /// 调用者须处于 Tokio runtime 中；HTTP 客户端构建失败时返回错误。
     ///
     /// # Params:
     ///   - `cfg`: 封面段配置(timeout / 并发 / kmeans)
@@ -44,39 +43,36 @@ impl CoverFetcher {
         cover_capacity: u64,
         store: Option<Arc<TuiStore>>,
     ) -> Result<Self, isahc::Error> {
-        let (tx, rx) = mpsc::unbounded_channel::<CoverRequest>();
+        let (request_tx, request_rx) = mpsc::unbounded_channel::<CoverRequest>();
+        let (completion_tx, completion_rx) = mpsc::unbounded_channel();
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(*cfg.http_timeout_secs()))
             .build()?;
         // 磁盘缓存是优化项:store 不可用 / 目录解析失败不致命,降级成直连网络不缓存。
         let cache = Self::open_cache(store, cover_capacity).await;
-        let ready = Arc::new(Mutex::new(Vec::<CoverCompletion>::new()));
-        let rx = Arc::new(tokio::sync::Mutex::new(rx));
+        let concurrency = (*cfg.download_workers()).max(1);
         let cfg = Arc::new(cfg);
-        for _ in 0..(*cfg.download_workers()).max(1) {
-            let rx = Arc::clone(&rx);
-            let ready = Arc::clone(&ready);
-            let client = client.clone();
-            let cache = cache.clone();
-            let cfg = Arc::clone(&cfg);
-            tokio::spawn(async move {
-                loop {
-                    let request = {
-                        let mut g = rx.lock().await;
-                        match g.recv().await {
-                            Some(item) => item,
-                            None => return, // 队列关了
-                        }
-                    };
-                    if let Some(completion) =
-                        complete_request(request, &client, cache.as_ref(), &cfg).await
-                    {
-                        ready.lock().push(completion);
+        tokio::spawn(async move {
+            stream::unfold(request_rx, |mut request_rx| async move {
+                request_rx.recv().await.map(|request| (request, request_rx))
+            })
+            .for_each_concurrent(concurrency, |request| {
+                let client = &client;
+                let cache = cache.as_ref();
+                let cfg = &cfg;
+                let completion_tx = &completion_tx;
+                async move {
+                    if let Some(completion) = complete_request(request, client, cache, cfg).await {
+                        let _ = completion_tx.send(completion);
                     }
                 }
-            });
-        }
-        Ok(Self { req_tx: tx, ready })
+            })
+            .await;
+        });
+        Ok(Self {
+            request_tx,
+            completion_rx,
+        })
     }
 
     /// 打开封面磁盘缓存(`cover_cache` 表落共享的 `tui.db`,文件落 `cover_cache_dir`)。
@@ -114,11 +110,13 @@ impl CoverFetcher {
     /// `drain_ready()` 恒空。
     /// 与 [`CoverFetcher::spawn`] 不同,**不需要 tokio runtime**。
     pub(crate) fn disabled() -> Self {
-        let (tx, rx) = mpsc::unbounded_channel::<CoverRequest>();
-        drop(rx);
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = mpsc::unbounded_channel();
+        drop(request_rx);
+        drop(completion_tx);
         Self {
-            req_tx: tx,
-            ready: Arc::new(Mutex::new(Vec::new())),
+            request_tx,
+            completion_rx,
         }
     }
 
@@ -132,7 +130,7 @@ impl CoverFetcher {
     /// # Return:
     ///   worker 队列仍可接收请求时返回 `true`
     pub(crate) fn preview(&self, source: SourceKind, url: MediaUrl, target: PreviewTarget) -> bool {
-        self.req_tx
+        self.request_tx
             .send(CoverRequest::Preview(PreviewRequest {
                 source,
                 url,
@@ -156,7 +154,7 @@ impl CoverFetcher {
         url: MediaUrl,
         pixels: CoverDecodePixelsConfig,
     ) -> bool {
-        self.req_tx
+        self.request_tx
             .send(CoverRequest::Decode(DecodeRequest {
                 source,
                 url,
@@ -171,15 +169,21 @@ impl CoverFetcher {
         source: SourceKind,
         url: MediaUrl,
     ) -> oneshot::Receiver<Result<RgbaImage, OriginalImageError>> {
-        let (reply, result) = oneshot::channel();
-        let _ = self
-            .req_tx
-            .send(CoverRequest::Original { source, url, reply });
-        result
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self.request_tx.send(CoverRequest::Original {
+            source,
+            url,
+            reply_tx,
+        });
+        reply_rx
     }
 
     /// 把全部图片 worker completion 拿走。TUI 主循环 tick 调一次。
-    pub(crate) fn drain_ready(&self) -> Vec<CoverCompletion> {
-        std::mem::take(&mut *self.ready.lock())
+    pub(crate) fn drain_ready(&mut self) -> Vec<CoverCompletion> {
+        let mut ready = Vec::new();
+        while let Ok(completion) = self.completion_rx.try_recv() {
+            ready.push(completion);
+        }
+        ready
     }
 }

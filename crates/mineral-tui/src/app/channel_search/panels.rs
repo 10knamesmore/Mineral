@@ -960,8 +960,8 @@ mod tests {
     }
 
     /// 封面编码派发尊重 search 面板的滚动防抖：选中刚变时不投编码，停稳后只派发一次。
-    #[test]
-    fn search_cover_encode_respects_scroll_debounce() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn search_cover_encode_respects_scroll_debounce() -> color_eyre::Result<()> {
         use std::sync::Arc;
         use std::time::Instant;
 
@@ -969,6 +969,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let (mut app, url) = app_with_covered_album()?;
+        app.state.resources.images.start_test_encoder();
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64));
         app.state
             .resources

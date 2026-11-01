@@ -5,7 +5,6 @@ use std::sync::Arc;
 use crate::config::CoverDecodePixelsConfig;
 use image::{DynamicImage, ImageError, RgbaImage};
 use mineral_model::{MediaUrl, SourceKind};
-use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::JoinError;
 
@@ -52,7 +51,7 @@ pub(super) enum CoverRequest {
 
         url: MediaUrl,
 
-        reply: oneshot::Sender<Result<RgbaImage, OriginalImageError>>,
+        reply_tx: oneshot::Sender<Result<RgbaImage, OriginalImageError>>,
     },
 }
 
@@ -140,6 +139,3 @@ pub(crate) enum CoverCompletion {
         kind: CoverRequestKind,
     },
 }
-
-/// 完成 buffer 类型别名。worker 端 push、TUI tick 端 drain。
-pub(super) type ReadyBuf = Arc<Mutex<Vec<CoverCompletion>>>;

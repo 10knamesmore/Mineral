@@ -419,8 +419,8 @@ mod tests {
     /// 全屏形变只能按两端稳态尺寸预热；中间帧不得按逐帧尺寸追加编码。测试不先渲染常规
     /// 帧，避免常规封面尺寸恰好与端点相同时掩盖预热请求；落定帧必须命中相同
     /// `(url, dims)` 去重键。
-    #[test]
-    fn fullscreen_morph_prewarms_steady_cover_once() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn fullscreen_morph_prewarms_steady_cover_once() -> color_eyre::Result<()> {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
 
@@ -429,6 +429,7 @@ mod tests {
         use crate::test_support::app_with_library;
 
         let mut app = app_with_library(3, /*sel_track*/ 0)?;
+        app.state.resources.images.start_test_encoder();
 
         let url = MediaUrl::remote("https://x.y/cover.jpg")?;
         let pid = PlaylistId::new(SourceKind::NETEASE, "p1");
@@ -500,12 +501,13 @@ mod tests {
     }
 
     /// Page morph 只为两端稳态尺寸派发封面编码；中间帧命中 `(url, dims)` 去重。
-    #[test]
-    fn search_morph_prewarms_endpoints_without_churn() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn search_morph_prewarms_endpoints_without_churn() -> color_eyre::Result<()> {
         use crate::render::anim::Toggle;
         use crate::test_support::app_in_search_morph;
 
         let mut app = app_in_search_morph(/*cache_browse*/ true, /*cache_detail*/ true)?;
+        app.state.resources.images.start_test_encoder();
         let mut active = Toggle::new(8);
         active.set(true);
         active.tick();
@@ -527,13 +529,14 @@ mod tests {
 
     /// 全屏稳态：下一首(queue 中在播曲的紧邻后继)应按目标像素尺寸提前准备终端图片，
     /// 自动切歌时可以直接 place。
-    #[test]
-    fn fullscreen_steady_prewarms_next_cover() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn fullscreen_steady_prewarms_next_cover() -> color_eyre::Result<()> {
         use std::sync::Arc;
 
         use mineral_model::MediaUrl;
 
         let mut app = app_with_queue(3, /*current_idx*/ 0)?;
+        app.state.resources.images.start_test_encoder();
         // 给队列每首塞封面 URL;在播曲(queue[0])与下一首(queue[1])的图放进 cache
         // —— 预编码要求图已就绪(否则该首仍等 fetch,后续帧再预热)。
         for i in 0..3 {
@@ -574,14 +577,15 @@ mod tests {
     }
 
     /// 全屏稳态也预热上一首封面:`p` 落回去那首同样要进场图已解码,转场才开得起来。
-    #[test]
-    fn fullscreen_steady_prewarms_previous_cover() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn fullscreen_steady_prewarms_previous_cover() -> color_eyre::Result<()> {
         use std::sync::Arc;
 
         use mineral_model::MediaUrl;
 
         // 在播曲取中间那首,前后各有邻居。
         let mut app = app_with_queue(3, /*current_idx*/ 1)?;
+        app.state.resources.images.start_test_encoder();
         for i in 0..3 {
             let url = MediaUrl::remote(&format!("https://prewarm/{i}.jpg"))?;
             if let Some(s) = app.state.models.player.queue.get_mut(i) {

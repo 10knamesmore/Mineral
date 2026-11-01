@@ -610,8 +610,8 @@ mod tests {
     use crate::image::prepared_image::PreparedImage;
 
     /// 绘制次数及对未准备图片的只读绘制，都不能改变请求或预算保活。
-    #[test]
-    fn painting_does_not_schedule_or_retain_images() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn painting_does_not_schedule_or_retain_images() -> color_eyre::Result<()> {
         use crate::image::{ImageContent, ImageEngine, ImageRenderPhase};
         use mineral_model::MediaUrl;
         use std::sync::Arc;
@@ -620,6 +620,7 @@ mod tests {
         let area = Rect::new(0, 0, 4, 2);
         for paints in [0, 1, 2] {
             let mut engine = ImageEngine::disabled(Arc::new(crate::config::TuiConfig::defaults()?));
+            engine.start_test_encoder();
             for url in [&first, &second] {
                 engine
                     .cache
