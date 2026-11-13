@@ -7,7 +7,7 @@
 [![CI](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml/badge.svg)](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/mineral?style=flat-square&logo=rust)](https://crates.io/crates/mineral)
 [![AUR](https://img.shields.io/aur/version/mineral?style=flat-square&logo=archlinux)](https://aur.archlinux.org/packages/mineral)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
+[![License: LGPL v3](https://img.shields.io/badge/license-LGPL--3.0--or--later-blue?style=flat-square)](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square&logo=rust)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-blueviolet?style=flat-square)
 
@@ -70,9 +70,9 @@ cargo install --locked --git https://github.com/10knamesmore/Mineral mineral
 <details>
 <summary><b>源码构建依赖</b></summary>
 
-| 平台            | 依赖                                                        |
-| --------------- | ----------------------------------------------------------- |
-| Arch Linux      | `pacman -S alsa-lib openssl pkgconf cmake nasm`                |
+| 平台            | 依赖                                                          |
+| --------------- | ------------------------------------------------------------- |
+| Arch Linux      | `pacman -S alsa-lib openssl pkgconf cmake nasm`               |
 | Debian / Ubuntu | `apt install libasound2-dev libssl-dev pkg-config cmake nasm` |
 | macOS           | `brew install cmake`；Intel Mac 另需 `brew install nasm`      |
 
@@ -215,4 +215,6 @@ cargo run --release                      # run TUI
 
 ## 许可证
 
-[MIT](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
+Copyright (C) 2025-2026 wanger
+
+[LGPL-3.0-or-later](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
