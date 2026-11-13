@@ -1,4 +1,15 @@
 # Changelog
+## [0.6.1] — 2026-11-13
+
+### Features
+
+- Stream cached lists before remote refresh ([`f93411e`](https://github.com/10knamesmore/Mineral/commit/f93411e0c98bf959dff6c1f5f5d130a0c739fcce))
+
+- Stream cached album and playlist details ([`77bec8c`](https://github.com/10knamesmore/Mineral/commit/77bec8c486a0321ee3a45f4ac36256e550709a4e))
+
+- Stream tracks on demand through subscriptions ([`5cfc907`](https://github.com/10knamesmore/Mineral/commit/5cfc90761c30bd309c46ed7e25a5193f0c03e0ad))
+
+- Stream search and artist albums on demand ([`f141ccd`](https://github.com/10knamesmore/Mineral/commit/f141ccd6c127034d0707d3be5affb60cc3b5aa59))
 ## [0.6.0] — 2026-10-31
 
 ### Features
