@@ -48,7 +48,7 @@ libraries = [{ path = "tooling/lints" }]
 [workspace.package]
 version     = "0.6.1"
 edition     = "2024"
-license     = "LGPL-3.0-or-later"
+license     = "AGPL-3.0-or-later"
 repository  = "https://github.com/10knamesmore/Mineral"
 authors     = ["wanger <310779211wym@gmail.com>"]
 rust-version = "1.96"

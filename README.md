@@ -7,7 +7,7 @@
 [![CI](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml/badge.svg)](https://github.com/10knamesmore/Mineral/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/mineral?style=flat-square&logo=rust)](https://crates.io/crates/mineral)
 [![AUR](https://img.shields.io/aur/version/mineral?style=flat-square&logo=archlinux)](https://aur.archlinux.org/packages/mineral)
-[![License: LGPL v3](https://img.shields.io/badge/license-LGPL--3.0--or--later-blue?style=flat-square)](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
+[![License: AGPL v3][license-badge]][license]
 ![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square&logo=rust)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-blueviolet?style=flat-square)
 
@@ -217,4 +217,7 @@ cargo run --release                      # run TUI
 
 Copyright (C) 2025-2026 wanger
 
-[LGPL-3.0-or-later](https://github.com/10knamesmore/Mineral/blob/main/LICENSE)
+[AGPL-3.0-or-later][license]
+
+[license-badge]: https://img.shields.io/badge/license-AGPL--3.0--or--later-blue?style=flat-square
+[license]: LICENSE
